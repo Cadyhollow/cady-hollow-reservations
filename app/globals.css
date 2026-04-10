@@ -24,10 +24,18 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
-input:-webkit-autofill,
-input:-webkit-autofill:hover,
-input:-webkit-autofill:focus {
+/* Force white text in dark inputs */
+.bg-gray-800 input,
+.bg-gray-800 textarea,
+.bg-gray-800 select {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Android autofill fix for dark inputs */
+.bg-gray-800 input:-webkit-autofill,
+.bg-gray-800 input:-webkit-autofill:hover,
+.bg-gray-800 input:-webkit-autofill:focus {
   -webkit-box-shadow: 0 0 0px 1000px #1f2937 inset !important;
   -webkit-text-fill-color: #ffffff !important;
-  caret-color: #ffffff;
 }
