@@ -82,7 +82,9 @@ function BookingForm() {
   async function loadSquare() {
     if (squareLoaded) return
     const script = document.createElement('script')
-   script.src = 'https://sandbox.web.squarecdn.com/v1/square.js'
+    script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
+      ? 'https://web.squarecdn.com/v1/square.js'
+      : 'https://sandbox.web.squarecdn.com/v1/square.js'
     script.onload = async () => {
       try {
         const payments = (window as any).Square.payments(
@@ -257,32 +259,15 @@ function BookingForm() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Full Name *</label>
-                  <input 
-  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-  placeholder="Jane Smith"
-  value={form.guest_name}
-  onChange={e => setForm({ ...form, guest_name: e.target.value })}
-/>
+                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Jane Smith" value={form.guest_name} onChange={e => setForm({ ...form, guest_name: e.target.value })} />
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Email Address *</label>
-                  <input 
-  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-  placeholder="Jane Smith"
-  value={form.guest_name}
-  onChange={e => setForm({ ...form, guest_name: e.target.value })}
-/>
+                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="jane@email.com" type="email" value={form.guest_email} onChange={e => setForm({ ...form, guest_email: e.target.value })} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
-                 <input 
-  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-  style={{ color: '#ffffff', WebkitTextFillColor: '#ffffff' }}
-  placeholder="Jane Smith"
-  value={form.guest_name}
-  onChange={e => setForm({ ...form, guest_name: e.target.value })}
-/>
+                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
                 <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: '#3DBDD4' }} onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')} onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}>
                   Continue to Add-Ons →
