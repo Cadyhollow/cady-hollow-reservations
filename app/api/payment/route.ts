@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
 
     // Process payment with Square REST API
     const squareResponse = await fetch(
-      `https://connect.squareupsandbox.com/v2/payments`,
+     `https://connect.squareup.com/v2/payments`,
       {
         method: 'POST',
         headers: {
