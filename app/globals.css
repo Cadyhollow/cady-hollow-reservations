@@ -39,3 +39,11 @@ body {
   -webkit-box-shadow: 0 0 0px 1000px #1f2937 inset !important;
   -webkit-text-fill-color: #ffffff !important;
 }
+/* Fix date and number inputs on Android (light background) */
+input[type="date"],
+input[type="number"],
+input[type="tel"],
+input[type="email"],
+input[type="text"] {
+  color: #111111;
+}
