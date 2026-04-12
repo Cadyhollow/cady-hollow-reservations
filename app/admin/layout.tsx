@@ -69,15 +69,23 @@ export default function AdminLayout({
             ))}
           </nav>
 
-          <div className="px-4 py-4 border-t border-green-700">
-            <Link
-              href="/"
-              className="block px-4 py-3 rounded-lg text-sm font-medium text-green-100 hover:bg-green-700"
-            >
-              ← View Booking Site
-            </Link>
-          </div>
-        </div>
+    <div className="px-4 py-4 border-t border-green-700 space-y-1">
+  <Link
+    href="/"
+    className="block px-4 py-3 rounded-lg text-sm font-medium text-green-100 hover:bg-green-700"
+  >
+    ← View Booking Site
+  </Link>
+  <button
+    onClick={async () => {
+      await fetch('/api/admin-auth', { method: 'DELETE' })
+      window.location.href = '/admin/login'
+    }}
+    className="w-full text-left block px-4 py-3 rounded-lg text-sm font-medium text-green-100 hover:bg-green-700"
+  >
+    Log Out
+  </button>
+</div>
 
         {/* Main content */}
         <div className="flex-1 min-w-0">
