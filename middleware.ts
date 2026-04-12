@@ -4,10 +4,13 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const session = request.cookies.get('admin_session')
 
-  // Protect all /admin routes except /admin/login
-  if (pathname.startsWith('/admin') && pathname !== '/admin/login') {
+  if (
+    pathname.startsWith('/admin') &&
+    !pathname.startsWith('/admin/login')
+  ) {
     if (!session || session.value !== 'authenticated') {
-      return NextResponse.redirect(new URL('/admin/login', request.url))
+      const loginUrl = new URL('/admin/login', request.url)
+      return NextResponse.redirect(loginUrl)
     }
   }
 
