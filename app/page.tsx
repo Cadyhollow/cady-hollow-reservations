@@ -29,6 +29,10 @@ export default function HomePage() {
   const [sites, setSites] = useState<Site[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedSite, setSelectedSite] = useState<Site | null>(null)
+  const [isClosed, setIsClosed] = useState(false)
+  const [closedMessage, setClosedMessage] = useState('')
+  const [seasonStart, setSeasonStart] = useState('')
+  const [seasonEnd, setSeasonEnd] = useState('')
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -50,6 +54,10 @@ export default function HomePage() {
     )
     const data = await res.json()
     setSites(data.sites || [])
+    setIsClosed(data.closed || false)
+    setClosedMessage(data.closedMessage || '')
+    setSeasonStart(data.seasonStart || '')
+    setSeasonEnd(data.seasonEnd || '')
     setLoading(false)
   }
 
@@ -220,6 +228,15 @@ export default function HomePage() {
           {loading ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
               <p className="text-gray-400 text-lg">Searching for available sites...</p>
+            </div>
+          ) : isClosed ? (
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+              <div className="text-6xl mb-4">❄️</div>
+              <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
+              <p className="text-gray-400 mb-4">{closedMessage}</p>
+              <p className="text-sm" style={{ color: '#3DBDD4' }}>
+                We are open from {seasonStart} through {seasonEnd}
+              </p>
             </div>
           ) : sites.length === 0 ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>

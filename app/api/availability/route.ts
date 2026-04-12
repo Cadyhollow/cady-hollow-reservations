@@ -16,6 +16,32 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing dates' }, { status: 400 })
   }
 
+  // Get settings including season dates
+  const { data: settings } = await supabase
+    .from('settings')
+    .select('season_start, season_end, closed_season_message')
+    .limit(1)
+    .single()
+
+  // Check if dates are within season
+  if (settings?.season_start && settings?.season_end) {
+    const arrivalDate = new Date(arrival)
+    const year = arrivalDate.getFullYear()
+
+    const seasonStart = new Date(`${settings.season_start} ${year}`)
+    const seasonEnd = new Date(`${settings.season_end} ${year}`)
+
+    if (arrivalDate < seasonStart || arrivalDate > seasonEnd) {
+      return NextResponse.json({
+        sites: [],
+        closed: true,
+        closedMessage: settings.closed_season_message || 'We are closed for the season. We look forward to seeing you next year!',
+        seasonStart: settings.season_start,
+        seasonEnd: settings.season_end,
+      })
+    }
+  }
+
   // Get all available sites
   let query = supabase
     .from('sites')
@@ -54,7 +80,6 @@ export async function GET(request: NextRequest) {
     blockedDates?.filter(b => b.site_id).map(b => b.site_id) || []
   )
 
-  // Filter out unavailable sites
   const availableSites = sites?.filter(site => {
     if (bookedSiteIds.has(site.id)) return false
     if (blockedAllSites) return false
@@ -78,13 +103,11 @@ export async function GET(request: NextRequest) {
     .lte('start_date', departure)
     .gte('end_date', arrival)
 
-  // Calculate nightly rate for each site
   const nights = Math.round(
     (new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24)
   )
 
   const sitesWithPricing = availableSites.map(site => {
-    // Find applicable pricing rule (highest priority wins)
     const applicableRules = pricingRules?.filter(rule => {
       if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
@@ -94,7 +117,6 @@ export async function GET(request: NextRequest) {
     const bestRule = applicableRules.sort((a, b) => b.priority - a.priority)[0]
     const nightlyRate = bestRule ? bestRule.nightly_rate : site.base_rate
 
-    // Find applicable min stay rule
     const applicableMinStay = minStayRules?.filter(rule => {
       if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
@@ -115,5 +137,5 @@ export async function GET(request: NextRequest) {
     }
   })
 
-  return NextResponse.json({ sites: sitesWithPricing })
+  return NextResponse.json({ sites: sitesWithPricing, closed: false })
 }
