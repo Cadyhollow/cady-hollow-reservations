@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     // Customer confirmation email
     await resend.emails.send({
   from: 'Cady Hollow Campground <reservations@cadyhollow.com>',
-  reply_to: 'cadyhollowcg@gmail.com',
+ replyTo: 'cadyhollowcg@gmail.com',
       to: guestEmail,
       subject: `Reservation Confirmed — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
     // Staff notification email
     await resend.emails.send({
      from: 'Cady Hollow Campground <reservations@cadyhollow.com>',
-     reply_to: 'cadyhollowcg@gmail.com',
+     replyTo: 'cadyhollowcg@gmail.com',
       to: 'charissachevy@gmail.com',
       subject: `New Reservation — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
