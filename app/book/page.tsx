@@ -415,6 +415,17 @@ function BookingForm() {
                   <p className="text-yellow-400 text-xs mt-2 font-medium">⚠ Deposit is non-refundable for these dates.</p>
                 )}
               </div>
+              {/* Important Notes */}
+<div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
+  <p className="text-gray-300 text-xs leading-relaxed">
+    <span className="text-white font-medium">ℹ️ Site Selection: </span>
+    Site choice is not guaranteed — we will do our best to honor your selection.
+  </p>
+  <p className="text-gray-300 text-xs leading-relaxed">
+    <span className="text-white font-medium">ℹ️ Pricing: </span>
+    All prices include taxes and fees — no surprises at checkout.
+  </p>
+</div>
 
               {/* Square Card Form */}
               <div className="mb-6">
