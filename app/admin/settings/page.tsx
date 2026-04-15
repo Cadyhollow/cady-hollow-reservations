@@ -13,6 +13,7 @@ const defaultSettings = {
   park_website: '',
   check_in_time: '2:00 PM',
   check_out_time: '12:00 PM',
+  same_day_cutoff_time: '11:00 am',
   extra_adult_fee: '',
   extra_child_fee: '',
   base_occupancy_adults: 2,
@@ -45,6 +46,7 @@ export default function SettingsPage() {
         park_website: data.park_website || '',
         check_in_time: data.check_in_time || '2:00 PM',
         check_out_time: data.check_out_time || '12:00 PM',
+        same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
         extra_adult_fee: (data.extra_adult_fee / 100).toString(),
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
@@ -70,6 +72,7 @@ export default function SettingsPage() {
       park_website: form.park_website,
       check_in_time: form.check_in_time,
       check_out_time: form.check_out_time,
+      same_day_cutoff_time: form.same_day_cutoff_time,
       extra_adult_fee: Math.round(parseFloat(form.extra_adult_fee) * 100),
       extra_child_fee: Math.round(parseFloat(form.extra_child_fee) * 100),
       base_occupancy_adults: form.base_occupancy_adults,
@@ -127,6 +130,7 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Check-In Time</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.check_in_time} onChange={e => setForm({ ...form, check_in_time: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Check-Out Time</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.check_out_time} onChange={e => setForm({ ...form, check_out_time: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Same-Day Booking Cutoff</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 11:00 AM" value={form.same_day_cutoff_time} onChange={e => setForm({ ...form, same_day_cutoff_time: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Adults</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_adults} onChange={e => setForm({ ...form, base_occupancy_adults: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Children</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_children} onChange={e => setForm({ ...form, base_occupancy_children: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Adult Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_adult_fee} onChange={e => setForm({ ...form, extra_adult_fee: e.target.value })} /></div>
