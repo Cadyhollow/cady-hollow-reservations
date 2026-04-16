@@ -43,17 +43,20 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   const siteByNumber = Object.fromEntries(sites.map(s => [s.site_number, s]))
 
   function getColor(num: string) {
-    if (num === 'C1') return '#f5e07a'
-    if (num === 'C2' || num === 'C3') return '#e88a8a'
-    const site = siteByNumber[num]
-    if (!site) return '#d1d5db'
-    const isAvailable = availableSiteIds.includes(site.id)
-   if (!isAvailable) return '#d1d5db'
-    if (selectedSiteId === site.id) return '#3DBDD4'
-    if (hoveredNum === num) return '#6ee7b7'
-    if (site.hookups === 'water_electric') return '#bfdbfe'
-    return '#bbf7d0'
-  }
+  const site = siteByNumber[num]
+  if (!site) return '#d1d5db'
+  
+  const isAvailable = availableSiteIds.includes(site.id)
+  
+  if (!isAvailable) return '#d1d5db'
+  if (selectedSiteId === site.id) return '#3DBDD4'
+  if (hoveredNum === num) return '#6ee7b7'
+  
+  if (num === 'C1') return '#f5e07a'
+  if (num === 'C2' || num === 'C3') return '#e88a8a'
+  if (site.hookups === 'water_electric') return '#bfdbfe'
+  return '#bbf7d0'
+}
 
   function getStroke(num: string) {
     if (num === 'C1') return '#a89020'
