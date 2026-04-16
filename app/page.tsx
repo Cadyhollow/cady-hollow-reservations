@@ -255,7 +255,7 @@ export default function HomePage() {
         sites={sites}
         availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
         selectedSiteId={selectedSite?.id}
-        onSelectSite={(site) => setSelectedSite(site)}
+       onSelectSite={(site) => setSelectedSite(site as any)}
         nights={Math.round((new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24))}
       />
     </div>
