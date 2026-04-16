@@ -15,7 +15,7 @@ type Site = {
   min_stay?: number
   meets_min_stay?: boolean
   description?: string
-  max_rv_length?: number | null
+  max_rv_length?: number | null | undefined
 }
 
 type Props = {
