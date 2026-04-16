@@ -152,24 +152,16 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   return (
     <div className="relative w-full">
       {/* Legend */}
-      <div className="flex items-center gap-4 mb-3 flex-wrap text-xs">
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-green-200 border border-green-600"/>
-          <span className="text-gray-600">Available</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-red-300 border border-red-500"/>
-          <span className="text-gray-600">Booked</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm border-2" style={{ backgroundColor: '#3DBDD4', borderColor: '#0e7490' }}/>
-          <span className="text-gray-600">Selected</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-blue-200 border border-blue-400"/>
-          <span className="text-gray-600">Water & Electric</span>
-        </div>
-      </div>
+<div className="flex items-center gap-4 mb-3 flex-wrap text-xs">
+  <div className="flex items-center gap-1.5">
+    <div className="w-3 h-3 rounded-sm bg-gray-300 border border-gray-400"/>
+    <span className="text-gray-600">Not available for selected dates</span>
+  </div>
+  <div className="flex items-center gap-1.5">
+    <div className="w-3 h-3 rounded-sm border-2" style={{ backgroundColor: '#3DBDD4', borderColor: '#0e7490' }}/>
+    <span className="text-gray-600">Selected</span>
+  </div>
+</div>
 
       <div className="relative">
         <svg
