@@ -6,6 +6,18 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+function monthDayToISO(monthDay: string): string {
+  const months: Record<string, string> = {
+    'January': '01', 'February': '02', 'March': '03', 'April': '04',
+    'May': '05', 'June': '06', 'July': '07', 'August': '08',
+    'September': '09', 'October': '10', 'November': '11', 'December': '12'
+  }
+  const parts = monthDay.trim().split(' ')
+  const month = months[parts[0]] || '01'
+  const day = String(parseInt(parts[1])).padStart(2, '0')
+  return `${month}-${day}`
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const arrival = searchParams.get('arrival')
@@ -16,33 +28,29 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing dates' }, { status: 400 })
   }
 
-  // Get settings including season dates
   const { data: settings } = await supabase
     .from('settings')
     .select('season_start, season_end, closed_season_message')
     .limit(1)
     .single()
 
-  // Check if dates are within season
   if (settings?.season_start && settings?.season_end) {
-    const arrivalDate = new Date(arrival)
+    const arrivalDate = new Date(arrival + 'T12:00:00')
     const year = arrivalDate.getFullYear()
-
-    const seasonStart = new Date(`${settings.season_start} ${year}`)
-    const seasonEnd = new Date(`${settings.season_end} ${year}`)
+    const seasonStart = new Date(`${year}-${monthDayToISO(settings.season_start)}T00:00:00`)
+    const seasonEnd = new Date(`${year}-${monthDayToISO(settings.season_end)}T23:59:59`)
 
     if (arrivalDate < seasonStart || arrivalDate > seasonEnd) {
       return NextResponse.json({
         sites: [],
         closed: true,
-        closedMessage: settings.closed_season_message || 'We are closed for the season. We look forward to seeing you next year!',
+        closedMessage: settings.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
         seasonStart: settings.season_start,
         seasonEnd: settings.season_end,
       })
     }
   }
 
-  // Get all available sites
   let query = supabase
     .from('sites')
     .select('*')
@@ -59,7 +67,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Get reservations that overlap with requested dates
   const { data: reservations } = await supabase
     .from('reservations')
     .select('site_id')
@@ -67,7 +74,6 @@ export async function GET(request: NextRequest) {
     .lt('arrival_date', departure)
     .gt('departure_date', arrival)
 
-  // Get blocked dates in range
   const { data: blockedDates } = await supabase
     .from('blocked_dates')
     .select('site_id, date')
@@ -87,7 +93,6 @@ export async function GET(request: NextRequest) {
     return true
   }) || []
 
-  // Get pricing rules
   const { data: pricingRules } = await supabase
     .from('pricing_rules')
     .select('*')
@@ -95,7 +100,6 @@ export async function GET(request: NextRequest) {
     .lte('start_date', departure)
     .gte('end_date', arrival)
 
-  // Get min stay rules
   const { data: minStayRules } = await supabase
     .from('min_stay_rules')
     .select('*')

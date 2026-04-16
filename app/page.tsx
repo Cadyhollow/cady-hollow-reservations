@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Image from 'next/image'
+import CampgroundMap from './components/CampgroundMap'
 
 type Site = {
   id: string
@@ -225,81 +226,95 @@ export default function HomePage() {
             </button>
           </div>
 
-          {loading ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <p className="text-gray-400 text-lg">Searching for available sites...</p>
-            </div>
-          ) : isClosed ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <div className="text-6xl mb-4">❄️</div>
-              <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
-              <p className="text-gray-400 mb-4">{closedMessage}</p>
+        {loading ? (
+  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+    <p className="text-gray-400 text-lg">Searching for available sites...</p>
+  </div>
+) : isClosed ? (
+  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+    <div className="text-6xl mb-4">❄️</div>
+    <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
+    <p className="text-gray-400 mb-4">{closedMessage}</p>
+    <p className="text-sm" style={{ color: '#3DBDD4' }}>
+      We are open from {seasonStart} through {seasonEnd}
+    </p>
+  </div>
+) : sites.length === 0 ? (
+  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+    <p className="text-white text-lg font-semibold mb-2">No sites available</p>
+    <p className="text-gray-400">Try different dates or a different site type.</p>
+  </div>
+) : (
+  <>
+    {/* Interactive Map */}
+    <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
+      <h3 className="text-white font-semibold mb-3 text-sm">
+        Click a site on the map to select it — <span style={{ color: '#3DBDD4' }}>green = available</span>, <span className="text-red-400">red = booked</span>
+      </h3>
+      <CampgroundMap
+        sites={sites}
+        availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
+        selectedSiteId={selectedSite?.id}
+        onSelectSite={(site) => setSelectedSite(site)}
+        nights={Math.round((new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24))}
+      />
+    </div>
+
+    {/* Site Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {sites.map(site => (
+        <div
+          key={site.id}
+          onClick={() => site.meets_min_stay && setSelectedSite(site)}
+          className={`rounded-2xl p-6 transition-all ${
+            site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+          }`}
+          style={{
+            backgroundColor: '#2B2B2B',
+            outline: selectedSite?.id === site.id ? '2px solid #3DBDD4' : 'none',
+          }}
+        >
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="text-white font-bold text-lg">
+                {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
+              </h3>
               <p className="text-sm" style={{ color: '#3DBDD4' }}>
-                We are open from {seasonStart} through {seasonEnd}
+                {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
+                {site.site_type === 'cabin' && 'Private Cabin'}
+                {site.site_type === 'tent' && 'Tent Site'}
               </p>
             </div>
-          ) : sites.length === 0 ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <p className="text-white text-lg font-semibold mb-2">No sites available</p>
-              <p className="text-gray-400">Try different dates or a different site type.</p>
+            <div className="text-right">
+              <p className="text-white font-bold text-xl">
+                ${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span>
+              </p>
+              <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {sites.map(site => (
-                <div
-                  key={site.id}
-                  onClick={() => site.meets_min_stay && setSelectedSite(site)}
-                  className={`rounded-2xl p-6 transition-all ${
-                    site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-                  }`}
-                  style={{
-                    backgroundColor: '#2B2B2B',
-                    outline: selectedSite?.id === site.id ? '2px solid #3DBDD4' : 'none',
-                  }}
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h3 className="text-white font-bold text-lg">
-                        {siteTypeLabel(site.site_type)} {site.site_number}
-                      </h3>
-                      <p className="text-sm" style={{ color: '#3DBDD4' }}>
-                        {site.site_type === 'rv_site' && `${ampLabel(site.amp_service)} · ${hookupLabel(site.hookups)}`}
-                        {site.site_type === 'cabin' && 'Private Cabin'}
-                        {site.site_type === 'tent' && 'Tent Site'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-white font-bold text-xl">
-                        ${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span>
-                      </p>
-                      <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
-                    </div>
-                  </div>
-
-                  {site.max_rv_length && (
-                    <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>
-                  )}
-                  {site.description && (
-                    <p className="text-gray-400 text-sm mb-2">{site.description}</p>
-                  )}
-
-                  {!site.meets_min_stay && (
-                    <p className="text-yellow-400 text-sm mt-2">
-                      ⚠ Minimum {site.min_stay} nights required for this site
-                    </p>
-                  )}
-
-                  {site.meets_min_stay && selectedSite?.id === site.id && (
-                    <div className="mt-3 pt-3 border-t border-gray-600">
-                      <p className="text-sm font-medium" style={{ color: '#3DBDD4' }}>
-                        ✓ Selected — scroll down to continue
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
+          </div>
+          {site.max_rv_length && (
+            <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>
+          )}
+          {site.description && (
+            <p className="text-gray-400 text-sm mb-2">{site.description}</p>
+          )}
+          {!site.meets_min_stay && (
+            <p className="text-yellow-400 text-sm mt-2">
+              Minimum {site.min_stay} nights required for this site
+            </p>
+          )}
+          {site.meets_min_stay && selectedSite?.id === site.id && (
+            <div className="mt-3 pt-3 border-t border-gray-600">
+              <p className="text-sm font-medium" style={{ color: '#3DBDD4' }}>
+                Selected — scroll down to continue
+              </p>
             </div>
           )}
+        </div>
+      ))}
+    </div>
+  </>
+)}
 
           {/* Continue Button */}
           {selectedSite && (
