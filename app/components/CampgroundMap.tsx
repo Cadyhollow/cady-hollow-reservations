@@ -48,7 +48,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
     const site = siteByNumber[num]
     if (!site) return '#d1d5db'
     const isAvailable = availableSiteIds.includes(site.id)
-    if (!isAvailable) return '#fca5a5'
+   if (!isAvailable) return '#d1d5db'
     if (selectedSiteId === site.id) return '#3DBDD4'
     if (hoveredNum === num) return '#6ee7b7'
     if (site.hookups === 'water_electric') return '#bfdbfe'
@@ -62,7 +62,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
     if (!site) return '#9ca3af'
     if (selectedSiteId === site.id) return '#0e7490'
     const isAvailable = availableSiteIds.includes(site.id)
-    if (!isAvailable) return '#ef4444'
+   if (!isAvailable) return '#9ca3af'
     return '#5a8a5a'
   }
 
