@@ -67,7 +67,6 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   }
 
   function handleClick(num: string, e: React.MouseEvent) {
-    if (num === 'C1' || num === 'C2' || num === 'C3') return
     const site = siteByNumber[num]
     if (!site) return
     if (!availableSiteIds.includes(site.id)) return
@@ -75,7 +74,6 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   }
 
   function handleMouseEnter(num: string, e: React.MouseEvent) {
-    if (num === 'C1' || num === 'C2' || num === 'C3') return
     const site = siteByNumber[num]
     if (!site) return
     setHoveredNum(num)
