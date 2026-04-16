@@ -249,7 +249,7 @@ export default function HomePage() {
     {/* Interactive Map */}
     <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
       <h3 className="text-white font-semibold mb-3 text-sm">
-        Click a site on the map to select it — <span style={{ color: '#3DBDD4' }}>green = available</span>, <span className="text-red-400">red = booked</span>
+        Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
       </h3>
       <CampgroundMap
         sites={sites}
