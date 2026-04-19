@@ -34,7 +34,7 @@ export default function HomePage() {
   const [closedMessage, setClosedMessage] = useState('')
   const [seasonStart, setSeasonStart] = useState('')
   const [seasonEnd, setSeasonEnd] = useState('')
-  const [settings, setSettings] = useState<any>(null)
+  const [settings, setSettings] = useState<any>({ show_site_map: true })
 
   const today = new Date().toISOString().split('T')[0]
 
