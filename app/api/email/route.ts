@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
             <!-- Header -->
             <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
               <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">Cady Hollow Campground</h1>
-              <p style="color:#3DBDD4;margin:0;font-size:14px;">Port Allegany, PA</p>
+              <p style="color:var(--accent-color);margin:0;font-size:14px;">Port Allegany, PA</p>
             </div>
 
             <!-- Success Banner -->
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
             <!-- Contact -->
             <div style="margin:16px;padding:24px;text-align:center;">
               <p style="color:#6B7280;font-size:14px;margin:0 0 4px;">Questions? We're happy to help!</p>
-              <a href="mailto:info@cadyhollow.com" style="color:#3DBDD4;font-size:14px;">info@cadyhollow.com</a>
+              <a href="mailto:info@cadyhollow.com" style="color:var(--accent-color);font-size:14px;">info@cadyhollow.com</a>
               <p style="color:#4B5563;font-size:12px;margin:16px 0 0;">© 2026 Cady Hollow Campground · Port Allegany, PA</p>
             </div>
 

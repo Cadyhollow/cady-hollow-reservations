@@ -43,7 +43,7 @@ export default function HomePage() {
           />
         </div>
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to Cady Hollow</h1>
-        <p className="text-lg mb-1" style={{ color: '#3DBDD4' }}>Port Allegany, PA</p>
+        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>Port Allegany, PA</p>
         <p className="text-gray-400 mb-8 max-w-md">
           Your home away from home. Book your perfect campsite, cabin, or tent site today.
         </p>
@@ -121,9 +121,9 @@ export default function HomePage() {
           <button
             onClick={handleSearch}
             className="w-full py-3 rounded-xl text-white font-semibold text-lg transition-colors"
-            style={{ backgroundColor: '#3DBDD4' }}
+            style={{ backgroundColor: 'var(--accent-color)' }}
             onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-            onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}
+            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
           >
             Search Available Sites
           </button>
@@ -160,7 +160,7 @@ export default function HomePage() {
             <button
               onClick={() => setStep(1)}
               className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: '#3DBDD4' }}
+              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}
             >
               ← Change Dates
             </button>

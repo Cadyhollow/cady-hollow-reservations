@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
             style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
           />
           <h1 className="text-white font-bold text-xl">Cady Hollow Campground</h1>
-          <p className="text-sm mt-1" style={{ color: '#3DBDD4' }}>Admin Dashboard</p>
+          <p className="text-sm mt-1" style={{ color: 'var(--accent-color)' }}>Admin Dashboard</p>
         </div>
 
         {/* Login Card */}
@@ -78,9 +78,9 @@ export default function AdminLoginPage() {
               onClick={handleLogin}
               disabled={loading}
               className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
-              style={{ backgroundColor: '#3DBDD4' }}
+              style={{ backgroundColor: 'var(--accent-color)' }}
               onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-              onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}
+              onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
             >
               {loading ? 'Logging in...' : 'Log In'}
             </button>
