@@ -34,6 +34,7 @@ export default function HomePage() {
   const [closedMessage, setClosedMessage] = useState('')
   const [seasonStart, setSeasonStart] = useState('')
   const [seasonEnd, setSeasonEnd] = useState('')
+  const [settings, setSettings] = useState<any>(null)
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -246,7 +247,7 @@ export default function HomePage() {
   </div>
 ) : (
   <>
-    {/* Interactive Map */}
+    {settings?.show_site_map && (
     <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
       <h3 className="text-white font-semibold mb-3 text-sm">
         Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
@@ -259,6 +260,7 @@ export default function HomePage() {
         nights={Math.round((new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24))}
       />
     </div>
+    )}
 
     {/* Site Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
