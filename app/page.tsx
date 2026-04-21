@@ -36,6 +36,12 @@ export default function HomePage() {
   const [seasonEnd, setSeasonEnd] = useState('')
   const [settings, setSettings] = useState<any>({ show_site_map: true })
 
+  useEffect(() => {
+    supabase.from('settings').select('*').limit(1).single().then(({ data }) => {
+      if (data) setSettings(data)
+    })
+  }, [])
+
   const today = new Date().toISOString().split('T')[0]
 
   async function handleSearch() {
