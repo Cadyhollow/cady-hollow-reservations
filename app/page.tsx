@@ -107,7 +107,7 @@ export default function HomePage() {
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to Cady Hollow</h1>
         <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>Port Allegany, PA</p>
         <p className="text-gray-400 mb-8 max-w-md">
-          Your home away from home. Book your perfect campsite, cabin, or tent site today.
+          {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
         </p>
 
         {/* Search Box */}
