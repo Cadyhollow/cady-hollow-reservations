@@ -14,6 +14,8 @@ const navigation = [
   { name: 'Min. Stay Rules', href: '/admin/min-stay' },
   { name: 'Cancellation Rules', href: '/admin/cancellation-rules' },
   { name: 'Add-Ons', href: '/admin/addons' },
+  { name: 'Taxes & Fees', href: '/admin/fees' },
+  { name: 'Reports', href: '/admin/reports' },
   { name: 'Discounts', href: '/admin/discounts' },
   { name: 'Blocked Dates', href: '/admin/blocked-dates' },
   { name: 'Settings', href: '/admin/settings' },
@@ -36,7 +38,7 @@ export default function AdminLayout({
     <div className="min-h-screen bg-gray-50">
       {/* Top bar for mobile */}
       <div className="lg:hidden bg-green-800 text-white px-4 py-3 flex items-center justify-between">
-        <span className="font-semibold text-lg">Cady Hollow Admin</span>
+        <span className="font-semibold text-lg">Admin</span>
         <button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-white">
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -52,7 +54,7 @@ export default function AdminLayout({
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         `}>
           <div className="hidden lg:block px-6 py-6 border-b border-green-700">
-            <h1 className="text-xl font-bold">Cady Hollow</h1>
+            <h1 className="text-xl font-bold">{process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
             <p className="text-green-300 text-sm mt-1">Admin Dashboard</p>
           </div>
 
