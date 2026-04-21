@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
+import { supabase } from '@/lib/supabase'
 
 type Site = {
   id: string
