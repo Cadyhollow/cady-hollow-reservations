@@ -236,7 +236,7 @@ export default function HomePage() {
                     Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
                   </h3>
                   <CampgroundMap
-                    onSiteSelect={(site) => setSelectedSite(site as any)}
+                    onSelectSite={(site) => setSelectedSite(site as any)}
                     arrival={arrival}
                     departure={departure}
                     bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
