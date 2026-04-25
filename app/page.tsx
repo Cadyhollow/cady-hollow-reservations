@@ -237,9 +237,10 @@ export default function HomePage() {
                   </h3>
                   <CampgroundMap
                     onSelectSite={(site) => setSelectedSite(site as any)}
-                    arrival={arrival}
-                    departure={departure}
-                    bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
+                    sites={sites}
+                    availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
+                    selectedSiteId={selectedSite?.id}
+                    nights={selectedSite?.nights || 0}
                   />
                 </div>
               )}
