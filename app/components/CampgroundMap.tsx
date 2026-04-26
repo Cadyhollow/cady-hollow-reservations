@@ -121,11 +121,12 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
 
     return (
       <g
-        style={{ cursor: isClickable && !isCabin ? 'pointer' : 'default' }}
-        onClick={(e) => handleClick(num, e)}
-        onMouseEnter={(e) => handleMouseEnter(num, e)}
-        onMouseLeave={handleMouseLeave}
-      >
+  style={{ cursor: isClickable && !isCabin ? 'pointer' : 'default', touchAction: 'manipulation' }}
+  onClick={(e) => handleClick(num, e)}
+  onTouchEnd={(e) => { e.preventDefault(); handleClick(num, e as any) }}
+  onMouseEnter={(e) => handleMouseEnter(num, e)}
+  onMouseLeave={handleMouseLeave}
+>
         <rect
           x={x} y={y} width={w} height={h}
           fill={getColor(num)}
