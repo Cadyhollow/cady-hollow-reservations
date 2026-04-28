@@ -253,14 +253,24 @@ export default function SettingsPage() {
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Liability Waiver</h3>
           <p className="text-sm text-gray-500 mb-4">Control whether guests must sign a liability waiver during checkout. If enabled, guests will read and sign before paying.</p>
 
-          <div className="flex items-center gap-3 mb-6 p-4 bg-gray-50 rounded-lg">
-            <input type="checkbox" id="waiver_enabled" checked={form.waiver_enabled} onChange={e => setForm({ ...form, waiver_enabled: e.target.checked })} className="w-5 h-5 accent-green-700" />
+          <div className="flex items-center justify-between mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <div>
-              <label htmlFor="waiver_enabled" className="text-sm font-medium text-gray-900">Require liability waiver at checkout</label>
+              <p className="text-sm font-medium text-gray-900">Require liability waiver at checkout</p>
               <p className="text-xs text-gray-500 mt-0.5">
                 {form.waiver_enabled ? 'Guests must read and sign the waiver before they can pay.' : 'No waiver will be shown to guests during checkout.'}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, waiver_enabled: !form.waiver_enabled })}
+              className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
+              style={{ backgroundColor: form.waiver_enabled ? '#15803d' : '#d1d5db' }}
+            >
+              <span
+                className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.waiver_enabled ? 'translateX(28px)' : 'translateX(0px)' }}
+              />
+            </button>
           </div>
 
           {form.waiver_enabled && (
