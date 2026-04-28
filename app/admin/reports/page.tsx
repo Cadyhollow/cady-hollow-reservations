@@ -30,9 +30,7 @@ export default function ReportsPage() {
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
 
-  useEffect(() => {
-    fetchData()
-  }, [dateRange])
+  useEffect(() => { fetchData() }, [dateRange])
 
   async function fetchData() {
     setLoading(true)
@@ -78,11 +76,11 @@ export default function ReportsPage() {
     : 0
 
   // Monthly revenue chart data
-  const monthlyData: { [key: string]: { month: string; accommodation: number; addons: number } } = {}
+  const monthlyData: { [key: string]: { month: string; accommodation: number } } = {}
   reservations.forEach(r => {
     const month = r.arrival_date.substring(0, 7)
     const label = new Date(r.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-    if (!monthlyData[month]) monthlyData[month] = { month: label, accommodation: 0, addons: 0 }
+    if (!monthlyData[month]) monthlyData[month] = { month: label, accommodation: 0 }
     monthlyData[month].accommodation += (r.total_price || 0) / 100
   })
   const chartData = Object.values(monthlyData)
@@ -91,7 +89,7 @@ export default function ReportsPage() {
   const siteTypeRevenue: { [key: string]: number } = {}
   reservations.forEach(r => {
     const type = (r.sites as any)?.site_type || 'unknown'
-    const typeMap: {[key: string]: string} = { rv_site: 'RV Sites', cabin: 'Cabins', tent: 'Tent Sites' }
+    const typeMap: { [key: string]: string } = { rv_site: 'RV Sites', cabin: 'Cabins', tent: 'Tent Sites' }
     const label = typeMap[type] || type
     siteTypeRevenue[label] = (siteTypeRevenue[label] || 0) + ((r.total_price || 0) / 100)
   })
@@ -110,31 +108,35 @@ export default function ReportsPage() {
   if (loading) return <div className="p-6 text-gray-500">Loading reports...</div>
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+
+      {/* Header */}
+      <div className="flex flex-col gap-3 mb-6 md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-        <select
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
-          value={dateRange}
-          onChange={e => setDateRange(e.target.value)}>
-          <option value="this_month">This Month</option>
-          <option value="last_month">Last Month</option>
-          <option value="this_year">This Year</option>
-          <option value="last_year">Last Year</option>
-          <option value="custom">Custom Range</option>
-        </select>
-        {dateRange === 'custom' && (
-          <div className="flex gap-2 items-center">
-            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customStart} onChange={e => setCustomStart(e.target.value)} />
-            <span className="text-gray-400">to</span>
-            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
-            <button onClick={fetchData} className="px-3 py-2 rounded-lg text-white text-sm" style={{backgroundColor: 'var(--accent-color)'}}>Go</button>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2 items-center">
+          <select
+            className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            value={dateRange}
+            onChange={e => setDateRange(e.target.value)}>
+            <option value="this_month">This Month</option>
+            <option value="last_month">Last Month</option>
+            <option value="this_year">This Year</option>
+            <option value="last_year">Last Year</option>
+            <option value="custom">Custom Range</option>
+          </select>
+          {dateRange === 'custom' && (
+            <>
+              <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customStart} onChange={e => setCustomStart(e.target.value)} />
+              <span className="text-gray-400">to</span>
+              <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
+              <button onClick={fetchData} className="px-3 py-2 rounded-lg text-white text-sm" style={{ backgroundColor: 'var(--accent-color)' }}>Go</button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
         {[
           { label: 'Total Revenue', value: '$' + (totalRevenue + totalAddons).toFixed(2), sub: 'incl. add-ons' },
           { label: 'Accommodation', value: '$' + totalRevenue.toFixed(2), sub: 'excl. add-ons' },
@@ -143,52 +145,64 @@ export default function ReportsPage() {
           { label: 'Avg Stay', value: avgStay.toFixed(1) + ' nights', sub: 'per booking' },
         ].map((stat, i) => (
           <div key={i} className="bg-white rounded-2xl border border-gray-200 p-4">
-            <p className="text-sm text-gray-500">{stat.label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+            <p className="text-xs text-gray-500">{stat.label}</p>
+            <p className="text-xl font-bold text-gray-900 mt-1">{stat.value}</p>
             <p className="text-xs text-gray-400 mt-1">{stat.sub}</p>
           </div>
         ))}
       </div>
 
       {/* Monthly Revenue Chart */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
+      <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6 mb-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Monthly Revenue</h2>
         {chartData.length === 0 ? (
           <p className="text-gray-400 text-center py-8">No data for selected period</p>
         ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={v => '$' + v.toFixed(0)} tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
-              <Legend />
-              <Bar dataKey="accommodation" name="Accommodation" fill="var(--accent-color)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div style={{ width: '100%', height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis tickFormatter={v => '$' + v.toFixed(0)} tick={{ fontSize: 11 }} width={55} />
+                <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
+                <Legend />
+                <Bar dataKey="accommodation" name="Accommodation" fill="var(--accent-color)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         {/* Revenue by Site Type */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Revenue by Site Type</h2>
           {pieData.length === 0 ? (
             <p className="text-gray-400 text-center py-8">No data</p>
           ) : (
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}>
-                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div style={{ width: '100%', height: 240 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                  >
+                    {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           )}
         </div>
 
         {/* Top Sites */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Top Earning Sites</h2>
           {topSites.length === 0 ? (
             <p className="text-gray-400 text-center py-8">No data</p>
@@ -212,10 +226,10 @@ export default function ReportsPage() {
       </div>
 
       {/* Recent Reservations */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Reservations</h2>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" style={{ minWidth: '480px' }}>
             <thead>
               <tr className="border-b border-gray-100">
                 <th className="text-left py-2 text-gray-500 font-medium">Site</th>
