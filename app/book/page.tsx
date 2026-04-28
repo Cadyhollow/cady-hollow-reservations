@@ -371,7 +371,14 @@ function BookingForm() {
                   </div>
 
                   <div className="flex items-start gap-3 mb-4">
-                    <input type="checkbox" id="waiver_agree" checked={waiverChecked} onChange={e => setWaiverChecked(e.target.checked)} className="w-4 h-4 mt-0.5 accent-teal-500" />
+                   <button
+  type="button"
+  onClick={() => setWaiverChecked(!waiverChecked)}
+  className="w-5 h-5 mt-0.5 shrink-0 rounded border-2 flex items-center justify-center transition-colors"
+  style={{ borderColor: waiverChecked ? '#14b8a6' : '#6b7280', backgroundColor: waiverChecked ? '#14b8a6' : 'transparent' }}
+>
+  {waiverChecked && <span className="text-white text-xs font-bold">✓</span>}
+</button>
                     <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
                       I have read, understand, and agree to the {settings?.park_name || 'Campground'} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
