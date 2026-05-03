@@ -64,7 +64,7 @@ export default function HomePage() {
     // Same-day cutoff check
     if (settings?.same_day_cutoff_time && arrival === today) {
       const clean = settings.same_day_cutoff_time.trim().toUpperCase()
-      const match = clean.replace(/:\d{2}(\s|$)/, '$1').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
+      const match = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
       if (match) {
         let hours = parseInt(match[1])
         const minutes = parseInt(match[2])
