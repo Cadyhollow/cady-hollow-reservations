@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
           addonDetails,         // ← now included
           extraGuestFee,        // ← now included
           discountAmount,       // ← now included
-          discountCode: discountCode || null,
+          discountCode: discountResult?.code || discountCode || null,
         }),
       })
     } catch (e) {
