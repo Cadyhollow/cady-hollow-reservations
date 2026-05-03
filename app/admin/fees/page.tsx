@@ -167,7 +167,7 @@ export default function FeesPage() {
                   id="applies_all"
                   checked={form.applies_to_all}
                   onChange={e => setForm({ ...form, applies_to_all: e.target.checked, applies_to_selections: [] })}
-                  style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                  style={{ width: '16px', height: '16px', flexShrink: 0, appearance: 'auto' as any }}
                 />
                 <label htmlFor="applies_all" className="text-sm font-medium text-gray-700">All sites + add-ons</label>
               </div>
@@ -180,7 +180,7 @@ export default function FeesPage() {
                         id={opt.value}
                         checked={form.applies_to_selections.includes(opt.value)}
                         onChange={() => toggleSelection(opt.value)}
-                        style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                        style={{ width: '16px', height: '16px', flexShrink: 0, appearance: 'auto' as any }}
                       />
                       <label htmlFor={opt.value} className="text-sm text-gray-700" style={{ cursor: 'pointer' }}>{opt.label}</label>
                     </div>
@@ -195,7 +195,7 @@ export default function FeesPage() {
                 id="is_active"
                 checked={form.is_active}
                 onChange={e => setForm({ ...form, is_active: e.target.checked })}
-                style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                style={{ width: '16px', height: '16px', flexShrink: 0, appearance: 'auto' as any }}
               />
               <label htmlFor="is_active" className="text-sm text-gray-700">Active (applied to bookings)</label>
             </div>
