@@ -156,7 +156,7 @@ export default function FeesPage() {
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={form.type === 'percentage' ? 'e.g. 6' : 'e.g. 10.00'} type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             </div>
             <div className="flex items-center gap-2 mt-6">
-              <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 rounded" />
+              <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 rounded shrink-0" />
               <label className="text-sm text-gray-700">Active (applied to bookings)</label>
             </div>
           </div>
@@ -169,7 +169,7 @@ export default function FeesPage() {
                 id="applies_all"
                 checked={form.applies_to_all}
                 onChange={e => setForm({ ...form, applies_to_all: e.target.checked, applies_to_selections: [] })}
-                className="w-4 h-4 rounded"
+                className="w-4 h-4 rounded shrink-0"
               />
               <label htmlFor="applies_all" className="text-sm font-medium text-gray-700">All sites + add-ons</label>
             </div>
@@ -181,7 +181,7 @@ export default function FeesPage() {
                       type="checkbox"
                       checked={form.applies_to_selections.includes(opt.value)}
                       onChange={() => toggleSelection(opt.value)}
-                      className="w-4 h-4 rounded"
+                      className="w-4 h-4 rounded shrink-0"
                     />
                     <span className="text-sm text-gray-700">{opt.label}</span>
                   </label>
