@@ -29,6 +29,8 @@ export async function POST(request: NextRequest) {
       extraGuestFee,
       addonTotal,
       nights,
+      waiverSigned,
+      signatureData,
     } = body
 
     // Double-check availability before charging
@@ -111,7 +113,7 @@ export async function POST(request: NextRequest) {
         amount_paid: amountToPay,
         payment_type: paymentType,
         square_payment_id: squarePaymentId,
-        waiver_signed: false,
+        waiver_signed: waiverSigned || false,
       })
       .select()
       .single()
@@ -143,6 +145,23 @@ export async function POST(request: NextRequest) {
         .update({ times_used: supabase.rpc('increment_discount_usage', { code: discountCode }) })
     }
 
+    // Look up full addon names for emails
+    let addonDetails: { name: string; quantity: number; price: number }[] = []
+    if (addonItems && addonItems.length > 0) {
+      const addonIds = addonItems.map((a: any) => a.id)
+      const { data: addonRows } = await supabase
+        .from('addons')
+        .select('id, name')
+        .in('id', addonIds)
+      if (addonRows) {
+        addonDetails = addonItems.map((item: any) => ({
+          name: addonRows.find((r: any) => r.id === item.id)?.name || 'Add-on',
+          quantity: item.quantity,
+          price: item.price,
+        }))
+      }
+    }
+
     // Send confirmation emails
     try {
       await fetch(`${request.nextUrl.origin}/api/email`, {
@@ -162,6 +181,10 @@ export async function POST(request: NextRequest) {
           amountPaid: amountToPay,
           paymentType,
           confirmationNumber: reservation.id.slice(0, 8).toUpperCase(),
+          addonDetails,         // ← now included
+          extraGuestFee,        // ← now included
+          discountAmount,       // ← now included
+          discountCode: discountCode || null,
         }),
       })
     } catch (e) {
