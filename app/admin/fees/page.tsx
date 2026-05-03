@@ -139,11 +139,13 @@ export default function FeesPage() {
       {showForm && (
         <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
           <h2 className="text-lg font-semibold mb-4">{editingFee ? 'Edit Fee' : 'Add New Fee'}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Fee Name</label>
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. PA State Tax" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
               <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as 'percentage' | 'flat' })}>
@@ -151,46 +153,55 @@ export default function FeesPage() {
                 <option value="flat">Flat Amount ($)</option>
               </select>
             </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Amount {form.type === 'percentage' ? '(%)' : '($)'}</label>
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={form.type === 'percentage' ? 'e.g. 6' : 'e.g. 10.00'} type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             </div>
-            <div className="flex items-center gap-2 mt-6">
-              <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 rounded shrink-0" />
-              <label className="text-sm text-gray-700">Active (applied to bookings)</label>
-            </div>
-          </div>
 
-          <div className="mt-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Applies To</label>
-            <div className="flex items-center gap-2 mb-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Applies To</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <input
+                  type="checkbox"
+                  id="applies_all"
+                  checked={form.applies_to_all}
+                  onChange={e => setForm({ ...form, applies_to_all: e.target.checked, applies_to_selections: [] })}
+                  style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                />
+                <label htmlFor="applies_all" className="text-sm font-medium text-gray-700">All sites + add-ons</label>
+              </div>
+              {!form.applies_to_all && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
+                  {APPLIES_TO_OPTIONS.map(opt => (
+                    <div key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="checkbox"
+                        id={opt.value}
+                        checked={form.applies_to_selections.includes(opt.value)}
+                        onChange={() => toggleSelection(opt.value)}
+                        style={{ width: '16px', height: '16px', flexShrink: 0 }}
+                      />
+                      <label htmlFor={opt.value} className="text-sm text-gray-700" style={{ cursor: 'pointer' }}>{opt.label}</label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input
                 type="checkbox"
-                id="applies_all"
-                checked={form.applies_to_all}
-                onChange={e => setForm({ ...form, applies_to_all: e.target.checked, applies_to_selections: [] })}
-                className="w-4 h-4 rounded shrink-0"
+                id="is_active"
+                checked={form.is_active}
+                onChange={e => setForm({ ...form, is_active: e.target.checked })}
+                style={{ width: '16px', height: '16px', flexShrink: 0 }}
               />
-              <label htmlFor="applies_all" className="text-sm font-medium text-gray-700">All sites + add-ons</label>
+              <label htmlFor="is_active" className="text-sm text-gray-700">Active (applied to bookings)</label>
             </div>
-            {!form.applies_to_all && (
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 p-3 border border-gray-200 rounded-lg bg-gray-50">
-                {APPLIES_TO_OPTIONS.map(opt => (
-                  <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.applies_to_selections.includes(opt.value)}
-                      onChange={() => toggleSelection(opt.value)}
-                      className="w-4 h-4 rounded shrink-0"
-                    />
-                    <span className="text-sm text-gray-700">{opt.label}</span>
-                  </label>
-                ))}
-              </div>
-            )}
           </div>
 
-          <div className="flex gap-3 mt-4">
+          <div className="flex gap-3 mt-6">
             <button onClick={saveFee} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: 'var(--accent-color)' }}>Save Fee</button>
             <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700">Cancel</button>
           </div>
