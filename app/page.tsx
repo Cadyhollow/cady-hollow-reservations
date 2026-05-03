@@ -36,6 +36,7 @@ export default function HomePage() {
   const [seasonEnd, setSeasonEnd] = useState('')
   const [settings, setSettings] = useState<any>(null)
   const [siteTypes, setSiteTypes] = useState<string[]>([])
+const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
   const selectedSiteRef = useRef<HTMLDivElement>(null)
 
   const today = new Date().toISOString().split('T')[0]
@@ -59,6 +60,27 @@ export default function HomePage() {
   async function handleSearch() {
     if (!arrival || !departure) { alert('Please select both arrival and departure dates.'); return }
     if (departure <= arrival) { alert('Departure date must be after arrival date.'); return }
+
+    // Same-day cutoff check
+    if (settings?.same_day_cutoff_time && arrival === today) {
+      const clean = settings.same_day_cutoff_time.trim().toUpperCase()
+      const match = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
+      if (match) {
+        let hours = parseInt(match[1])
+        const minutes = parseInt(match[2])
+        const period = match[3]
+        if (period === 'PM' && hours !== 12) hours += 12
+        if (period === 'AM' && hours === 12) hours = 0
+        const now = new Date()
+        const currentMinutes = now.getHours() * 60 + now.getMinutes()
+        const cutoffMinutes = hours * 60 + minutes
+        if (currentMinutes >= cutoffMinutes) {
+          setSameDayBlock(settings.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
+          return
+        }
+      }
+    }
+    setSameDayBlock(null)
     setLoading(true)
     setStep(2)
     setSelectedSite(null)
@@ -224,7 +246,13 @@ export default function HomePage() {
             </button>
           </div>
 
-          {loading ? (
+          {sameDayBlock ? (
+  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+    <div className="text-6xl mb-4">📞</div>
+    <p className="text-white text-xl font-bold mb-3">Same-Day Reservations</p>
+    <p className="text-gray-300 text-base">{sameDayBlock}</p>
+  </div>
+) : loading ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
               <p className="text-gray-400 text-lg">Searching for available sites...</p>
             </div>
