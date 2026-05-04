@@ -321,7 +321,7 @@ function BookingForm() {
           discountAmount, extraGuestFee, addonTotal,
           feesTotal,
           nights: site.nights,
-          waiverSigned: waiverEnabled ? true : false,
+          waiverSigned: waiverSigned,
           signatureData,
         }),
       })
