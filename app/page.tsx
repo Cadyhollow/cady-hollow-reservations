@@ -340,7 +340,7 @@ const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
           )}
         </div>
       )}
-      )}
+      )
 
       {/* Footer */}
       <div className="text-center py-8 text-gray-600 text-sm">
