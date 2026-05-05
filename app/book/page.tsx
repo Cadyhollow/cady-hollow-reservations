@@ -526,7 +526,16 @@ function BookingForm() {
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
-                {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
+               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+  const addon = addons.find(a => a.id === id)
+  if (!addon) return null
+  return (
+    <div key={id} className="flex justify-between">
+      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+    </div>
+  )
+})}
                 {feeBreakdown.map(fee => (
                   <div key={fee.id} className="flex justify-between text-gray-300">
                     <span>{fee.name}</span>

@@ -36,7 +36,7 @@ export default function HomePage() {
   const [seasonEnd, setSeasonEnd] = useState('')
   const [settings, setSettings] = useState<any>(null)
   const [siteTypes, setSiteTypes] = useState<string[]>([])
-  const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
+const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
   const selectedSiteRef = useRef<HTMLDivElement>(null)
 
   const today = new Date().toISOString().split('T')[0]
@@ -64,7 +64,7 @@ export default function HomePage() {
     // Same-day cutoff check
     if (settings?.same_day_cutoff_time && arrival === today) {
       const clean = settings.same_day_cutoff_time.trim().toUpperCase()
-      const match = clean.replace(/:\d{2}(\s|$)/, '$1').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
+      const match = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
       if (match) {
         let hours = parseInt(match[1])
         const minutes = parseInt(match[2])
@@ -76,7 +76,6 @@ export default function HomePage() {
         const cutoffMinutes = hours * 60 + minutes
         if (currentMinutes >= cutoffMinutes) {
           setSameDayBlock(settings.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
-          setStep(2)
           return
         }
       }
@@ -130,6 +129,7 @@ export default function HomePage() {
     treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Unique treehouse accommodations nestled among the treetops.' },
   }
 
+  // Determine logo container shape classes
   const logoShapeClass =
     settings?.logo_shape === 'circle' ? 'w-32 h-32 rounded-full' :
     settings?.logo_shape === 'rounded' ? 'w-32 h-32 rounded-xl' :
@@ -143,6 +143,7 @@ export default function HomePage() {
       <div className="flex flex-col items-center justify-center px-4 py-12 text-center"
         style={{ backgroundColor: '#2B2B2B' }}>
 
+        {/* Logo — only render if a URL exists */}
         {settings?.logo_url && (
           <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
             <Image
@@ -238,7 +239,7 @@ export default function HomePage() {
                 {children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}
               </p>
             </div>
-            <button onClick={() => { setStep(1); setSelectedSite(null); setSameDayBlock(null) }}
+            <button onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
               style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}>
               ← Change Dates
@@ -246,12 +247,12 @@ export default function HomePage() {
           </div>
 
           {sameDayBlock ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <div className="text-6xl mb-4">📞</div>
-              <p className="text-white text-xl font-bold mb-3">Same-Day Reservations</p>
-              <p className="text-gray-300 text-base">{sameDayBlock}</p>
-            </div>
-          ) : loading ? (
+  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+    <div className="text-6xl mb-4">📞</div>
+    <p className="text-white text-xl font-bold mb-3">Same-Day Reservations</p>
+    <p className="text-gray-300 text-base">{sameDayBlock}</p>
+  </div>
+) : loading ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
               <p className="text-gray-400 text-lg">Searching for available sites...</p>
             </div>
@@ -338,6 +339,7 @@ export default function HomePage() {
             </div>
           )}
         </div>
+      )}
       )}
 
       {/* Footer */}
