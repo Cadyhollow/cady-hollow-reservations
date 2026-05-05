@@ -597,12 +597,16 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
-              {addonTotal > 0 && (
-                <div className="flex justify-between">
-                  <p className="text-gray-400">Add-ons</p>
-                  <p className="text-white font-medium">${(addonTotal / 100).toFixed(2)}</p>
-                </div>
-              )}
+              {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+  const addon = addons.find(a => a.id === id)
+  if (!addon) return null
+  return (
+    <div key={id} className="flex justify-between">
+      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+    </div>
+  )
+})}
               {feeBreakdown.map(fee => (
                 <div key={fee.id} className="flex justify-between">
                   <p className="text-gray-400">{fee.name}</p>
