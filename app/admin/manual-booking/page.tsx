@@ -74,7 +74,11 @@ export default function ManualBookingPage() {
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
-  const applicableFees = selectedSite ? fees.filter(f => f.applies_to === 'all' || f.applies_to === selectedSite.site_type) : []
+  const applicableFees = selectedSite ? fees.filter(f => {
+  if (f.applies_to === 'all') return true
+  const targets = f.applies_to.split(',').map((s: string) => s.trim())
+  return targets.includes(selectedSite.site_type) || targets.includes('addons')
+}) : []
   const feesTotal = applicableFees.reduce((sum, f) => sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
 
   const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
