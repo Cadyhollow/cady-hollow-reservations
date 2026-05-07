@@ -321,7 +321,7 @@ export default function SitesPage() {
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="number" value={form.display_order} onChange={e => setForm({ ...form, display_order: parseInt(e.target.value) })} />
             </div>
             <div className="flex items-center gap-3 pt-6">
-              <input type="checkbox" id="is_available" checked={form.is_available} onChange={e => setForm({ ...form, is_available: e.target.checked })} style={{ width: '16px', height: '16px', accentColor: '#15803d', flexShrink: 0 }} />
+              <input type="checkbox" id="is_available" checked={form.is_available} onChange={e => setForm({ ...form, is_available: e.target.checked })} style={{ width: '16px', height: '16px', maxWidth: 'none', accentColor: '#15803d', flexShrink: 0 }} />
               <label htmlFor="is_available" className="text-sm font-medium text-gray-700">Available for booking</label>
             </div>
             <div className="md:col-span-2 lg:col-span-3">
