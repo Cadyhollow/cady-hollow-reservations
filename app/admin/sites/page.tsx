@@ -321,8 +321,10 @@ export default function SitesPage() {
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="number" value={form.display_order} onChange={e => setForm({ ...form, display_order: parseInt(e.target.value) })} />
             </div>
             <div className="flex items-center gap-3 pt-6">
-              <input type="checkbox" id="is_available" checked={form.is_available} onChange={e => setForm({ ...form, is_available: e.target.checked })} style={{ width: '16px', height: '16px', maxWidth: 'none', accentColor: '#15803d', flexShrink: 0 }} />
-              <label htmlFor="is_available" className="text-sm font-medium text-gray-700">Available for booking</label>
+              <button type="button" onClick={() => setForm({ ...form, is_available: !form.is_available })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_available ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
+                <span style={{ position: 'absolute', top: '3px', left: form.is_available ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+              </button>
+              <label className="text-sm font-medium text-gray-700">Available for booking</label>
             </div>
             <div className="md:col-span-2 lg:col-span-3">
               <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
