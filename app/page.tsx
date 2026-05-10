@@ -398,7 +398,7 @@ export default function HomePage() {
   if (catIds && catIds.length > 0) {
     setOpenCategories(prev => {
       const next = new Set(prev)
-      catIds.forEach((id: number) => next.add(id))
+      catIds.forEach((id) => next.add(id))
       return next
     })
   } else {
