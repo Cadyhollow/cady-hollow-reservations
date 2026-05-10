@@ -59,7 +59,7 @@ export default function ReservationsPage() {
       .eq('reservation_id', reservationId)
     if (data) {
       setSelectedAddons(
-        data.map((row) => ({
+        data.map((row: any) => ({
           name: row.addons?.name || 'Add-on',
           quantity: row.quantity,
           price_at_booking: row.price_at_booking,
