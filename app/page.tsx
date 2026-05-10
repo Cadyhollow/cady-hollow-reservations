@@ -118,7 +118,7 @@ export default function HomePage() {
         .in('site_id', siteIds)
       if (sc) {
         const map: Record<string, number[]> = {}
-        sc.forEach((row: any) => {
+        sc.forEach((row) => {
           if (!map[row.site_id]) map[row.site_id] = []
           map[row.site_id].push(row.category_id)
         })

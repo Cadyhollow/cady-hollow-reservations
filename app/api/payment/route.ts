@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
     // Save addon selections
     if (addonItems && addonItems.length > 0) {
       await supabase.from('reservation_addons').insert(
-        addonItems.map((item: any) => ({
+        addonItems.map((item) => ({
           reservation_id: reservation.id,
           addon_id: item.id,
           quantity: item.quantity,

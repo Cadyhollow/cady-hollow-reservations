@@ -64,7 +64,7 @@ export default function SitesPage() {
     const { data: sc } = await supabase.from('site_categories').select('*')
     if (sc) {
       const map: Record<string, number[]> = {}
-      sc.forEach((row: any) => {
+      sc.forEach((row) => {
         if (!map[row.site_id]) map[row.site_id] = []
         map[row.site_id].push(row.category_id)
       })
