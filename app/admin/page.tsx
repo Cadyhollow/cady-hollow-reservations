@@ -71,16 +71,24 @@ export default function AdminDashboard() {
     // Fetch add-ons for today's arrivals
     if (todayArrivals && todayArrivals.length > 0) {
       const ids = todayArrivals.map((r: any) => r.id)
-      const { data: addonData } = await supabase
-        .from('reservation_addons')
-        .select('reservation_id, quantity, addons(name)')
-        .in('reservation_id', ids)
+     const { data: addonData } = await supabase
+  .from('reservation_addons')
+  .select('reservation_id, addon_id, quantity')
+  .in('reservation_id', ids)
 
-      const addonMap: Record<string, { name: string; quantity: number }[]> = {}
-      addonData?.forEach((row: any) => {
-        if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
-        addonMap[row.reservation_id].push({ name: row.addons?.name || 'Add-on', quantity: row.quantity })
-      })
+const addonIds = [...new Set(addonData?.map(r => r.addon_id) || [])]
+const { data: addonNames } = addonIds.length > 0
+  ? await supabase.from('addons').select('id, name').in('id', addonIds)
+  : { data: [] }
+
+const nameMap: Record<string, string> = {}
+addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
+
+const addonMap: Record<string, { name: string; quantity: number }[]> = {}
+addonData?.forEach((row: any) => {
+  if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
+  addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
+})
 
       setArrivalsToday(todayArrivals.map((r: any) => ({
         id: r.id,
