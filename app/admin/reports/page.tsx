@@ -76,8 +76,9 @@ export default function ReportsPage() {
   // Monthly revenue
   const monthlyMap: { [key: string]: { label: string; value: number } } = {}
   reservations.forEach(r => {
-    const key = r.arrival_date.substring(0, 7)
-    const label = new Date(r.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+   const arrivalDate = new Date(r.arrival_date + 'T12:00:00')
+const key = arrivalDate.getFullYear() + '-' + String(arrivalDate.getMonth() + 1).padStart(2, '0')
+const label = arrivalDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
     if (!monthlyMap[key]) monthlyMap[key] = { label, value: 0 }
     monthlyMap[key].value += (r.total_price || 0) / 100
   })
