@@ -297,15 +297,17 @@ function ReservationsPageInner() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-3 mb-6 md:flex-row">
+      <div className="flex gap-3 mb-6">
         <input
-          className="flex-1 border border-gray-200 rounded-lg px-4 py-2.5 text-sm shadow-sm"
+          className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm"
+          style={{ minWidth: 0, flex: '1 1 auto' }}
           placeholder="🔍  Search by name, email, or site number..."
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
         <select
-          className="border border-gray-200 rounded-lg px-4 py-2.5 text-sm shadow-sm md:w-48"
+          className="border border-gray-200 rounded-lg px-4 py-2.5 text-sm shrink-0"
+          style={{ width: '180px' }}
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
         >
