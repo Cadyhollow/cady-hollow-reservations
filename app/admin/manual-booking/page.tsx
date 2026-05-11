@@ -306,13 +306,18 @@ export default function ManualBookingPage() {
                     : fee.amount / 100
                   return (
                     <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
-                     <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={enabledFees[fee.name] ?? true}
-                          onChange={() => toggleFee(fee.name)}
-                          style={{ width: '18px', height: '18px', minWidth: '18px', cursor: 'pointer', accentColor: '#15803d' }}
-                        />
+                    <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleFee(fee.name)}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                            (enabledFees[fee.name] ?? true)
+                              ? 'bg-green-700 border-green-700 text-white'
+                              : 'bg-white border-gray-300'
+                          }`}
+                        >
+                          {(enabledFees[fee.name] ?? true) && <span className="text-xs font-bold">✓</span>}
+                        </button>
                         <div>
                           <p className="font-medium text-gray-900 text-sm">{fee.name}</p>
                           <p className="text-gray-500 text-xs">
