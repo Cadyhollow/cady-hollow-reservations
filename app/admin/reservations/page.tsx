@@ -356,8 +356,8 @@ function ReservationsPageInner() {
         </div>
 
         {/* Detail / Edit Panel */}
-        {selected && (
-          <div className="w-96 bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-fit sticky top-6">
+       {selected && (
+          <div className="w-96 bg-white rounded-xl shadow-sm border border-gray-100 p-6 sticky top-6 max-h-[calc(100vh-6rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">
                 {editing ? 'Edit Reservation' : 'Reservation Details'}
