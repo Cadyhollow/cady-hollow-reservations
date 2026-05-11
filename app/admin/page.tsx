@@ -317,5 +317,6 @@ addonData?.forEach((row: any) => {
       </div>
 
     </div>
-  )
+    )
+  }
 }
