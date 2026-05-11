@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
@@ -46,7 +46,7 @@ type Reservation = {
   sites: { site_number: string; site_type: string } | null
 }
 
-export default function ReservationsPage() {
+function ReservationsPageInner() {
   const searchParams = useSearchParams()
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [allSites, setAllSites] = useState<Site[]>([])
@@ -582,5 +582,12 @@ export default function ReservationsPage() {
         )}
       </div>
     </div>
+  )
+}
+export default function ReservationsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-500">Loading...</div>}>
+      <ReservationsPageInner />
+    </Suspense>
   )
 }
