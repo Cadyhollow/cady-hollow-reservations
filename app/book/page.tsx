@@ -13,6 +13,126 @@ type Addon = {
   is_early_checkin: boolean
 }
 
+type Fee = {
+  id: string
+  name: string
+  type: 'percentage' | 'flat'
+  amount: number
+  applies_to: string
+  is_active: boolean
+}
+
+const CAMPER_TYPES = [
+  {
+    value: 'travel_trailer',
+    label: 'Travel Trailer',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="8" y="8" width="58" height="22" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="12" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="26" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="40" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <line x1="8" y1="30" x2="4" y2="30" stroke="currentColor" strokeWidth="2"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <line x1="66" y1="19" x2="74" y2="19" stroke="currentColor" strokeWidth="2"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'fifth_wheel',
+    label: 'Fifth Wheel',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="8" y="10" width="56" height="20" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="48" y="4" width="16" height="10" rx="2" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1.5"/>
+        <rect x="12" y="14" width="9" height="7" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="25" y="14" width="9" height="7" rx="1" fill="currentColor" opacity="0.4"/>
+        <circle cx="20" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="50" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <line x1="64" y1="9" x2="72" y2="9" stroke="currentColor" strokeWidth="2"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'class_a',
+    label: 'Class A',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="6" y="8" width="62" height="22" rx="2" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="6" y="8" width="12" height="22" rx="2" fill="currentColor" opacity="0.1"/>
+        <rect x="8" y="11" width="8" height="10" rx="1" fill="currentColor" opacity="0.5"/>
+        <rect x="22" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="34" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="46" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="18" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="56" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'class_c',
+    label: 'Class C',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="14" y="10" width="54" height="20" rx="2" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="6" y="16" width="14" height="14" rx="2" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1.5"/>
+        <rect x="8" y="18" width="8" height="7" rx="1" fill="currentColor" opacity="0.45"/>
+        <rect x="30" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="42" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="56" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'van',
+    label: 'Van',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="10" y="12" width="52" height="18" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <path d="M10 20 Q10 12 18 12" stroke="currentColor" strokeWidth="2" fill="none"/>
+        <rect x="13" y="14" width="9" height="8" rx="1" fill="currentColor" opacity="0.5"/>
+        <rect x="26" y="15" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="38" y="15" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'other',
+    label: 'Other',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="10" y="10" width="52" height="20" rx="4" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2"/>
+        <text x="36" y="24" textAnchor="middle" fill="currentColor" fontSize="12" fontWeight="bold" opacity="0.5">?</text>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.4"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.4"/>
+      </svg>
+    ),
+  },
+]
+
+function parseTime(timeStr: string): { hours: number; minutes: number } | null {
+  if (!timeStr) return null
+  const clean = timeStr.trim().toUpperCase()
+  const match12 = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/)
+  if (match12) {
+    let hours = parseInt(match12[1])
+    const minutes = parseInt(match12[2])
+    const period = match12[3]
+    if (period === 'PM' && hours !== 12) hours += 12
+    if (period === 'AM' && hours === 12) hours = 0
+    return { hours, minutes }
+  }
+  const match24 = clean.match(/^(\d{1,2}):(\d{2})$/)
+  if (match24) {
+    return { hours: parseInt(match24[1]), minutes: parseInt(match24[2]) }
+  }
+  return null
+}
+
 function BookingForm() {
   const searchParams = useSearchParams()
   const cardRef = useRef<any>(null)
@@ -21,12 +141,20 @@ function BookingForm() {
   const isDrawing = useRef(false)
 
   const [addons, setAddons] = useState<Addon[]>([])
+  const [fees, setFees] = useState<Fee[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [discountCode, setDiscountCode] = useState('')
   const [discountResult, setDiscountResult] = useState<any>(null)
   const [discountError, setDiscountError] = useState('')
   const [checkingDiscount, setCheckingDiscount] = useState(false)
-  const [form, setForm] = useState({ guest_name: '', guest_email: '', guest_phone: '' })
+  const [form, setForm] = useState({
+    guest_name: '',
+    guest_email: '',
+    guest_phone: '',
+    camper_type: '',
+    camper_length: '',
+    camper_amperage: '',
+  })
   const [step, setStep] = useState(1)
   const [paymentLoading, setPaymentLoading] = useState(false)
   const [paymentError, setPaymentError] = useState('')
@@ -37,6 +165,8 @@ function BookingForm() {
   const [waiverChecked, setWaiverChecked] = useState(false)
   const [hasSignature, setHasSignature] = useState(false)
   const [settings, setSettings] = useState<any>(null)
+  const [sameDayBlocked, setSameDayBlocked] = useState(false)
+  const [sameDayMessage, setSameDayMessage] = useState('')
 
   const site = {
     id: searchParams.get('siteId') || '',
@@ -55,13 +185,40 @@ function BookingForm() {
   const adults = parseInt(searchParams.get('adults') || '2')
   const children = parseInt(searchParams.get('children') || '0')
 
-  useEffect(() => { fetchAddons(); fetchSettings() }, [])
+  useEffect(() => { fetchAddons(); fetchSettings(); fetchFees() }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
   async function fetchSettings() {
-    const { data } = await supabase.from('settings').select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text').limit(1).single()
-    if (data) setSettings(data)
+    const { data } = await supabase
+      .from('settings')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message')
+      .limit(1)
+      .single()
+    if (data) {
+      setSettings(data)
+      checkSameDayCutoff(data, arrival)
+    }
+  }
+
+  async function fetchFees() {
+    const { data } = await supabase.from('fees').select('*').eq('is_active', true)
+    setFees(data || [])
+  }
+
+  function checkSameDayCutoff(settingsData: any, arrivalDate: string) {
+    if (!arrivalDate || !settingsData?.same_day_cutoff_time) return
+    const today = new Date()
+    const todayStr = today.toISOString().split('T')[0]
+    if (arrivalDate !== todayStr) return
+    const cutoff = parseTime(settingsData.same_day_cutoff_time)
+    if (!cutoff) return
+    const currentTotalMinutes = today.getHours() * 60 + today.getMinutes()
+    const cutoffTotalMinutes = cutoff.hours * 60 + cutoff.minutes
+    if (currentTotalMinutes >= cutoffTotalMinutes) {
+      setSameDayBlocked(true)
+      setSameDayMessage(settingsData.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
+    }
   }
 
   async function fetchAddons() {
@@ -97,11 +254,9 @@ function BookingForm() {
     document.head.appendChild(script)
   }
 
-  // Waiver text with [CAMPGROUND NAME] replaced
   const waiverText = (settings?.waiver_text || '').replace(/\[CAMPGROUND NAME\]/g, settings?.park_name || 'the campground')
   const waiverEnabled = settings?.waiver_enabled !== false
 
-  // Signature canvas handlers
   function startDrawing(e: any) {
     isDrawing.current = true
     const canvas = signatureCanvasRef.current!
@@ -146,13 +301,10 @@ function BookingForm() {
     setStep(3)
   }
 
-  // If no waiver required, skip waiver step
   function proceedFromAddons() {
     if (!waiverEnabled) {
       setWaiverSigned(true)
       setStep(3)
-    } else {
-      // stay on step 2 to show waiver
     }
   }
 
@@ -179,13 +331,42 @@ function BookingForm() {
   const extraAdults = Math.max(0, adults - 2)
   const extraChildren = Math.max(0, children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * site.nights
+
+  function feeAppliesToSite(fee: Fee): boolean {
+    if (fee.applies_to === 'all') return true
+    const targets = fee.applies_to.split(',').map(s => s.trim())
+    return targets.includes(site.site_type)
+  }
+
+  function feeAppliesToAddons(fee: Fee): boolean {
+    if (fee.applies_to === 'all') return true
+    const targets = fee.applies_to.split(',').map(s => s.trim())
+    return targets.includes('addons')
+  }
+
+  function calculateFeeAmount(fee: Fee): number {
+    let base = 0
+    if (feeAppliesToSite(fee)) base += site.total_price + extraGuestFee
+    if (feeAppliesToAddons(fee)) base += addonTotal
+    if (base === 0) return 0
+    if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
+    return fee.amount * 100
+  }
+
+  const feeBreakdown = fees.map(fee => ({
+    ...fee,
+    calculatedAmount: calculateFeeAmount(fee),
+  })).filter(fee => fee.calculatedAmount > 0)
+
+  const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
+
   const subtotal = site.total_price + extraGuestFee + addonTotal
   const discountAmount = discountResult
     ? discountResult.discount_type === 'percent'
       ? Math.round(subtotal * discountResult.discount_value / 100)
       : discountResult.discount_value
     : 0
-  const total = Math.max(0, subtotal - discountAmount)
+  const total = Math.max(0, subtotal + feesTotal - discountAmount)
   const deposit = site.nightly_rate
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -194,6 +375,9 @@ function BookingForm() {
     if (!form.guest_name.trim()) { alert('Please enter your name.'); return }
     if (!form.guest_email.trim() || !form.guest_email.includes('@')) { alert('Please enter a valid email.'); return }
     if (!form.guest_phone.trim()) { alert('Please enter your phone number.'); return }
+    if (!form.camper_type) { alert('Please select your camper type.'); return }
+    if (!form.camper_length || parseInt(form.camper_length) < 1) { alert('Please enter your camper length.'); return }
+    if (!form.camper_amperage) { alert('Please select your amperage.'); return }
     setStep(2)
   }
 
@@ -227,13 +411,17 @@ function BookingForm() {
           guestName: form.guest_name,
           guestEmail: form.guest_email,
           guestPhone: form.guest_phone,
+          camperType: form.camper_type,
+          camperLength: parseInt(form.camper_length) || 0,
+          camperAmperage: form.camper_amperage,
           nightlyRate: site.nightly_rate,
           totalPrice: total,
           amountToPay, paymentType, addonItems,
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
+          feesTotal,
           nights: site.nights,
-          waiverSigned: waiverEnabled ? true : false,
+          waiverSigned: waiverSigned,
           signatureData,
         }),
       })
@@ -247,11 +435,39 @@ function BookingForm() {
     }
   }
 
-  // Logo display
   const logoShapeClass =
     settings?.logo_shape === 'circle' ? 'rounded-full' :
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     settings?.logo_shape === 'square' ? 'rounded-none' : 'rounded-none'
+
+  const camperTypeLabel = (val: string) =>
+    CAMPER_TYPES.find(t => t.value === val)?.label || val
+
+  if (sameDayBlocked) {
+    return (
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: '#1C1C1C' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
+          {settings?.logo_url && (
+            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+            </div>
+          )}
+          <div>
+            <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
+            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center px-4 py-16">
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+            <div className="text-5xl mb-4">📞</div>
+            <h2 className="text-white text-2xl font-bold mb-3">Same-Day Reservations</h2>
+            <p className="text-gray-300 text-base leading-relaxed">{sameDayMessage}</p>
+            <button onClick={() => window.history.back()} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Go Back</button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
@@ -288,6 +504,59 @@ function BookingForm() {
                   <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
                   <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
+
+                {/* Camper Type Visual Selector */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Camper Type *</label>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                    {CAMPER_TYPES.map(type => (
+                      <button
+                        key={type.value}
+                        type="button"
+                        onClick={() => setForm({ ...form, camper_type: type.value })}
+                        className="flex flex-col items-center gap-1.5 p-2 rounded-xl border-2 transition-all"
+                        style={{
+                          borderColor: form.camper_type === type.value ? 'var(--accent-color)' : '#4B5563',
+                          backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : '#374151',
+                          color: form.camper_type === type.value ? 'var(--accent-color)' : '#9CA3AF',
+                        }}
+                      >
+                        <div className="w-14 h-8">{type.svg}</div>
+                        <span className="text-xs font-medium text-center leading-tight">{type.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Camper Length + Amperage */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Camper Length (ft) *</label>
+                    <input
+                      className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                      placeholder="e.g. 32"
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={form.camper_length}
+                      onChange={e => setForm({ ...form, camper_length: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Amperage *</label>
+                    <select
+                      className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                      value={form.camper_amperage}
+                      onChange={e => setForm({ ...form, camper_amperage: e.target.value })}
+                    >
+                      <option value="">Select...</option>
+                      <option value="50amp">50 Amp</option>
+                      <option value="30amp">30 Amp</option>
+                      <option value="20amp">20 Amp</option>
+                    </select>
+                  </div>
+                </div>
+
                 <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'var(--accent-color)' }}>
                   Continue to Add-Ons →
                 </button>
@@ -297,6 +566,7 @@ function BookingForm() {
                 <p className="text-white font-medium">{form.guest_name}</p>
                 <p>{form.guest_email}</p>
                 <p>{form.guest_phone}</p>
+                <p className="text-gray-400">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>
                 <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: 'var(--accent-color)' }}>Edit</button>
               </div>
             )}
@@ -338,16 +608,14 @@ function BookingForm() {
                 {discountResult && <p className="text-green-400 text-sm mt-2">✓ {discountResult.discount_type === 'percent' ? `${discountResult.discount_value}% discount applied!` : `$${(discountResult.discount_value / 100).toFixed(2)} discount applied!`}</p>}
               </div>
 
-              {/* Waiver — only shown if enabled and not yet signed */}
+              {/* Waiver */}
               {waiverEnabled && !waiverSigned && waiverText && (
                 <div className="pt-4 border-t border-gray-700">
                   <h3 className="text-white font-bold text-lg mb-3">3. Liability Waiver</h3>
                   <p className="text-gray-400 text-sm mb-3">Please read and sign the following waiver before proceeding to payment.</p>
-
                   <div className="bg-gray-800 rounded-lg p-4 mb-4 h-48 overflow-y-auto">
                     <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{waiverText}</p>
                   </div>
-
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-gray-300">Sign below:</label>
@@ -369,21 +637,25 @@ function BookingForm() {
                     />
                     {!hasSignature && <p className="text-gray-500 text-xs mt-1">Draw your signature above using your mouse or finger</p>}
                   </div>
-
                   <div className="flex items-start gap-3 mb-4">
-                    <input type="checkbox" id="waiver_agree" checked={waiverChecked} onChange={e => setWaiverChecked(e.target.checked)} className="w-4 h-4 mt-0.5 accent-teal-500" />
-                    <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => setWaiverChecked(!waiverChecked)}
+                      className="w-5 h-5 mt-0.5 shrink-0 rounded border-2 flex items-center justify-center transition-colors"
+                      style={{ borderColor: waiverChecked ? '#14b8a6' : '#6b7280', backgroundColor: waiverChecked ? '#14b8a6' : 'transparent' }}
+                    >
+                      {waiverChecked && <span className="text-white text-xs font-bold">✓</span>}
+                    </button>
+                    <label className="text-gray-300 text-sm">
                       I have read, understand, and agree to the {settings?.park_name || 'Campground'} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
-
                   <button onClick={acceptWaiver} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
                     Accept Waiver & Continue to Payment →
                   </button>
                 </div>
               )}
 
-              {/* No waiver — show continue button */}
               {(!waiverEnabled || !waiverText) && !waiverSigned && (
                 <div className="pt-4 border-t border-gray-700">
                   <button onClick={proceedFromAddons} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
@@ -392,7 +664,6 @@ function BookingForm() {
                 </div>
               )}
 
-              {/* Waiver already signed */}
               {waiverEnabled && waiverSigned && (
                 <div className="pt-4 border-t border-gray-700">
                   <p className="text-green-400 font-medium">✓ Liability waiver signed</p>
@@ -406,20 +677,33 @@ function BookingForm() {
           {step >= 3 && waiverSigned && (
             <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
               <h2 className="text-white font-bold text-lg mb-4">{waiverEnabled ? '4. Payment' : '3. Payment'}</h2>
-
               <div className="mb-6 space-y-2 text-sm">
                 <div className="flex justify-between text-gray-300">
                   <span>{siteTypeLabel(site.site_type)} {site.site_number} × {site.nights} nights</span>
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
-                {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
+                {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+                  const addon = addons.find(a => a.id === id)
+                  if (!addon) return null
+                  return (
+                    <div key={id} className="flex justify-between">
+                      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                    </div>
+                  )
+                })}
+                {feeBreakdown.map(fee => (
+                  <div key={fee.id} className="flex justify-between text-gray-300">
+                    <span>{fee.name}</span>
+                    <span>${(fee.calculatedAmount / 100).toFixed(2)}</span>
+                  </div>
+                ))}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
                 <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
                 </div>
               </div>
-
               <div className="rounded-lg p-4 bg-gray-800 mb-6">
                 <p className="text-gray-300 text-xs leading-relaxed">
                   <span className="text-white font-medium">Cancellation Policy: </span>
@@ -429,26 +713,12 @@ function BookingForm() {
                   <p className="text-yellow-400 text-xs mt-2 font-medium">⚠ Deposit is non-refundable for these dates.</p>
                 )}
               </div>
-
-              <div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
-                <p className="text-gray-300 text-xs leading-relaxed">
-                  <span className="text-white font-medium">ℹ️ Site Selection: </span>
-                  Site choice is not guaranteed — we will do our best to honor your selection.
-                </p>
-                <p className="text-gray-300 text-xs leading-relaxed">
-                  <span className="text-white font-medium">ℹ️ Pricing: </span>
-                  All prices include taxes and fees — no surprises at checkout.
-                </p>
-              </div>
-
               <div className="mb-6">
                 <h3 className="text-white font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
                 {!squareLoaded && <p className="text-gray-400 text-sm mt-2">Loading payment form...</p>}
               </div>
-
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
-
               <div className="space-y-3">
                 <h3 className="text-white font-medium">Choose Payment Option</h3>
                 <button
@@ -484,6 +754,35 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
+              {form.camper_type && (
+                <div className="border-t border-gray-700 pt-3">
+                  <p className="text-gray-400">Camper</p>
+                  <p className="text-white font-medium">{camperTypeLabel(form.camper_type)}</p>
+                  {form.camper_length && <p className="text-gray-400 text-xs">{form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
+                </div>
+              )}
+              {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+                const addon = addons.find(a => a.id === id)
+                if (!addon) return null
+                return (
+                  <div key={id} className="flex justify-between">
+                    <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                    <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                  </div>
+                )
+              })}
+              {feeBreakdown.map(fee => (
+                <div key={fee.id} className="flex justify-between">
+                  <p className="text-gray-400">{fee.name}</p>
+                  <p className="text-white font-medium">${(fee.calculatedAmount / 100).toFixed(2)}</p>
+                </div>
+              ))}
+              {discountAmount > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-green-400">Discount</p>
+                  <p className="text-green-400 font-medium">-${(discountAmount / 100).toFixed(2)}</p>
+                </div>
+              )}
               <div className="border-t border-gray-700 pt-3">
                 <div className="flex justify-between">
                   <p className="text-white font-bold">Total</p>
