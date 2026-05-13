@@ -13,34 +13,6 @@ type Addon = {
   is_early_checkin: boolean
 }
 
-type Fee = {
-  id: string
-  name: string
-  type: 'percentage' | 'flat'
-  amount: number
-  applies_to: string
-  is_active: boolean
-}
-
-function parseTime(timeStr: string): { hours: number; minutes: number } | null {
-  if (!timeStr) return null
-  const clean = timeStr.trim().toUpperCase()
-  const match12 = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/)
-  if (match12) {
-    let hours = parseInt(match12[1])
-    const minutes = parseInt(match12[2])
-    const period = match12[3]
-    if (period === 'PM' && hours !== 12) hours += 12
-    if (period === 'AM' && hours === 12) hours = 0
-    return { hours, minutes }
-  }
-  const match24 = clean.match(/^(\d{1,2}):(\d{2})$/)
-  if (match24) {
-    return { hours: parseInt(match24[1]), minutes: parseInt(match24[2]) }
-  }
-  return null
-}
-
 function BookingForm() {
   const searchParams = useSearchParams()
   const cardRef = useRef<any>(null)
@@ -49,7 +21,6 @@ function BookingForm() {
   const isDrawing = useRef(false)
 
   const [addons, setAddons] = useState<Addon[]>([])
-  const [fees, setFees] = useState<Fee[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [discountCode, setDiscountCode] = useState('')
   const [discountResult, setDiscountResult] = useState<any>(null)
@@ -66,8 +37,6 @@ function BookingForm() {
   const [waiverChecked, setWaiverChecked] = useState(false)
   const [hasSignature, setHasSignature] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-  const [sameDayBlocked, setSameDayBlocked] = useState(false)
-  const [sameDayMessage, setSameDayMessage] = useState('')
 
   const site = {
     id: searchParams.get('siteId') || '',
@@ -86,43 +55,13 @@ function BookingForm() {
   const adults = parseInt(searchParams.get('adults') || '2')
   const children = parseInt(searchParams.get('children') || '0')
 
-  useEffect(() => { fetchAddons(); fetchSettings(); fetchFees() }, [])
+  useEffect(() => { fetchAddons(); fetchSettings() }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
   async function fetchSettings() {
-    const { data } = await supabase
-      .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message')
-      .limit(1)
-      .single()
-    if (data) {
-      setSettings(data)
-      checkSameDayCutoff(data, arrival)
-    }
-  }
-
-  async function fetchFees() {
-    const { data } = await supabase
-      .from('fees')
-      .select('*')
-      .eq('is_active', true)
-    setFees(data || [])
-  }
-
-  function checkSameDayCutoff(settingsData: any, arrivalDate: string) {
-    if (!arrivalDate || !settingsData?.same_day_cutoff_time) return
-    const today = new Date()
-    const todayStr = today.toISOString().split('T')[0]
-    if (arrivalDate !== todayStr) return
-    const cutoff = parseTime(settingsData.same_day_cutoff_time)
-    if (!cutoff) return
-    const currentTotalMinutes = today.getHours() * 60 + today.getMinutes()
-    const cutoffTotalMinutes = cutoff.hours * 60 + cutoff.minutes
-    if (currentTotalMinutes >= cutoffTotalMinutes) {
-      setSameDayBlocked(true)
-      setSameDayMessage(settingsData.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
-    }
+    const { data } = await supabase.from('settings').select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text').limit(1).single()
+    if (data) setSettings(data)
   }
 
   async function fetchAddons() {
@@ -158,9 +97,11 @@ function BookingForm() {
     document.head.appendChild(script)
   }
 
+  // Waiver text with [CAMPGROUND NAME] replaced
   const waiverText = (settings?.waiver_text || '').replace(/\[CAMPGROUND NAME\]/g, settings?.park_name || 'the campground')
   const waiverEnabled = settings?.waiver_enabled !== false
 
+  // Signature canvas handlers
   function startDrawing(e: any) {
     isDrawing.current = true
     const canvas = signatureCanvasRef.current!
@@ -205,10 +146,13 @@ function BookingForm() {
     setStep(3)
   }
 
+  // If no waiver required, skip waiver step
   function proceedFromAddons() {
     if (!waiverEnabled) {
       setWaiverSigned(true)
       setStep(3)
+    } else {
+      // stay on step 2 to show waiver
     }
   }
 
@@ -235,44 +179,13 @@ function BookingForm() {
   const extraAdults = Math.max(0, adults - 2)
   const extraChildren = Math.max(0, children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * site.nights
-
-  // ── Fee calculation ──────────────────────────────────────────────────────
-  function feeAppliesToSite(fee: Fee): boolean {
-    if (fee.applies_to === 'all') return true
-    const targets = fee.applies_to.split(',').map(s => s.trim())
-    return targets.includes(site.site_type)
-  }
-
-  function feeAppliesToAddons(fee: Fee): boolean {
-    if (fee.applies_to === 'all') return true
-    const targets = fee.applies_to.split(',').map(s => s.trim())
-    return targets.includes('addons')
-  }
-
-  function calculateFeeAmount(fee: Fee): number {
-    let base = 0
-    if (feeAppliesToSite(fee)) base += site.total_price + extraGuestFee
-    if (feeAppliesToAddons(fee)) base += addonTotal
-    if (base === 0) return 0
-    if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
-    return fee.amount * 100 // flat fee stored in dollars, convert to cents
-  }
-
-  const feeBreakdown = fees.map(fee => ({
-    ...fee,
-    calculatedAmount: calculateFeeAmount(fee),
-  })).filter(fee => fee.calculatedAmount > 0)
-
-  const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
-  // ────────────────────────────────────────────────────────────────────────
-
   const subtotal = site.total_price + extraGuestFee + addonTotal
   const discountAmount = discountResult
     ? discountResult.discount_type === 'percent'
       ? Math.round(subtotal * discountResult.discount_value / 100)
       : discountResult.discount_value
     : 0
-  const total = Math.max(0, subtotal + feesTotal - discountAmount)
+  const total = Math.max(0, subtotal - discountAmount)
   const deposit = site.nightly_rate
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -319,9 +232,8 @@ function BookingForm() {
           amountToPay, paymentType, addonItems,
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
-          feesTotal,
           nights: site.nights,
-          waiverSigned: waiverSigned,
+          waiverSigned: waiverEnabled ? true : false,
           signatureData,
         }),
       })
@@ -335,36 +247,11 @@ function BookingForm() {
     }
   }
 
+  // Logo display
   const logoShapeClass =
     settings?.logo_shape === 'circle' ? 'rounded-full' :
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     settings?.logo_shape === 'square' ? 'rounded-none' : 'rounded-none'
-
-  if (sameDayBlocked) {
-    return (
-      <main className="min-h-screen flex flex-col" style={{ backgroundColor: '#1C1C1C' }}>
-        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
-          {settings?.logo_url && (
-            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
-              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
-            </div>
-          )}
-          <div>
-            <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
-            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
-          </div>
-        </div>
-        <div className="flex-1 flex items-center justify-center px-4 py-16">
-          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-            <div className="text-5xl mb-4">📞</div>
-            <h2 className="text-white text-2xl font-bold mb-3">Same-Day Reservations</h2>
-            <p className="text-gray-300 text-base leading-relaxed">{sameDayMessage}</p>
-            <button onClick={() => window.history.back()} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Go Back</button>
-          </div>
-        </div>
-      </main>
-    )
-  }
 
   return (
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
@@ -451,14 +338,16 @@ function BookingForm() {
                 {discountResult && <p className="text-green-400 text-sm mt-2">✓ {discountResult.discount_type === 'percent' ? `${discountResult.discount_value}% discount applied!` : `$${(discountResult.discount_value / 100).toFixed(2)} discount applied!`}</p>}
               </div>
 
-              {/* Waiver */}
+              {/* Waiver — only shown if enabled and not yet signed */}
               {waiverEnabled && !waiverSigned && waiverText && (
                 <div className="pt-4 border-t border-gray-700">
                   <h3 className="text-white font-bold text-lg mb-3">3. Liability Waiver</h3>
                   <p className="text-gray-400 text-sm mb-3">Please read and sign the following waiver before proceeding to payment.</p>
+
                   <div className="bg-gray-800 rounded-lg p-4 mb-4 h-48 overflow-y-auto">
                     <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{waiverText}</p>
                   </div>
+
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-gray-300">Sign below:</label>
@@ -480,25 +369,21 @@ function BookingForm() {
                     />
                     {!hasSignature && <p className="text-gray-500 text-xs mt-1">Draw your signature above using your mouse or finger</p>}
                   </div>
+
                   <div className="flex items-start gap-3 mb-4">
-                    <button
-                      type="button"
-                      onClick={() => setWaiverChecked(!waiverChecked)}
-                      className="w-5 h-5 mt-0.5 shrink-0 rounded border-2 flex items-center justify-center transition-colors"
-                      style={{ borderColor: waiverChecked ? '#14b8a6' : '#6b7280', backgroundColor: waiverChecked ? '#14b8a6' : 'transparent' }}
-                    >
-                      {waiverChecked && <span className="text-white text-xs font-bold">✓</span>}
-                    </button>
-                    <label className="text-gray-300 text-sm">
+                    <input type="checkbox" id="waiver_agree" checked={waiverChecked} onChange={e => setWaiverChecked(e.target.checked)} className="w-4 h-4 mt-0.5 accent-teal-500" />
+                    <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
                       I have read, understand, and agree to the {settings?.park_name || 'Campground'} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
+
                   <button onClick={acceptWaiver} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
                     Accept Waiver & Continue to Payment →
                   </button>
                 </div>
               )}
 
+              {/* No waiver — show continue button */}
               {(!waiverEnabled || !waiverText) && !waiverSigned && (
                 <div className="pt-4 border-t border-gray-700">
                   <button onClick={proceedFromAddons} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
@@ -507,6 +392,7 @@ function BookingForm() {
                 </div>
               )}
 
+              {/* Waiver already signed */}
               {waiverEnabled && waiverSigned && (
                 <div className="pt-4 border-t border-gray-700">
                   <p className="text-green-400 font-medium">✓ Liability waiver signed</p>
@@ -520,33 +406,20 @@ function BookingForm() {
           {step >= 3 && waiverSigned && (
             <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
               <h2 className="text-white font-bold text-lg mb-4">{waiverEnabled ? '4. Payment' : '3. Payment'}</h2>
+
               <div className="mb-6 space-y-2 text-sm">
                 <div className="flex justify-between text-gray-300">
                   <span>{siteTypeLabel(site.site_type)} {site.site_number} × {site.nights} nights</span>
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
-               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
-  const addon = addons.find(a => a.id === id)
-  if (!addon) return null
-  return (
-    <div key={id} className="flex justify-between">
-      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
-    </div>
-  )
-})}
-                {feeBreakdown.map(fee => (
-                  <div key={fee.id} className="flex justify-between text-gray-300">
-                    <span>{fee.name}</span>
-                    <span>${(fee.calculatedAmount / 100).toFixed(2)}</span>
-                  </div>
-                ))}
+                {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
                 <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
                 </div>
               </div>
+
               <div className="rounded-lg p-4 bg-gray-800 mb-6">
                 <p className="text-gray-300 text-xs leading-relaxed">
                   <span className="text-white font-medium">Cancellation Policy: </span>
@@ -556,12 +429,26 @@ function BookingForm() {
                   <p className="text-yellow-400 text-xs mt-2 font-medium">⚠ Deposit is non-refundable for these dates.</p>
                 )}
               </div>
+
+              <div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  <span className="text-white font-medium">ℹ️ Site Selection: </span>
+                  Site choice is not guaranteed — we will do our best to honor your selection.
+                </p>
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  <span className="text-white font-medium">ℹ️ Pricing: </span>
+                  All prices include taxes and fees — no surprises at checkout.
+                </p>
+              </div>
+
               <div className="mb-6">
                 <h3 className="text-white font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
                 {!squareLoaded && <p className="text-gray-400 text-sm mt-2">Loading payment form...</p>}
               </div>
+
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
+
               <div className="space-y-3">
                 <h3 className="text-white font-medium">Choose Payment Option</h3>
                 <button
@@ -597,28 +484,6 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
-              {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
-  const addon = addons.find(a => a.id === id)
-  if (!addon) return null
-  return (
-    <div key={id} className="flex justify-between">
-      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
-    </div>
-  )
-})}
-              {feeBreakdown.map(fee => (
-                <div key={fee.id} className="flex justify-between">
-                  <p className="text-gray-400">{fee.name}</p>
-                  <p className="text-white font-medium">${(fee.calculatedAmount / 100).toFixed(2)}</p>
-                </div>
-              ))}
-              {discountAmount > 0 && (
-                <div className="flex justify-between">
-                  <p className="text-green-400">Discount</p>
-                  <p className="text-green-400 font-medium">-${(discountAmount / 100).toFixed(2)}</p>
-                </div>
-              )}
               <div className="border-t border-gray-700 pt-3">
                 <div className="flex justify-between">
                   <p className="text-white font-bold">Total</p>
