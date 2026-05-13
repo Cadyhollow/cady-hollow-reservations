@@ -371,13 +371,17 @@ function BookingForm() {
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
+  const isRvSite = site.site_type === 'rv_site'
+
   function validateAndContinue() {
     if (!form.guest_name.trim()) { alert('Please enter your name.'); return }
     if (!form.guest_email.trim() || !form.guest_email.includes('@')) { alert('Please enter a valid email.'); return }
     if (!form.guest_phone.trim()) { alert('Please enter your phone number.'); return }
-    if (!form.camper_type) { alert('Please select your camper type.'); return }
-    if (!form.camper_length || parseInt(form.camper_length) < 1) { alert('Please enter your camper length.'); return }
-    if (!form.camper_amperage) { alert('Please select your amperage.'); return }
+    if (isRvSite) {
+      if (!form.camper_type) { alert('Please select your camper type.'); return }
+      if (!form.camper_length || parseInt(form.camper_length) < 1) { alert('Please enter your camper length.'); return }
+      if (!form.camper_amperage) { alert('Please select your amperage.'); return }
+    }
     setStep(2)
   }
 
@@ -505,57 +509,61 @@ function BookingForm() {
                   <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
 
-                {/* Camper Type Visual Selector */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Camper Type *</label>
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                    {CAMPER_TYPES.map(type => (
-                      <button
-                        key={type.value}
-                        type="button"
-                        onClick={() => setForm({ ...form, camper_type: type.value })}
-                        className="flex flex-col items-center gap-1.5 p-2 rounded-xl border-2 transition-all"
-                        style={{
-                          borderColor: form.camper_type === type.value ? 'var(--accent-color)' : '#4B5563',
-                          backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : '#374151',
-                          color: form.camper_type === type.value ? 'var(--accent-color)' : '#9CA3AF',
-                        }}
-                      >
-                        <div className="w-14 h-8">{type.svg}</div>
-                        <span className="text-xs font-medium text-center leading-tight">{type.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {/* Camper Type Visual Selector — RV sites only */}
+                {isRvSite && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Camper Type *</label>
+                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                        {CAMPER_TYPES.map(type => (
+                          <button
+                            key={type.value}
+                            type="button"
+                            onClick={() => setForm({ ...form, camper_type: type.value })}
+                            className="flex flex-col items-center gap-1.5 p-2 rounded-xl border-2 transition-all"
+                            style={{
+                              borderColor: form.camper_type === type.value ? 'var(--accent-color)' : '#4B5563',
+                              backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : '#374151',
+                              color: form.camper_type === type.value ? 'var(--accent-color)' : '#9CA3AF',
+                            }}
+                          >
+                            <div className="w-14 h-8">{type.svg}</div>
+                            <span className="text-xs font-medium text-center leading-tight">{type.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                {/* Camper Length + Amperage */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Camper Length (ft) *</label>
-                    <input
-                      className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-                      placeholder="e.g. 32"
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={form.camper_length}
-                      onChange={e => setForm({ ...form, camper_length: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Amperage *</label>
-                    <select
-                      className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-                      value={form.camper_amperage}
-                      onChange={e => setForm({ ...form, camper_amperage: e.target.value })}
-                    >
-                      <option value="">Select...</option>
-                      <option value="50amp">50 Amp</option>
-                      <option value="30amp">30 Amp</option>
-                      <option value="20amp">20 Amp</option>
-                    </select>
-                  </div>
-                </div>
+                    {/* Camper Length + Amperage */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Camper Length (ft) *</label>
+                        <input
+                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          placeholder="e.g. 32"
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={form.camper_length}
+                          onChange={e => setForm({ ...form, camper_length: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Amperage *</label>
+                        <select
+                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          value={form.camper_amperage}
+                          onChange={e => setForm({ ...form, camper_amperage: e.target.value })}
+                        >
+                          <option value="">Select...</option>
+                          <option value="50amp">50 Amp</option>
+                          <option value="30amp">30 Amp</option>
+                          <option value="20amp">20 Amp</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'var(--accent-color)' }}>
                   Continue to Add-Ons →
@@ -566,7 +574,7 @@ function BookingForm() {
                 <p className="text-white font-medium">{form.guest_name}</p>
                 <p>{form.guest_email}</p>
                 <p>{form.guest_phone}</p>
-                <p className="text-gray-400">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>
+                {isRvSite && form.camper_type && <p className="text-gray-400">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
                 <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: 'var(--accent-color)' }}>Edit</button>
               </div>
             )}
@@ -754,7 +762,7 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
-              {form.camper_type && (
+              {isRvSite && form.camper_type && (
                 <div className="border-t border-gray-700 pt-3">
                   <p className="text-gray-400">Camper</p>
                   <p className="text-white font-medium">{camperTypeLabel(form.camper_type)}</p>
