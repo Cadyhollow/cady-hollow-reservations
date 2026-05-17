@@ -219,8 +219,8 @@ export default function FolioPage() {
   const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0)
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
-  const folioBalance = itemsTotal - paymentsTotal
-  const totalDue = reservationBalance + folioBalance
+  const folioBalance = itemsTotal
+  const totalDue = Math.max(0, reservationBalance + folioBalance - paymentsTotal)
   const filteredProducts = products.filter(p => p.category === activeCategory)
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading folio...</div>
