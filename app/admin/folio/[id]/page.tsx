@@ -27,6 +27,7 @@ type Payment = {
   id: string
   method: string
   amount: number
+  surcharge_amount: number
   status: string
   note: string
   paid_at: string
@@ -218,6 +219,7 @@ export default function FolioPage() {
       folio_id: folio.id,
       method: paymentMethod,
       amount: totalAmount,
+      surcharge_amount: surchargeAmount,
       status: 'completed',
       note: paymentNote + (surchargeAmount > 0 ? ` (incl. ${cardSurcharge}% card fee: $${(surchargeAmount/100).toFixed(2)})` : ''),
     })
@@ -232,7 +234,7 @@ export default function FolioPage() {
   // Totals — single source of truth
   const activeItems = lineItems.filter(i => !i.voided)
   const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
-  const paymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0)
+  const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
   const grandTotal = reservationBalance + itemsTotal
   const totalDue = Math.max(0, grandTotal - paymentsTotal)
