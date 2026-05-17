@@ -19,7 +19,8 @@ type Product = {
   track_inventory: boolean
   stock_quantity: number | null
   active: boolean
-  display_order: number
+  display_order: number,
+  priceDisplay?: string
 }
 
 const blank = (): Omit<Product, 'id'> => ({
@@ -32,7 +33,6 @@ const blank = (): Omit<Product, 'id'> => ({
   stock_quantity: null,
   active: true,
   display_order: 0
-  priceDisplay?: string
 })
 
 export default function ProductsPage() {
