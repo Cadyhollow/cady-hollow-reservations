@@ -243,8 +243,16 @@ export default function MinStayPage() {
             </div>
           </div>
           <div className="flex items-center gap-3 mt-4">
-            <input type="checkbox" id="is_active_minstay" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
-            <label htmlFor="is_active_minstay" className="text-sm font-medium text-gray-700">Active</label>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, is_active: !form.is_active })}
+              className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+              style={{ backgroundColor: form.is_active ? '#15803d' : '#d1d5db' }}
+            >
+              <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.is_active ? 'translateX(20px)' : 'translateX(0px)' }} />
+            </button>
+            <span className="text-sm font-medium text-gray-700">Active</span>
           </div>
           <div className="flex gap-3 mt-4">
             <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">{saving ? 'Saving...' : editingRule ? 'Save Changes' : 'Add Rule'}</button>
