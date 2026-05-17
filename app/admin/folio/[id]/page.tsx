@@ -419,7 +419,7 @@ export default function FolioPage() {
         {/* Right: Product picker */}
         <div style={{ width: 'min(380px, 100%)', background: '#fff', borderLeft: '1px solid #e5e7eb', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid #e5e7eb', padding: '0 0.75rem' }}>
-            {CATEGORIES.map(cat => (
+            {categories.map(cat => (
               <button
                 key={cat}
                 onClick={() => setActiveCategory(cat)}
