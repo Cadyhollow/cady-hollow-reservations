@@ -155,7 +155,7 @@ export default function WalkUpFolioPage() {
 
   async function collectPayment() {
     if (!folio) return
-    const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
+    const baseAmount = paymentMethod === 'cash' && cashTendered !== '' ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100)) : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
     const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0
       ? Math.round(baseAmount * (cardSurcharge / 100))
