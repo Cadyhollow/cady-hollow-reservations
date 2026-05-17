@@ -18,6 +18,7 @@ type Product = {
   stock_quantity: number | null
   active: boolean
   display_order: number
+  variable_price: boolean
   priceDisplay?: string
 }
 
@@ -37,6 +38,7 @@ const blank = (): Omit<Product, 'id'> => ({
   stock_quantity: null,
   active: true,
   display_order: 0,
+  variable_price: false,
 })
 
 export default function ProductsPage() {
@@ -215,6 +217,12 @@ export default function ProductsPage() {
                 <input style={inp} type='number' min='0' value={form.stock_quantity ?? ''} onChange={e => setForm({ ...form, stock_quantity: parseInt(e.target.value) || 0 })} placeholder='0' />
               </div>
             )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0' }}>
+              <button type='button' onClick={() => setForm({ ...form, variable_price: !form.variable_price })} style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: form.variable_price ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
+                <span style={{ position: 'absolute', top: 3, left: form.variable_price ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+              </button>
+              <label style={{ fontSize: 14, color: '#374151' }}>Variable price (staff enters amount at time of sale)</label>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 20px' }}>
               <button type='button' onClick={() => setForm({ ...form, active: !form.active })} style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: form.active ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
                 <span style={{ position: 'absolute', top: 3, left: form.active ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />

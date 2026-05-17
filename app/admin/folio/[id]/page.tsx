@@ -40,6 +40,7 @@ type Product = {
   price: number
   tax_class: string
   active: boolean
+  variable_price: boolean
 }
 
 type Reservation = {
@@ -156,16 +157,17 @@ export default function FolioPage() {
     }
   }
 
-  async function addProduct(product: Product) {
+  async function addProduct(product: Product, overridePrice?: number) {
     if (!folio) return
-    const taxAmount = product.tax_class === 'standard' ? Math.round(product.price * 0.06) : 0
-    const lineTotal = product.price + taxAmount
+    const price = overridePrice ?? product.price
+    const taxAmount = product.tax_class === 'standard' ? Math.round(price * 0.06) : 0
+    const lineTotal = price + taxAmount
     await supabase.from('folio_line_items').insert({
       folio_id: folio.id,
       product_id: product.id,
       description: product.name,
       quantity: 1,
-      unit_price: product.price,
+      unit_price: price,
       tax_amount: taxAmount,
       line_total: lineTotal,
       category: product.category,
@@ -432,15 +434,7 @@ export default function FolioPage() {
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignContent: 'start' }}>
             {filteredProducts.map(product => (
-              <button
-                key={product.id}
-                onClick={() => addProduct(product)}
-                style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '14px 10px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}
-              >
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
-                <div style={{ fontSize: 15, color: '#15803d', fontWeight: 700 }}>${(product.price/100).toFixed(2)}</div>
-                {product.tax_class === 'standard' && <div style={{ fontSize: 10, color: '#9ca3af' }}>+ tax</div>}
-              </button>
+              <VariableProductTile key={product.id} product={product} onAdd={addProduct} />
             ))}
             {filteredProducts.length === 0 && (
               <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#9ca3af', fontSize: 13, padding: '2rem 0' }}>
@@ -560,6 +554,46 @@ export default function FolioPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any, price?: number) => void }) {
+  const [customPrice, setCustomPrice] = useState('')
+  if (!product.variable_price) {
+    return (
+      <button
+        onClick={() => onAdd(product)}
+        style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '14px 10px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}
+      >
+        <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
+        <div style={{ fontSize: 15, color: '#15803d', fontWeight: 700 }}>${(product.price/100).toFixed(2)}</div>
+        {product.tax_class === 'standard' && <div style={{ fontSize: 10, color: '#9ca3af' }}>+ tax</div>}
+      </button>
+    )
+  }
+  return (
+    <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
+      <div style={{ position: 'relative' }}>
+        <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
+        <input
+          type='number'
+          min='0'
+          step='0.01'
+          placeholder='0.00'
+          value={customPrice}
+          onChange={e => setCustomPrice(e.target.value)}
+          style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 6px 6px 20px', fontSize: 13, boxSizing: 'border-box' }}
+        />
+      </div>
+      <button
+        onClick={() => { if (customPrice) { onAdd(product, Math.round(parseFloat(customPrice) * 100)); setCustomPrice('') } }}
+        disabled={!customPrice || parseFloat(customPrice) <= 0}
+        style={{ background: customPrice && parseFloat(customPrice) > 0 ? '#15803d' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 6, padding: '6px', fontSize: 12, fontWeight: 600, cursor: customPrice ? 'pointer' : 'default' }}
+      >
+        Add
+      </button>
     </div>
   )
 }
