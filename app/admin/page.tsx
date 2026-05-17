@@ -181,6 +181,7 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
           { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
+          { label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
           { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
           { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
