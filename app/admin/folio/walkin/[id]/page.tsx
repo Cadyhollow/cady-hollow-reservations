@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
+const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 
 type LineItem = {
   id: string
@@ -63,6 +63,7 @@ export default function WalkUpFolioPage() {
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('Camping Supplies')
+  const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
   const [showPayment, setShowPayment] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('cash')
@@ -79,14 +80,16 @@ export default function WalkUpFolioPage() {
 
   async function init() {
     setLoading(true)
-    const [{ data: prods }, { data: settings }, { data: folioData }] = await Promise.all([
+    const [{ data: prods }, { data: settings }, { data: folioData }, { data: cats }] = await Promise.all([
       supabase.from('products').select('*').eq('active', true).order('display_order'),
       supabase.from('settings').select('card_surcharge_percent').single(),
       supabase.from('folios').select('*').eq('id', folioId).single(),
+      supabase.from('product_categories').select('name').order('display_order'),
     ])
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (folioData) setFolio(folioData)
+    if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
     await loadFolioData(folioId)
     setLoading(false)
   }
@@ -272,7 +275,7 @@ export default function WalkUpFolioPage() {
 
         <div style={{ width: 'min(380px, 100%)', background: '#fff', borderLeft: '1px solid #e5e7eb', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid #e5e7eb', padding: '0 0.75rem' }}>
-            {CATEGORIES.map(cat => (
+            {categories.map(cat => (
               <button key={cat} onClick={() => setActiveCategory(cat)} style={{ padding: '10px 10px', fontSize: 12, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', whiteSpace: 'nowrap', borderBottom: activeCategory === cat ? '2px solid #15803d' : '2px solid transparent', color: activeCategory === cat ? '#15803d' : '#6b7280' }}>
                 {cat}
               </button>

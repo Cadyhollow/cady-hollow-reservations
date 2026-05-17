@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
+const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 
 type LineItem = {
   id: string
@@ -80,6 +80,7 @@ export default function FolioPage() {
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('Camping Supplies')
+  const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
   const [showPayment, setShowPayment] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('cash')
@@ -97,10 +98,12 @@ export default function FolioPage() {
 
   async function init() {
     setLoading(true)
-    const [{ data: prods }, { data: settings }] = await Promise.all([
+    const [{ data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('products').select('*').eq('active', true).order('display_order'),
       supabase.from('settings').select('card_surcharge_percent').single(),
+      supabase.from('product_categories').select('name').order('display_order'),
     ])
+    if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
 
