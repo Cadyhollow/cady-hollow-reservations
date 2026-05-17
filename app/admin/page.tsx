@@ -239,9 +239,9 @@ export default function AdminDashboard() {
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <p className={`font-semibold text-gray-900 ${guest.checkedIn ? 'line-through text-gray-400' : ''}`}>
+                        <a href={`/admin/folio/${guest.id}`} className={`font-semibold text-gray-900 hover:text-green-700 hover:underline underline-offset-2 ${guest.checkedIn ? 'line-through text-gray-400' : ''}`}>
                           {guest.guest_name}
-                        </p>
+                        </a>
                         <span className="text-sm font-medium text-gray-700 shrink-0">
                           {siteTypeLabel(guest.site_type)} {guest.site_number}
                         </span>
