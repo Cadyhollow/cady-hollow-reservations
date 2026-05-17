@@ -63,7 +63,7 @@ export default function MinStayPage() {
     setForm({
       name: rule.name,
       target: isMultiSite ? 'sites' : isSingleSite ? 'site' : 'site_type',
-      site_id: isSingleSite ? (rule.site_id || '') : '',
+      site_id: isSingleSite ? rule.site_id : '',
       site_type: rule.site_type || 'cabin',
       selected_site_ids: isMultiSite ? rule.site_id!.split(',') : [],
       start_date: rule.start_date,
@@ -194,23 +194,37 @@ export default function MinStayPage() {
               </div>
             )}
             {form.target === 'sites' && (
-              <div className="md:col-span-2 lg:col-span-2">
+              <div className="md:col-span-2 lg:col-span-3">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Select Sites * <span className="text-gray-400 font-normal">({form.selected_site_ids.length} selected)</span>
                 </label>
-                <div className="border border-gray-200 rounded-lg p-3 max-h-48 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {sites.map(site => (
-                    <label key={site.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm transition-colors ${form.selected_site_ids.includes(site.id) ? 'bg-green-50 border border-green-200' : 'hover:bg-gray-50'}`}>
+                <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto">
+                  {sites.map((site, i) => (
+                    <label key={site.id} className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${i !== 0 ? 'border-t border-gray-100' : ''} ${form.selected_site_ids.includes(site.id) ? 'bg-green-50' : 'hover:bg-gray-50'}`}>
                       <input
                         type="checkbox"
                         checked={form.selected_site_ids.includes(site.id)}
                         onChange={() => toggleSiteSelection(site.id)}
                         className="w-4 h-4 accent-green-700 shrink-0"
                       />
-                      <span className="font-medium text-gray-700">{siteTypeBadge(site.site_type)} {site.site_number}</span>
+                      <span className="text-sm text-gray-700">{siteTypeBadge(site.site_type)} Site {site.site_number}</span>
                     </label>
                   ))}
                 </div>
+                {form.selected_site_ids.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {form.selected_site_ids.map(id => {
+                      const site = sites.find(s => s.id === id)
+                      if (!site) return null
+                      return (
+                        <span key={id} className="inline-flex items-center gap-1 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-1 rounded-full">
+                          {siteTypeBadge(site.site_type)} {site.site_number}
+                          <button type="button" onClick={() => toggleSiteSelection(id)} className="hover:text-green-600 ml-0.5">✕</button>
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
             <div>
