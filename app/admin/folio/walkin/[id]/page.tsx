@@ -366,7 +366,7 @@ export default function WalkUpFolioPage() {
             <label style={ml}>Note (optional)</label>
             <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. check #1042' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
             <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#15803d', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
             </button>
           </div>
         </div>

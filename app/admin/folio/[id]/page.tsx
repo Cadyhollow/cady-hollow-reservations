@@ -550,6 +550,8 @@ export default function FolioPage() {
             >
               {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0
                 ? `Charge card · $${(totalWithSurcharge/100).toFixed(2)}`
+                : paymentMethod === 'cash' && cashTendered !== ''
+                ? `Record cash · $${Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2)}`
                 : `Record ${paymentMethod} · $${paymentAmount}`}
             </button>
           </div>
