@@ -70,6 +70,7 @@ export default function WalkUpFolioPage() {
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
   const [showCustomItem, setShowCustomItem] = useState(false)
+  const [cashTendered, setCashTendered] = useState('')
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
@@ -174,6 +175,7 @@ export default function WalkUpFolioPage() {
     setPaymentAmount('')
     setPaymentNote('')
     setPaymentMethod('cash')
+    setCashTendered('')
     await loadFolioData(folio.id)
   }
 
@@ -325,11 +327,30 @@ export default function WalkUpFolioPage() {
                 </button>
               ))}
             </div>
-            <label style={ml}>Amount</label>
+            <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
-              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56 }} type='number' step='0.01' value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} />
+              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: paymentMethod === 'cash' ? '#f9fafb' : '#fff', color: paymentMethod === 'cash' ? '#6b7280' : '#111827' }} type='number' step='0.01' value={paymentAmount} readOnly={paymentMethod === 'cash'} onChange={e => setPaymentAmount(e.target.value)} />
             </div>
+            {paymentMethod === 'cash' && (
+              <>
+                <label style={ml}>Cash tendered</label>
+                <div style={{ position: 'relative', marginBottom: 8 }}>
+                  <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
+                  <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56 }} type='number' step='0.01' value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder='0.00' autoFocus />
+                </div>
+                {parseFloat(cashTendered) > 0 && (
+                  <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 600, fontSize: 14, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
+                      {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
+                    </span>
+                    <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
+                      ${Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
             {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
