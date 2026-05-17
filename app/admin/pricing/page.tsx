@@ -251,6 +251,7 @@ export default function PricingPage() {
             <input type="checkbox" id="is_active_pricing" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
             <label htmlFor="is_active_pricing" className="text-sm font-medium text-gray-700">Active</label>
           </div>
+          <div className="flex gap-3 mt-4">
             <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">{saving ? 'Saving...' : editingRule ? 'Save Changes' : 'Add Rule'}</button>
             <button onClick={() => setShowForm(false)} className="bg-gray-100 text-gray-700 px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
           </div>
