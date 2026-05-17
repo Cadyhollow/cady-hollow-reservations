@@ -31,7 +31,8 @@ const blank = (): Omit<Product, 'id'> => ({
   track_inventory: false,
   stock_quantity: null,
   active: true,
-  display_order: 0,
+  display_order: 0
+  priceDisplay?: string
 })
 
 export default function ProductsPage() {
@@ -153,9 +154,10 @@ export default function ProductsPage() {
                     style={{ ...inp, paddingLeft: 24 }}
                     type="number"
                     min="0"
-                    step="0.01"
-                    value={(form.price / 100).toFixed(2)}
-                    onChange={e => setForm({ ...form, price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                    step="1"
+                    value={form.priceDisplay ?? (form.price / 100).toFixed(2)}
+onChange={e => setForm({ ...form, priceDisplay: e.target.value, price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+onBlur={() => setForm(f => ({ ...f, priceDisplay: undefined }))}
                   />
                 </div>
               </div>
