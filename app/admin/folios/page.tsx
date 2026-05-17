@@ -38,16 +38,12 @@ export default function FoliosPage() {
 
   async function fetchFolios() {
     setLoading(true)
-    const query = supabase
+    let query = supabase
       .from('folios')
-      .select(\`
-        id, guest_name, guest_email, folio_type, status, opened_at, reservation_id,
-        folio_line_items(line_total),
-        folio_payments(amount, surcharge_amount, status)
-      \`)
+      .select('id, guest_name, guest_email, folio_type, status, opened_at, reservation_id, folio_line_items(line_total), folio_payments(amount, surcharge_amount, status)')
       .order('opened_at', { ascending: false })
 
-    if (filter === 'open') query.eq('status', 'open')
+    if (filter === 'open') query = query.eq('status', 'open')
 
     const { data } = await query
 
@@ -82,13 +78,13 @@ export default function FoliosPage() {
 
   function getFolioLabel(f: FolioSummary) {
     if (f.folio_type === 'walkin') return 'Walk-up'
-    if (f.reservation) return \`Site \${f.reservation.site_number}\`
+    if (f.reservation) return 'Site ' + f.reservation.site_number
     return 'Reservation'
   }
 
   function getFolioHref(f: FolioSummary) {
-    if (f.reservation_id) return \`/admin/folio/\${f.reservation_id}\`
-    return \`/admin/folio/walkin/\${f.id}\`
+    if (f.reservation_id) return '/admin/folio/' + f.reservation_id
+    return '/admin/folio/walkin/' + f.id
   }
 
   const openCount = folios.filter(f => f.status === 'open').length
@@ -109,7 +105,6 @@ export default function FoliosPage() {
         </button>
       </div>
 
-      {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '1rem 1.25rem' }}>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Open folios</div>
@@ -123,7 +118,6 @@ export default function FoliosPage() {
         </div>
       </div>
 
-      {/* Filter tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {(['open', 'all'] as const).map(f => (
           <button
@@ -136,7 +130,6 @@ export default function FoliosPage() {
         ))}
       </div>
 
-      {/* Folio list */}
       {loading ? (
         <p style={{ color: '#6b7280' }}>Loading folios...</p>
       ) : folios.length === 0 ? (
@@ -169,13 +162,13 @@ export default function FoliosPage() {
                     )}
                   </div>
                   <div style={{ fontSize: 12, color: '#6b7280' }}>
-                    {f.reservation ? \`\${f.reservation.arrival_date} → \${f.reservation.departure_date}\` : new Date(f.opened_at).toLocaleDateString()}
-                    {f.items_total > 0 && \` · \${f.items_total / 100 > 0 ? \`$\${(f.items_total/100).toFixed(2)} in charges\` : ''}\`}
+                    {f.reservation ? f.reservation.arrival_date + ' -> ' + f.reservation.departure_date : new Date(f.opened_at).toLocaleDateString()}
+                    {f.items_total > 0 ? ' · $' + (f.items_total/100).toFixed(2) + ' in charges' : ''}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontSize: 17, fontWeight: 800, color: isPaid ? '#15803d' : '#dc2626' }}>
-                    {isPaid ? '✓ Paid' : \`$\${(balance/100).toFixed(2)}\`}
+                    {isPaid ? '✓ Paid' : '$' + (balance/100).toFixed(2)}
                   </div>
                   {!isPaid && <div style={{ fontSize: 11, color: '#9ca3af' }}>due</div>}
                 </div>
