@@ -198,17 +198,18 @@ export default function MinStayPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Select Sites * <span className="text-gray-400 font-normal">({form.selected_site_ids.length} selected)</span>
                 </label>
-                <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto">
-                  {sites.map((site, i) => (
-                    <label key={site.id} className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${i !== 0 ? 'border-t border-gray-100' : ''} ${form.selected_site_ids.includes(site.id) ? 'bg-green-50' : 'hover:bg-gray-50'}`}>
-                      <input
-                        type="checkbox"
-                        checked={form.selected_site_ids.includes(site.id)}
-                        onChange={() => toggleSiteSelection(site.id)}
-                        className="w-4 h-4 accent-green-700 shrink-0"
-                      />
-                      <span className="text-sm text-gray-700">{siteTypeBadge(site.site_type)} Site {site.site_number}</span>
-                    </label>
+                <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto divide-y divide-gray-100">
+                  {sites.map((site) => (
+                    <div
+                      key={site.id}
+                      onClick={() => toggleSiteSelection(site.id)}
+                      className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${form.selected_site_ids.includes(site.id) ? 'bg-green-50' : 'hover:bg-gray-50'}`}
+                    >
+                      <div className={`w-4 h-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${form.selected_site_ids.includes(site.id) ? 'bg-green-700 border-green-700' : 'border-gray-300 bg-white'}`}>
+                        {form.selected_site_ids.includes(site.id) && <span className="text-white text-xs font-bold leading-none">✓</span>}
+                      </div>
+                      <span className="text-sm text-gray-700 whitespace-nowrap">{siteTypeBadge(site.site_type)} Site {site.site_number}</span>
+                    </div>
                   ))}
                 </div>
                 {form.selected_site_ids.length > 0 && (
