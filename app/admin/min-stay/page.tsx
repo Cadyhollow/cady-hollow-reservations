@@ -26,6 +26,7 @@ const emptyRule = {
   target: 'site_type',
   site_id: '',
   site_type: 'cabin',
+  selected_site_ids: [] as string[],
   start_date: '',
   end_date: '',
   min_nights: 2,
@@ -57,11 +58,14 @@ export default function MinStayPage() {
 
   function openEditForm(rule: MinStayRule) {
     setEditingRule(rule)
+    const isMultiSite = rule.site_id && rule.site_id.includes(',')
+    const isSingleSite = rule.site_id && !rule.site_id.includes(',')
     setForm({
       name: rule.name,
-      target: rule.site_id ? 'site' : 'site_type',
-      site_id: rule.site_id || '',
+      target: isMultiSite ? 'sites' : isSingleSite ? 'site' : 'site_type',
+      site_id: isSingleSite ? rule.site_id : '',
       site_type: rule.site_type || 'cabin',
+      selected_site_ids: isMultiSite ? rule.site_id!.split(',') : [],
       start_date: rule.start_date,
       end_date: rule.end_date,
       min_nights: rule.min_nights,
@@ -70,14 +74,27 @@ export default function MinStayPage() {
     setShowForm(true)
   }
 
+  function toggleSiteSelection(siteId: string) {
+    setForm(prev => ({
+      ...prev,
+      selected_site_ids: prev.selected_site_ids.includes(siteId)
+        ? prev.selected_site_ids.filter(id => id !== siteId)
+        : [...prev.selected_site_ids, siteId],
+    }))
+  }
+
   async function handleSave() {
     if (!form.name || !form.start_date || !form.end_date || !form.min_nights) {
       toast.error('Please fill in all required fields.'); return
     }
+    if (form.target === 'sites' && form.selected_site_ids.length === 0) {
+      toast.error('Please select at least one site.'); return
+    }
     setSaving(true)
     const payload = {
       name: form.name,
-      site_id: form.target === 'site' ? form.site_id : null,
+      site_id: form.target === 'site' ? form.site_id :
+               form.target === 'sites' ? form.selected_site_ids.join(',') : null,
       site_type: form.target === 'site_type' ? form.site_type : null,
       start_date: form.start_date,
       end_date: form.end_date,
@@ -110,11 +127,18 @@ export default function MinStayPage() {
   const siteTypeLabel = (type: string) => ({ rv_site: 'All RV Sites', cabin: 'All Cabins', tent: 'All Tent Sites', yurt: 'All Yurts', tiny_home: 'All Tiny Homes', lodge: 'All Lodge Rooms', glamping: 'All Glamping', treehouse: 'All Treehouses' }[type] || type)
   const targetLabel = (rule: MinStayRule) => {
     if (rule.site_id) {
-      const site = sites.find(s => s.id === rule.site_id)
-      return site ? `Site ${site.site_number}` : 'Specific Site'
+      const ids = rule.site_id.split(',')
+      if (ids.length === 1) {
+        const site = sites.find(s => s.id === ids[0])
+        return site ? `Site ${site.site_number}` : 'Specific Site'
+      }
+      const nums = ids.map(id => sites.find(s => s.id === id)?.site_number).filter(Boolean)
+      return `Sites ${nums.join(', ')}`
     }
     return siteTypeLabel(rule.site_type || '')
   }
+
+  const siteTypeBadge = (type: string) => ({ rv_site: 'RV', cabin: 'Cabin', tent: 'Tent' }[type] || type)
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
@@ -137,12 +161,13 @@ export default function MinStayPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Apply To *</label>
-              <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.target} onChange={e => setForm({ ...form, target: e.target.value })}>
+              <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.target} onChange={e => setForm({ ...form, target: e.target.value, selected_site_ids: [] })}>
                 <option value="site_type">All sites of a type</option>
                 <option value="site">One specific site</option>
+                <option value="sites">Multiple specific sites</option>
               </select>
             </div>
-            {form.target === 'site_type' ? (
+            {form.target === 'site_type' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Site Type *</label>
                 <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_type} onChange={e => setForm({ ...form, site_type: e.target.value })}>
@@ -156,15 +181,36 @@ export default function MinStayPage() {
                   <option value="tent">All Tent Sites</option>
                 </select>
               </div>
-            ) : (
+            )}
+            {form.target === 'site' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Specific Site *</label>
                 <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
                   <option value="">Select a site...</option>
                   {sites.map(site => (
-                    <option key={site.id} value={site.id}>{site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent'} {site.site_number}</option>
+                    <option key={site.id} value={site.id}>{siteTypeBadge(site.site_type)} {site.site_number}</option>
                   ))}
                 </select>
+              </div>
+            )}
+            {form.target === 'sites' && (
+              <div className="md:col-span-2 lg:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Sites * <span className="text-gray-400 font-normal">({form.selected_site_ids.length} selected)</span>
+                </label>
+                <div className="border border-gray-200 rounded-lg p-3 max-h-48 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {sites.map(site => (
+                    <label key={site.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm transition-colors ${form.selected_site_ids.includes(site.id) ? 'bg-green-50 border border-green-200' : 'hover:bg-gray-50'}`}>
+                      <input
+                        type="checkbox"
+                        checked={form.selected_site_ids.includes(site.id)}
+                        onChange={() => toggleSiteSelection(site.id)}
+                        className="w-4 h-4 accent-green-700 shrink-0"
+                      />
+                      <span className="font-medium text-gray-700">{siteTypeBadge(site.site_type)} {site.site_number}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
             <div>
