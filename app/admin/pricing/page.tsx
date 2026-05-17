@@ -66,7 +66,7 @@ export default function PricingPage() {
     setForm({
       name: rule.name,
       target: isMultiSite ? 'sites' : isSingleSite ? 'site' : 'site_type',
-      site_id: isSingleSite ? rule.site_id : '',
+      site_id: isSingleSite ? (rule.site_id || '') : '',
       site_type: rule.site_type || 'rv_site',
       selected_site_ids: isMultiSite ? rule.site_id!.split(',') : [],
       start_date: rule.start_date,

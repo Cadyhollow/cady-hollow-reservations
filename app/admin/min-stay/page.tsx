@@ -63,7 +63,7 @@ export default function MinStayPage() {
     setForm({
       name: rule.name,
       target: isMultiSite ? 'sites' : isSingleSite ? 'site' : 'site_type',
-      site_id: isSingleSite ? rule.site_id : '',
+      site_id: isSingleSite ? (rule.site_id || '') : '',
       site_type: rule.site_type || 'cabin',
       selected_site_ids: isMultiSite ? rule.site_id!.split(',') : [],
       start_date: rule.start_date,
