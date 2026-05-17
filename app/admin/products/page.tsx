@@ -85,6 +85,7 @@ export default function ProductsPage() {
       stock_quantity: p.stock_quantity,
       active: p.active,
       display_order: p.display_order,
+      variable_price: p.variable_price,
     })
     setEditingId(p.id)
     setShowForm(true)
