@@ -58,14 +58,14 @@ export default function MinStayPage() {
 
   function openEditForm(rule: MinStayRule) {
     setEditingRule(rule)
-    const isMultiSite = rule.site_id && rule.site_id.includes(',')
-    const isSingleSite = rule.site_id && !rule.site_id.includes(',')
+    const isMultiSite = !!(rule as any).site_ids && (rule as any).site_ids !== ''
+    const isSingleSite = rule.site_id && !isMultiSite
     setForm({
       name: rule.name,
       target: isMultiSite ? 'sites' : isSingleSite ? 'site' : 'site_type',
       site_id: isSingleSite ? (rule.site_id || '') : '',
       site_type: rule.site_type || 'cabin',
-      selected_site_ids: isMultiSite ? rule.site_id!.split(',') : [],
+      selected_site_ids: isMultiSite ? (rule as any).site_ids.split(',') : [],
       start_date: rule.start_date,
       end_date: rule.end_date,
       min_nights: rule.min_nights,
@@ -93,8 +93,8 @@ export default function MinStayPage() {
     setSaving(true)
     const payload = {
       name: form.name,
-      site_id: form.target === 'site' ? form.site_id :
-               form.target === 'sites' ? form.selected_site_ids.join(',') : null,
+      site_id: form.target === 'site' ? form.site_id : null,
+      site_ids: form.target === 'sites' ? form.selected_site_ids.join(',') : '',
       site_type: form.target === 'site_type' ? form.site_type : null,
       start_date: form.start_date,
       end_date: form.end_date,
@@ -126,14 +126,15 @@ export default function MinStayPage() {
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'All RV Sites', cabin: 'All Cabins', tent: 'All Tent Sites', yurt: 'All Yurts', tiny_home: 'All Tiny Homes', lodge: 'All Lodge Rooms', glamping: 'All Glamping', treehouse: 'All Treehouses' }[type] || type)
   const targetLabel = (rule: MinStayRule) => {
-    if (rule.site_id) {
-      const ids = rule.site_id.split(',')
-      if (ids.length === 1) {
-        const site = sites.find(s => s.id === ids[0])
-        return site ? `Site ${site.site_number}` : 'Specific Site'
-      }
-      const nums = ids.map(id => sites.find(s => s.id === id)?.site_number).filter(Boolean)
+    const multiIds = (rule as any).site_ids
+    if (multiIds && multiIds !== '') {
+      const ids = multiIds.split(',')
+      const nums = ids.map((id: string) => sites.find(s => s.id === id)?.site_number).filter(Boolean)
       return `Sites ${nums.join(', ')}`
+    }
+    if (rule.site_id) {
+      const site = sites.find(s => s.id === rule.site_id)
+      return site ? `Site ${site.site_number}` : 'Specific Site'
     }
     return siteTypeLabel(rule.site_type || '')
   }
@@ -240,10 +241,10 @@ export default function MinStayPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">End Date *</label>
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="date" value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} />
             </div>
-            <div className="flex items-center gap-3 pt-6">
-              <input type="checkbox" id="is_active_minstay" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
-              <label htmlFor="is_active_minstay" className="text-sm font-medium text-gray-700">Active</label>
-            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-4">
+            <input type="checkbox" id="is_active_minstay" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
+            <label htmlFor="is_active_minstay" className="text-sm font-medium text-gray-700">Active</label>
           </div>
           <div className="flex gap-3 mt-4">
             <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">{saving ? 'Saving...' : editingRule ? 'Save Changes' : 'Add Rule'}</button>

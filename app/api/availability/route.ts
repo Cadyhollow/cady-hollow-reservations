@@ -118,7 +118,8 @@ export async function GET(request: NextRequest) {
 
   const sitesWithPricing = availableSites.map(site => {
     const applicableRules = pricingRules?.filter(rule => {
-      if (rule.site_id) return rule.site_id.split(',').includes(site.id)
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+      if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
       return false
     }) || []
@@ -127,7 +128,8 @@ export async function GET(request: NextRequest) {
     const nightlyRate = bestRule ? bestRule.nightly_rate : site.base_rate
 
     const applicableMinStay = minStayRules?.filter(rule => {
-      if (rule.site_id) return rule.site_id.split(',').includes(site.id)
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+      if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
       return false
     }) || []
