@@ -56,6 +56,7 @@ type Product = {
 type Folio = {
   id: string
   guest_name: string
+  guest_email: string
   status: string
 }
 
