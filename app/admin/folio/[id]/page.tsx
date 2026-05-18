@@ -262,7 +262,7 @@ export default function FolioPage() {
 
   if (isNew && !folio) {
     return (
-      <div style={{ padding: '2rem', maxWidth: 480, margin: '0 auto', fontFamily: 'sans-serif' }}>
+      <div style={{ padding: '2rem', maxWidth: 480, margin: '0 auto', fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
         <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, marginBottom: 24 }}>← Back</button>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>New Walk-Up Sale</h1>
         <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 24 }}>Start a tab for a visitor, family member, or anyone not attached to a reservation.</p>
@@ -273,7 +273,7 @@ export default function FolioPage() {
           value={walkUpName}
           onChange={e => setWalkUpName(e.target.value)}
         />
-        <button onClick={createWalkUpFolio} style={{ width: '100%', background: '#15803d', color: '#fff', border: 'none', borderRadius: 8, padding: '12px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
+        <button onClick={createWalkUpFolio} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '12px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
           Open Tab
         </button>
       </div>
