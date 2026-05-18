@@ -21,6 +21,7 @@ const baseNavigation = [
   { name: 'Products & Services', href: '/admin/products', plan: 'trailhead' },
   { name: 'Guest Folios', href: '/admin/folios', plan: 'trailhead' },
   { name: 'Guest Directory', href: '/admin/guests', plan: 'trailhead' },
+  { name: 'Electric Billing', href: '/admin/electric-billing', plan: 'trailhead' },
   { name: 'Discounts', href: '/admin/discounts', plan: 'trailhead' },
   { name: 'Blocked Dates', href: '/admin/blocked-dates', plan: 'trailhead' },
   { name: 'Reports', href: '/admin/reports', plan: 'ridgeline' },
