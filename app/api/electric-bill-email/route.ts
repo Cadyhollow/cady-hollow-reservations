@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
   </div>
 
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
-    <p style="color:#D1D5DB;font-size:15px;margin:0;line-height:1.6;">${emailMessage}</p>
+    <p style="color:#D1D5DB;font-size:15px;margin:0;line-height:1.6;">${emailMessage.replace(/\n/g, "<br>")}</p>
   </div>
 
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
