@@ -14,11 +14,11 @@ export async function POST(request: NextRequest) {
     const { folioId, receiptType } = body
     // receiptType: 'reservation' | 'walkup' | 'account'
 
-    const { data: settings } = await supabase.from('settings').select('park_name, park_location, email_from, email_reply_to').single()
+    const { data: settings } = await supabase.from('settings').select('park_name, park_location, park_email').single()
     const campgroundName = settings?.park_name || 'Our Campground'
     const campgroundLocation = settings?.park_location || ''
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
-    const replyToEmail = settings?.email_reply_to || process.env.RESEND_REPLY_TO || fromEmail
+    const replyToEmail = settings?.park_email || process.env.RESEND_REPLY_TO || fromEmail
 
     // Load folio
     const { data: folio } = await supabase.from('folios').select('*').eq('id', folioId).single()
