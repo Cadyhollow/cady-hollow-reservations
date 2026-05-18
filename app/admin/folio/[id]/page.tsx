@@ -406,7 +406,7 @@ export default function FolioPage() {
           {totalDue > 0 && (
             <button
               onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }}
-              style={{ width: '100%', background: '#15803d', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}
+              style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}
             >
               Collect Payment · ${(totalDue/100).toFixed(2)}
             </button>
@@ -477,7 +477,7 @@ export default function FolioPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={() => setShowCustomItem(false)} style={{ flex: 1, background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, padding: '8px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
-                  <button onClick={addCustomItem} style={{ flex: 1, background: '#15803d', color: '#fff', border: 'none', borderRadius: 7, padding: '8px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Add</button>
+                  <button onClick={addCustomItem} style={{ flex: 1, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '8px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Add</button>
                 </div>
               </div>
             )}
@@ -497,7 +497,7 @@ export default function FolioPage() {
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
               {['cash', 'card', 'check'].map(m => (
-                <button key={m} onClick={() => setPaymentMethod(m)} style={{ padding: '12px', border: `2px solid ${paymentMethod === m ? '#15803d' : '#e5e7eb'}`, borderRadius: 8, background: paymentMethod === m ? '#f0fdf4' : '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', textTransform: 'capitalize', color: paymentMethod === m ? '#15803d' : '#374151' }}>
+                <button key={m} onClick={() => setPaymentMethod(m)} style={{ padding: '12px', border: `2px solid ${paymentMethod === m ? '#2E6B8A' : '#e5e7eb'}`, borderRadius: 8, background: paymentMethod === m ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', textTransform: 'capitalize', color: paymentMethod === m ? '#2E6B8A' : '#374151' }}>
                   {m}
                 </button>
               ))}
@@ -563,7 +563,7 @@ export default function FolioPage() {
             <button
               onClick={collectPayment}
               disabled={savingPayment}
-              style={{ width: '100%', background: '#15803d', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+              style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
             >
               {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0
                 ? `Charge card · $${(totalWithSurcharge/100).toFixed(2)}`
@@ -610,7 +610,7 @@ function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any,
       <button
         onClick={() => { if (customPrice) { onAdd(product, Math.round(parseFloat(customPrice) * 100)); setCustomPrice('') } }}
         disabled={!customPrice || parseFloat(customPrice) <= 0}
-        style={{ background: customPrice && parseFloat(customPrice) > 0 ? '#15803d' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 6, padding: '6px', fontSize: 12, fontWeight: 600, cursor: customPrice ? 'pointer' : 'default' }}
+        style={{ background: customPrice && parseFloat(customPrice) > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 6, padding: '6px', fontSize: 12, fontWeight: 600, cursor: customPrice ? 'pointer' : 'default' }}
       >
         Add
       </button>
