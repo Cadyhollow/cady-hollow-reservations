@@ -101,12 +101,11 @@ export default function GuestAccountPage() {
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
-    // Find or create a standing folio for this guest
+    // Find or create a standing folio for this guest using guest_id
     const { data: existingFolio } = await supabase
       .from('folios')
       .select('*')
-      .eq('reservation_id', null)
-      .eq('guest_name', guestData?.name || '')
+      .eq('guest_id', guestId)
       .eq('folio_type', 'guest_account')
       .eq('status', 'open')
       .single()
@@ -117,6 +116,7 @@ export default function GuestAccountPage() {
     } else if (guestData) {
       const { data: newFolio } = await supabase.from('folios').insert({
         reservation_id: null,
+        guest_id: guestId,
         guest_name: guestData.name,
         guest_email: guestData.email || '',
         folio_type: 'guest_account',
