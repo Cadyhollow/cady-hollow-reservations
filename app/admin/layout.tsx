@@ -11,6 +11,7 @@ const baseNavigation = [
   { name: 'Reservations', href: '/admin/reservations', plan: 'trailhead' },
   { name: 'Calendar', href: '/admin/calendar', plan: 'trailhead' },
   { name: 'Manual Booking', href: '/admin/manual-booking', plan: 'trailhead' },
+  { name: 'Walk-In Booking', href: '/admin/walkin-booking', plan: 'trailhead' },
   { name: 'Sites', href: '/admin/sites', plan: 'trailhead' },
   { name: 'Pricing Rules', href: '/admin/pricing', plan: 'trailhead' },
   { name: 'Min. Stay Rules', href: '/admin/min-stay', plan: 'trailhead' },
