@@ -44,7 +44,17 @@ export default function ElectricBillingPage() {
   const [emailMessage, setEmailMessage] = useState('Please find your monthly electric statement below. If you have any questions, please don\'t hesitate to reach out.')
   const [sendingAll, setSendingAll] = useState(false)
 
-  useEffect(() => { fetchCampers() }, [])
+  useEffect(() => { fetchCampers(); fetchMessage() }, [])
+
+  async function fetchMessage() {
+    const { data } = await supabase.from('settings').select('electric_bill_message').single()
+    if (data?.electric_bill_message) setEmailMessage(data.electric_bill_message)
+  }
+
+  async function saveMessage() {
+    await supabase.from('settings').update({ electric_bill_message: emailMessage }).eq('id', (await supabase.from('settings').select('id').single()).data?.id)
+    alert('Message saved!')
+  }
 
   async function fetchCampers() {
     setLoading(true)
@@ -261,6 +271,7 @@ export default function ElectricBillingPage() {
         <div>
           <label style={lbl}>Custom email message</label>
           <textarea style={{ ...inp, height: 80, resize: 'vertical' }} value={emailMessage} onChange={e => setEmailMessage(e.target.value)} />
+          <button onClick={saveMessage} style={{ marginTop: 8, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Message</button>
         </div>
       </div>
 
