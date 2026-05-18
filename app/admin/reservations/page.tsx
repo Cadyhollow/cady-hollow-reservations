@@ -500,6 +500,13 @@ function ReservationsPageInner() {
                     >
                       Edit Reservation
                     </button>
+                    
+                      href={'/admin/folio/' + selected.id}
+                      className="flex-1 text-center px-4 py-2 rounded-lg text-sm font-medium text-white"
+                      style={{ background: '#2E6B8A' }}
+                    >
+                      Open Folio
+                    </a>
                     <button
                       onClick={() => handleCancel(selected)}
                       className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
