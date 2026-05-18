@@ -78,7 +78,8 @@ export async function POST(request: NextRequest) {
           },
           location_id: process.env.SQUARE_LOCATION_ID,
           buyer_email_address: guestEmail,
-          note: `Cady Hollow Reservation`,
+          note: `${guestName} | Site ${siteData?.site_number || siteId} | ${arrival} to ${departure}`,
+          reference_id: `${guestName.replace(/\s+/g, '-').toUpperCase()}-${arrival}`,
         }),
       }
     )
