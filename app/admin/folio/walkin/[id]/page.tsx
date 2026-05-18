@@ -275,6 +275,10 @@ export default function WalkUpFolioPage() {
               <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Folio complete</div>
             </div>
           )}
+
+          {(lineItems.length > 0 || payments.length > 0) && (
+            <ReceiptButtons folioId={folio?.id || ''} guestEmail={folio?.guest_email || ''} receiptType='walkup' />
+          )}
         </div>
 
         <div style={{ width: 'min(420px, 100%)', background: '#C9D2D9', borderLeft: '1px solid #b8c4cc', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
@@ -437,6 +441,49 @@ function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any,
       >
         Add
       </button>
+    </div>
+  )
+}
+
+function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string, guestEmail: string, receiptType: string }) {
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [error, setError] = useState('')
+
+  async function sendReceipt() {
+    if (!guestEmail) { setError('No email on file for this guest'); return }
+    setSending(true)
+    setError('')
+    const res = await fetch('/api/receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folioId, receiptType }),
+    })
+    const data = await res.json()
+    setSending(false)
+    if (data.success) { setSent(true); setTimeout(() => setSent(false), 3000) }
+    else setError(data.error || 'Failed to send receipt')
+  }
+
+  return (
+    <div style={{ marginTop: 12, display: 'flex', gap: 8, flexDirection: 'column' }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={sendReceipt}
+          disabled={sending}
+          style={{ flex: 1, background: sent ? '#15803d' : '#fff', color: sent ? '#fff' : '#2E6B8A', border: '1px solid #2E6B8A', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+        >
+          {sending ? 'Sending...' : sent ? '✓ Receipt sent!' : '✉ Send Receipt'}
+        </button>
+        <button
+          onClick={() => window.print()}
+          style={{ flex: 1, background: '#fff', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+        >
+          🖨 Print
+        </button>
+      </div>
+      {!guestEmail && <p style={{ fontSize: 12, color: '#9ca3af', margin: 0, textAlign: 'center' }}>No email on file — print only</p>}
+      {error && <p style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>{error}</p>}
     </div>
   )
 }
