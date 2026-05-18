@@ -24,6 +24,14 @@ const defaultSettings = {
   base_occupancy_adults: 2,
   base_occupancy_children: 2,
   cancellation_policy: '',
+  early_checkin_enabled: false,
+  early_checkin_price: 0,
+  early_checkin_time: '12:00',
+  early_checkin_show_customers: false,
+  late_checkout_enabled: false,
+  late_checkout_price: 0,
+  late_checkout_time: '12:00',
+  late_checkout_show_customers: false,
   confirmation_message: '',
   accent_color: '#2D6A4F',
   show_site_map: false,
@@ -76,6 +84,14 @@ export default function SettingsPage() {
         base_occupancy_adults: data.base_occupancy_adults || 2,
         base_occupancy_children: data.base_occupancy_children || 2,
         cancellation_policy: data.cancellation_policy || '',
+        early_checkin_enabled: data.early_checkin_enabled || false,
+        early_checkin_price: data.early_checkin_price || 0,
+        early_checkin_time: data.early_checkin_time || '12:00',
+        early_checkin_show_customers: data.early_checkin_show_customers || false,
+        late_checkout_enabled: data.late_checkout_enabled || false,
+        late_checkout_price: data.late_checkout_price || 0,
+        late_checkout_time: data.late_checkout_time || '12:00',
+        late_checkout_show_customers: data.late_checkout_show_customers || false,
         confirmation_message: data.confirmation_message || '',
         accent_color: data.accent_color || '#2D6A4F',
         show_site_map: data.show_site_map || false,
@@ -135,6 +151,14 @@ export default function SettingsPage() {
       base_occupancy_adults: form.base_occupancy_adults,
       base_occupancy_children: form.base_occupancy_children,
       cancellation_policy: form.cancellation_policy,
+      early_checkin_enabled: form.early_checkin_enabled,
+      early_checkin_price: form.early_checkin_price,
+      early_checkin_time: form.early_checkin_time,
+      early_checkin_show_customers: form.early_checkin_show_customers,
+      late_checkout_enabled: form.late_checkout_enabled,
+      late_checkout_price: form.late_checkout_price,
+      late_checkout_time: form.late_checkout_time,
+      late_checkout_show_customers: form.late_checkout_show_customers,
       confirmation_message: form.confirmation_message,
       accent_color: form.accent_color,
       show_site_map: form.show_site_map,
@@ -350,6 +374,105 @@ export default function SettingsPage() {
 
         {/* Maintenance Mode */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Early Check-In & Late Check-Out</h3>
+          <p className="text-sm text-gray-500 mb-4">Offer guests the option to check in early or check out late for an additional fee. When shown to customers, early check-in will be automatically hidden if another guest is checking out of the same site that day.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-gray-900">Early Check-In</p>
+                <button type="button" onClick={() => setForm({ ...form, early_checkin_enabled: !form.early_checkin_enabled })}
+                  className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+                  style={{ backgroundColor: form.early_checkin_enabled ? '#15803d' : '#d1d5db' }}>
+                  <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.early_checkin_enabled ? 'translateX(28px)' : 'translateX(0px)' }} />
+                </button>
+              </div>
+              {form.early_checkin_enabled && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Fee</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                      <input type="number" min="0" step="0.01"
+                        className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm"
+                        value={(form.early_checkin_price / 100).toFixed(2)}
+                        onChange={e => setForm({ ...form, early_checkin_price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Earliest available check-in time</label>
+                    <input type="time"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      value={form.early_checkin_time}
+                      onChange={e => setForm({ ...form, early_checkin_time: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <p className="text-xs font-medium text-gray-700">Show to customers at booking</p>
+                      <p className="text-xs text-gray-400">Auto-hidden if same-day checkout on that site</p>
+                    </div>
+                    <button type="button" onClick={() => setForm({ ...form, early_checkin_show_customers: !form.early_checkin_show_customers })}
+                      className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                      style={{ backgroundColor: form.early_checkin_show_customers ? '#15803d' : '#d1d5db' }}>
+                      <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                        style={{ transform: form.early_checkin_show_customers ? 'translateX(20px)' : 'translateX(0px)' }} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-gray-900">Late Check-Out</p>
+                <button type="button" onClick={() => setForm({ ...form, late_checkout_enabled: !form.late_checkout_enabled })}
+                  className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+                  style={{ backgroundColor: form.late_checkout_enabled ? '#15803d' : '#d1d5db' }}>
+                  <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.late_checkout_enabled ? 'translateX(28px)' : 'translateX(0px)' }} />
+                </button>
+              </div>
+              {form.late_checkout_enabled && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Fee</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                      <input type="number" min="0" step="0.01"
+                        className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm"
+                        value={(form.late_checkout_price / 100).toFixed(2)}
+                        onChange={e => setForm({ ...form, late_checkout_price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Latest available check-out time</label>
+                    <input type="time"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      value={form.late_checkout_time}
+                      onChange={e => setForm({ ...form, late_checkout_time: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <p className="text-xs font-medium text-gray-700">Show to customers at booking</p>
+                      <p className="text-xs text-gray-400">Auto-hidden if same-day arrival on that site</p>
+                    </div>
+                    <button type="button" onClick={() => setForm({ ...form, late_checkout_show_customers: !form.late_checkout_show_customers })}
+                      className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                      style={{ backgroundColor: form.late_checkout_show_customers ? '#15803d' : '#d1d5db' }}>
+                      <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                        style={{ transform: form.late_checkout_show_customers ? 'translateX(20px)' : 'translateX(0px)' }} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Maintenance Mode</h3>
           <p className="text-sm text-gray-500 mb-4">When enabled, guests will see your message instead of the booking form. The admin panel remains accessible.</p>
           <div className="flex items-center justify-between mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
