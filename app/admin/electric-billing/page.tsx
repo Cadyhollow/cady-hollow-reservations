@@ -269,7 +269,8 @@ export default function ElectricBillingPage() {
         <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found. Add them in the Guest Directory first.</div>
       ) : (
         <>
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', marginBottom: 20 }}>
+          <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 900 }}>
             {/* Header */}
             <div style={{ display: 'grid', gridTemplateColumns: '180px 80px 110px 110px 80px 110px 110px 120px 80px', gap: 8, padding: '10px 16px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
               <div>Guest</div>
@@ -348,6 +349,7 @@ export default function ElectricBillingPage() {
                 )}
               </div>
             ))}
+          </div>
           </div>
 
           {/* Send all button */}
