@@ -63,7 +63,7 @@ export default function WalkUpFolioPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [activeCategory, setActiveCategory] = useState('Camping Supplies')
+  const [activeCategory, setActiveCategory] = useState('')
   const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
   const [showPayment, setShowPayment] = useState(false)
@@ -121,6 +121,7 @@ export default function WalkUpFolioPage() {
     })
     await loadFolioData(folio.id)
     setActiveTab('tab')
+    setActiveCategory('')
   }
 
   async function addCustomItem() {
@@ -144,6 +145,7 @@ export default function WalkUpFolioPage() {
     setShowCustomItem(false)
     await loadFolioData(folio.id)
     setActiveTab('tab')
+    setActiveCategory('')
   }
 
   async function removeLineItem(id: string) {
@@ -197,8 +199,8 @@ export default function WalkUpFolioPage() {
   if (!folio) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Folio not found.</div>
 
   return (
-    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#f9fafb' }}>
-      <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12 }}>
+    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #b8c4cc', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
         <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap' }}>← Back</button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>{folio.guest_name}</h1>
@@ -214,13 +216,13 @@ export default function WalkUpFolioPage() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', background: '#fff' }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid #b8c4cc', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <button onClick={() => setActiveTab('tab')} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'tab' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'tab' ? '#15803d' : '#6b7280' }}>Guest Tab</button>
-        <button onClick={() => setActiveTab('items')} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'items' ? '#15803d' : '#6b7280' }}>Add Items</button>
+        <button onClick={() => { setActiveTab('items'); setActiveCategory('') }} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'items' ? '#15803d' : '#6b7280' }}>Add Items</button>
       </div>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
-        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none' }}>
+        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
           {lineItems.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
               <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Charges</div>
@@ -275,23 +277,46 @@ export default function WalkUpFolioPage() {
           )}
         </div>
 
-        <div style={{ width: 'min(380px, 100%)', background: '#fff', borderLeft: '1px solid #e5e7eb', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid #e5e7eb', padding: '0 0.75rem' }}>
-            {categories.map(cat => (
-              <button key={cat} onClick={() => setActiveCategory(cat)} style={{ padding: '10px 10px', fontSize: 12, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', whiteSpace: 'nowrap', borderBottom: activeCategory === cat ? '2px solid #15803d' : '2px solid transparent', color: activeCategory === cat ? '#15803d' : '#6b7280' }}>
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignContent: 'start' }}>
-            {filteredProducts.map(product => (
-              <VariableProductTile key={product.id} product={product} onAdd={addProduct} />
-            ))}
-            {filteredProducts.length === 0 && (
-              <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#9ca3af', fontSize: 13, padding: '2rem 0' }}>No products in this category</div>
-            )}
-          </div>
+        <div style={{ width: 'min(420px, 100%)', background: '#C9D2D9', borderLeft: '1px solid #b8c4cc', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
+          {activeCategory === '' ? (
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#4a6275', marginBottom: 4 }}>Select a category</div>
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 12, padding: '18px 20px', fontSize: 16, fontWeight: 700, cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 6px rgba(46,107,138,0.3)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#245875')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '#2E6B8A')}
+                >
+                  <span>{cat}</span>
+                  <span style={{ fontSize: 20, opacity: 0.7 }}>›</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #b8c4cc', background: 'rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  onClick={() => setActiveCategory('')}
+                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  ‹ Back
+                </button>
+                <span style={{ fontWeight: 700, fontSize: 14, color: '#1e3f52' }}>{activeCategory}</span>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignContent: 'start' }}>
+                {filteredProducts.map(product => (
+                  <VariableProductTile key={product.id} product={product} onAdd={addProduct} />
+                ))}
+                {filteredProducts.length === 0 && (
+                  <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#4a6275', fontSize: 13, padding: '2rem 0' }}>
+                    No products in this category
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           <div style={{ borderTop: '1px solid #e5e7eb', padding: '0.875rem' }}>
             {!showCustomItem ? (
