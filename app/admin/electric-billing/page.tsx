@@ -272,7 +272,7 @@ export default function ElectricBillingPage() {
           <div style={{ overflowX: 'auto', marginBottom: 20 }}>
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 900 }}>
             {/* Header */}
-            <div style={{ display: 'grid', gridTemplateColumns: '180px 80px 110px 110px 80px 110px 110px 120px 80px', gap: 8, padding: '10px 16px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px 100px 60px 90px 100px 100px 70px', gap: 6, padding: '10px 12px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
               <div>Guest</div>
               <div>Site</div>
               <div>Prev reading</div>
@@ -286,7 +286,7 @@ export default function ElectricBillingPage() {
 
             {campers.map((row, i) => (
               <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '180px 80px 110px 110px 80px 110px 110px 120px 80px', gap: 8, padding: '12px 16px', alignItems: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px 100px 60px 90px 100px 100px 70px', gap: 6, padding: '10px 12px', alignItems: 'center' }}>
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>{row.guest.name}</div>
                     <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
