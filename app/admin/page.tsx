@@ -182,6 +182,8 @@ export default function AdminDashboard() {
         {[
           { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
           { label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' },
+          { label: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🏕️' },
+          { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
           { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
           { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
