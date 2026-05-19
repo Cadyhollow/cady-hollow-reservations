@@ -73,6 +73,7 @@ export default function WalkUpFolioPage() {
   const [savingPayment, setSavingPayment] = useState(false)
   const [showCustomItem, setShowCustomItem] = useState(false)
   const [cashTendered, setCashTendered] = useState('')
+  const [waiveFee, setWaiveFee] = useState(false)
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
@@ -164,7 +165,7 @@ export default function WalkUpFolioPage() {
     if (!folio) return
     const baseAmount = paymentMethod === 'cash' && cashTendered !== '' ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100)) : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
-    const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0
+    const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
       ? Math.round(baseAmount * (cardSurcharge / 100))
       : 0
     const totalAmount = baseAmount + surchargeAmount
@@ -183,6 +184,7 @@ export default function WalkUpFolioPage() {
     setPaymentNote('')
     setPaymentMethod('cash')
     setCashTendered('')
+    setWaiveFee(false)
     await loadFolioData(folio.id)
   }
 
@@ -191,7 +193,7 @@ export default function WalkUpFolioPage() {
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
-  const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
+  const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   const filteredProducts = products.filter(p => p.category === activeCategory)
 
@@ -357,6 +359,21 @@ export default function WalkUpFolioPage() {
                 </button>
               ))}
             </div>
+            {paymentMethod === 'card' && cardSurcharge > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '10px 14px', background: waiveFee ? '#f0fdf4' : '#fffbeb', border: '1px solid', borderColor: waiveFee ? '#bbf7d0' : '#fde68a', borderRadius: 8 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Card fee ({cardSurcharge}%)</div>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>{waiveFee ? 'Fee waived for this payment' : 'Applied to card payments'}</div>
+                </div>
+                <button
+                  type='button'
+                  onClick={() => setWaiveFee(!waiveFee)}
+                  style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: waiveFee ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}
+                >
+                  <span style={{ position: 'absolute', top: 3, left: waiveFee ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+                </button>
+              </div>
+            )}
             <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>

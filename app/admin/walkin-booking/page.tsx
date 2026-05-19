@@ -332,11 +332,11 @@ export default function WalkInBookingPage() {
           </div>
           <div>
             <label style={lbl}>Adults</label>
-            <input style={inp} type='number' min='1' value={form.num_adults} onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value) || 1 })} />
+            <input style={inp} type='text' inputMode='numeric' value={form.num_adults} onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1 })} />
           </div>
           <div>
             <label style={lbl}>Children</label>
-            <input style={inp} type='number' min='0' value={form.num_children} onChange={e => setForm({ ...form, num_children: parseInt(e.target.value) || 0 })} />
+            <input style={inp} type='text' inputMode='numeric' value={form.num_children === 0 ? '' : form.num_children} placeholder='0' onChange={e => setForm({ ...form, num_children: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0 })} />
           </div>
         </div>
 
