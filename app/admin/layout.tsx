@@ -26,6 +26,7 @@ const baseNavigation = [
   { name: 'Blocked Dates', href: '/admin/blocked-dates', plan: 'trailhead' },
   { name: 'Reports', href: '/admin/reports', plan: 'ridgeline' },
   { name: 'Settings', href: '/admin/settings', plan: 'trailhead' },
+  { name: 'Square Terminal', href: '/admin/settings/terminal', plan: 'trailhead' },
 ]
 
 const planLevel = (plan: string) => {

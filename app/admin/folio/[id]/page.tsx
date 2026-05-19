@@ -91,6 +91,9 @@ export default function FolioPage() {
   const [walkUpName, setWalkUpName] = useState('')
   const [showCustomItem, setShowCustomItem] = useState(false)
   const [cashTendered, setCashTendered] = useState('')
+  const [terminalDeviceId, setTerminalDeviceId] = useState('')
+  const [terminalStatus, setTerminalStatus] = useState('')
+  const [sendingToTerminal, setSendingToTerminal] = useState(false)
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
@@ -101,12 +104,13 @@ export default function FolioPage() {
     setLoading(true)
     const [{ data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent').single(),
+      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
       supabase.from('product_categories').select('name').order('display_order'),
     ])
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
+    if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
 
     if (isNew) { setLoading(false); return }
 
@@ -242,6 +246,40 @@ export default function FolioPage() {
 
   // Totals — single source of truth
   const activeItems = lineItems.filter(i => !i.voided)
+  async function sendToTerminal() {
+    if (!folio) return
+    const amount = Math.max(0, (reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0) + activeItems.reduce((sum, i) => sum + i.line_total, 0) - payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0))
+    if (!amount || amount <= 0) return
+    const surchargeAmount = cardSurcharge > 0 ? Math.round(amount * (cardSurcharge / 100)) : 0
+    const totalAmount = amount + surchargeAmount
+    setSendingToTerminal(true)
+    setTerminalStatus('')
+    const res = await fetch('/api/terminal/charge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folioId: folio.id,
+        amount: totalAmount,
+        surchargeAmount,
+        note: (folio?.guest_name || '') + (reservation ? ' · Site ' + reservation.site_number : ''),
+      }),
+    })
+    const data = await res.json()
+    setSendingToTerminal(false)
+    if (data.success) {
+      setTerminalStatus('waiting')
+      setShowPayment(false)
+      let attempts = 0
+      const interval = setInterval(async () => {
+        attempts++
+        await loadFolioData(folio.id)
+        if (attempts >= 60) { clearInterval(interval); setTerminalStatus('timeout') }
+      }, 3000)
+    } else {
+      setTerminalStatus('error: ' + (data.error || 'Failed to send to Terminal'))
+    }
+  }
+
   const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
@@ -491,6 +529,25 @@ export default function FolioPage() {
       </div>
 
       {/* Payment modal */}
+      {/* Terminal status */}
+      {terminalStatus === 'waiting' && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#2E6B8A', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#fff', animation: 'pulse 1s infinite' }} />
+          Waiting for customer to tap card on Terminal...
+          <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+        </div>
+      )}
+      {terminalStatus === 'completed' && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#15803d', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60 }}>
+          ✓ Card payment completed!
+        </div>
+      )}
+      {terminalStatus.startsWith('error') && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#dc2626', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 14, fontWeight: 600, zIndex: 60 }}>
+          {terminalStatus}
+        </div>
+      )}
+
       {showPayment && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
@@ -508,18 +565,38 @@ export default function FolioPage() {
               ))}
             </div>
 
-            <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
-            <div style={{ position: 'relative', marginBottom: 8 }}>
-              <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
-              <input
-                style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: paymentMethod === 'cash' ? '#f9fafb' : '#fff', color: paymentMethod === 'cash' ? '#6b7280' : '#111827' }}
-                type="number"
-                step="0.01"
-                value={paymentAmount}
-                readOnly={paymentMethod === 'cash'}
-                onChange={e => setPaymentAmount(e.target.value)}
-              />
-            </div>
+            {paymentMethod === 'card' && terminalDeviceId ? (
+              <div style={{ background: '#e8f2f7', border: '1px solid #b8d4e8', borderRadius: 10, padding: '1.25rem', marginBottom: 16, textAlign: 'center' }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>💳</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: '#1e3f52', marginBottom: 4 }}>Send to Square Terminal</div>
+                <div style={{ fontSize: 13, color: '#4a6275', marginBottom: 12 }}>
+                  Amount: <strong>${(totalDue/100).toFixed(2)}</strong>
+                  {cardSurcharge > 0 && <span> + {cardSurcharge}% fee = <strong>${((totalDue + Math.round(totalDue * cardSurcharge / 100))/100).toFixed(2)}</strong></span>}
+                </div>
+                <button
+                  onClick={() => { setShowPayment(false); sendToTerminal() }}
+                  disabled={sendingToTerminal}
+                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 28px', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
+                >
+                  {sendingToTerminal ? 'Sending...' : 'Send to Terminal →'}
+                </button>
+              </div>
+            ) : (
+              <>
+                <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
+                <div style={{ position: 'relative', marginBottom: 8 }}>
+                  <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
+                  <input
+                    style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: paymentMethod === 'cash' ? '#f9fafb' : '#fff', color: paymentMethod === 'cash' ? '#6b7280' : '#111827' }}
+                    type="number"
+                    step="0.01"
+                    value={paymentAmount}
+                    readOnly={paymentMethod === 'cash'}
+                    onChange={e => setPaymentAmount(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             {paymentMethod === 'cash' && (
               <>
                 <label style={ml}>Cash tendered</label>
@@ -548,34 +625,38 @@ export default function FolioPage() {
               </>
             )}
 
-            {/* Card surcharge preview */}
-            {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
-              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
-                  <span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargePreview/100).toFixed(2)}</span>
+            {!(paymentMethod === 'card' && terminalDeviceId) && (
+              <>
+              {/* Card surcharge preview */}
+              {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
+                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                    <span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargePreview/100).toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontWeight: 700 }}>
+                    <span style={{ color: '#92400e' }}>Total charged to card</span>
+                    <span style={{ color: '#92400e' }}>${(totalWithSurcharge/100).toFixed(2)}</span>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontWeight: 700 }}>
-                  <span style={{ color: '#92400e' }}>Total charged to card</span>
-                  <span style={{ color: '#92400e' }}>${(totalWithSurcharge/100).toFixed(2)}</span>
-                </div>
-              </div>
+              )}
+  
+              <label style={ml}>Note (optional)</label>
+              <input style={{ ...si, marginBottom: 16 }} placeholder="e.g. check #1042" value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
+  
+              <button
+                onClick={collectPayment}
+                disabled={savingPayment}
+                style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+              >
+                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0
+                  ? `Charge card · $${(totalWithSurcharge/100).toFixed(2)}`
+                  : paymentMethod === 'cash' && cashTendered !== ''
+                  ? `Record cash · $${Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2)}`
+                  : `Record ${paymentMethod} · $${paymentAmount}`}
+              </button>
+              </>
             )}
-
-            <label style={ml}>Note (optional)</label>
-            <input style={{ ...si, marginBottom: 16 }} placeholder="e.g. check #1042" value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-
-            <button
-              onClick={collectPayment}
-              disabled={savingPayment}
-              style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
-            >
-              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0
-                ? `Charge card · $${(totalWithSurcharge/100).toFixed(2)}`
-                : paymentMethod === 'cash' && cashTendered !== ''
-                ? `Record cash · $${Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2)}`
-                : `Record ${paymentMethod} · $${paymentAmount}`}
-            </button>
           </div>
         </div>
       )}
