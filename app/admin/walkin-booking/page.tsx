@@ -83,6 +83,8 @@ export default function WalkInBookingPage() {
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
   const [priceOverride, setPriceOverride] = useState('')
+  const [adultsDisplay, setAdultsDisplay] = useState('2')
+  const [childrenDisplay, setChildrenDisplay] = useState('')
 
   const [form, setForm] = useState({
     guest_name: '',
@@ -332,11 +334,11 @@ export default function WalkInBookingPage() {
           </div>
           <div>
             <label style={lbl}>Adults</label>
-            <input style={inp} type='text' inputMode='numeric' value={form.num_adults === 0 ? '' : form.num_adults} placeholder='2' onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1 })} />
+            <input style={inp} type='text' inputMode='numeric' value={adultsDisplay} placeholder='2' onChange={e => { const val = e.target.value.replace(/[^0-9]/g, ''); setAdultsDisplay(val); setForm({ ...form, num_adults: parseInt(val) || 1 }) }} onBlur={() => { if (!adultsDisplay) setAdultsDisplay('1') }} />
           </div>
           <div>
             <label style={lbl}>Children</label>
-            <input style={inp} type='text' inputMode='numeric' value={form.num_children === 0 ? '' : form.num_children} placeholder='0' onChange={e => setForm({ ...form, num_children: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0 })} />
+            <input style={inp} type='text' inputMode='numeric' value={childrenDisplay} placeholder='0' onChange={e => { const val = e.target.value.replace(/[^0-9]/g, ''); setChildrenDisplay(val); setForm({ ...form, num_children: parseInt(val) || 0 }) }} />
           </div>
         </div>
 
