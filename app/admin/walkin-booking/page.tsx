@@ -91,7 +91,7 @@ export default function WalkInBookingPage() {
     site_id: '',
     arrival_date: '',
     departure_date: '',
-    num_adults: 1,
+    num_adults: 2,
     num_children: 0,
     camper_type: '',
     camper_length: '',
@@ -332,7 +332,7 @@ export default function WalkInBookingPage() {
           </div>
           <div>
             <label style={lbl}>Adults</label>
-            <input style={inp} type='text' inputMode='numeric' value={form.num_adults} onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1 })} />
+            <input style={inp} type='text' inputMode='numeric' value={form.num_adults === 0 ? '' : form.num_adults} placeholder='2' onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1 })} />
           </div>
           <div>
             <label style={lbl}>Children</label>
