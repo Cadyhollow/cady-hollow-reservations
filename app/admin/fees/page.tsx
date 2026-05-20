@@ -231,7 +231,7 @@ export default function FeesPage() {
                 <div className={`w-2 h-2 rounded-full ${fee.is_active ? 'bg-green-500' : 'bg-gray-300'}`} />
                 <div>
                   <p className="font-semibold text-gray-900">{fee.name}</p>
-                  <p className="text-sm text-gray-500">{formatFee(fee)} · {formatAppliesTo(fee.applies_to)}{!fee.is_active && ' · Inactive'}</p>
+                  <p className="text-sm text-gray-500">{formatFee(fee)} · {formatAppliesTo(fee.applies_to)}{fee.card_only && ' · 💳 Card only'}{!fee.is_active && ' · Inactive'}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
