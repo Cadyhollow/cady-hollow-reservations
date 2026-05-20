@@ -93,6 +93,7 @@ export default function FolioPage() {
   const [showCustomItem, setShowCustomItem] = useState(false)
   const [cashTendered, setCashTendered] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
+  const [feeAlreadyIncluded, setFeeAlreadyIncluded] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [terminalStatus, setTerminalStatus] = useState('')
   const [sendingToTerminal, setSendingToTerminal] = useState(false)
@@ -244,6 +245,7 @@ export default function FolioPage() {
     setPaymentMethod('cash')
     setCashTendered('')
     setWaiveFee(false)
+    setFeeAlreadyIncluded(false)
     await loadFolioData(folio.id)
   }
 
@@ -462,7 +464,7 @@ export default function FolioPage() {
                     <span>${(Math.max(0, cashReservationBalance + itemsTotal - paymentsTotal)/100).toFixed(2)}</span>
                   </button>
                   <button
-                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setWaiveFee(false); setShowPayment(true) }}
+                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('card'); setWaiveFee(true); setFeeAlreadyIncluded(true); terminalDeviceId ? sendToTerminal() : setShowPayment(true) }}
                     style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💳 Card</span>
@@ -613,7 +615,7 @@ export default function FolioPage() {
               </div>
             ) : (
               <>
-                {paymentMethod === 'card' && cardSurcharge > 0 && (
+                {paymentMethod === 'card' && cardSurcharge > 0 && !feeAlreadyIncluded && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '10px 14px', background: waiveFee ? '#f0fdf4' : '#fffbeb', border: '1px solid', borderColor: waiveFee ? '#bbf7d0' : '#fde68a', borderRadius: 8 }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Card fee ({cardSurcharge}%)</div>
