@@ -20,6 +20,7 @@ type Fee = {
   amount: number
   applies_to: string
   is_active: boolean
+  card_only: boolean
 }
 
 const CAMPER_TYPES = [
