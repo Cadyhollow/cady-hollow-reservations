@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       extraGuestFee = 0,
       discountAmount = 0,
       discountCode = null,
+      feesTotal = 0,
     } = body
 
     const settings = await getSettings()
@@ -206,7 +207,15 @@ export async function POST(request: NextRequest) {
                   <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Paid Today</td>
                   <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
                 </tr>
-                ${balanceDue > 0 ? `
+                ${balanceDue > 0 && paymentType === 'deposit' && feesTotal > 0 ? `
+                <tr>
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due — Cash/Check</td>
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${((balanceDue - feesTotal + Math.round(amountPaid * feesTotal / totalPrice)) / 100).toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due — Card (incl. ${Math.round(feesTotal / (totalPrice - feesTotal) * 100)}% fee)</td>
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${(balanceDue / 100).toFixed(2)}</td>
+                </tr>` : balanceDue > 0 ? `
                 <tr>
                   <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due at Check-in</td>
                   <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${(balanceDue / 100).toFixed(2)}</td>

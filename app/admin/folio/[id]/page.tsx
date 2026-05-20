@@ -53,6 +53,7 @@ type Reservation = {
   departure_date: string
   total_price: number
   amount_paid: number
+  fees_total: number
   num_adults: number
   num_children: number
 }
@@ -285,6 +286,12 @@ export default function FolioPage() {
   const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
+  // Cash balance removes proportional fees from remaining balance
+  const feesTotal = reservation?.fees_total || 0
+  const baseTotal = reservation ? reservation.total_price - feesTotal : 0
+  const basePaid = reservation ? Math.min(reservation.amount_paid, baseTotal) : 0
+  const cashReservationBalance = reservation ? Math.max(0, baseTotal - basePaid) : 0
+  const hasFeeDiscount = feesTotal > 0 && cashReservationBalance < reservationBalance
   const grandTotal = reservationBalance + itemsTotal
   const totalDue = Math.max(0, grandTotal - paymentsTotal)
   const overpaid = paymentsTotal > grandTotal ? paymentsTotal - grandTotal : 0
@@ -444,12 +451,34 @@ export default function FolioPage() {
 
           {/* Collect payment button */}
           {totalDue > 0 && (
-            <button
-              onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }}
-              style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}
-            >
-              Collect Payment · ${(totalDue/100).toFixed(2)}
-            </button>
+            <div style={{ marginTop: 8 }}>
+              {hasFeeDiscount ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: '#4a6275', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Select payment method</div>
+                  <button
+                    onClick={() => { const cashTotal = Math.max(0, cashReservationBalance + itemsTotal - paymentsTotal); setPaymentAmount((cashTotal/100).toFixed(2)); setWaiveFee(true); setShowPayment(true) }}
+                    style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
+                  >
+                    <span>💵 Cash / Check</span>
+                    <span>${(Math.max(0, cashReservationBalance + itemsTotal - paymentsTotal)/100).toFixed(2)}</span>
+                  </button>
+                  <button
+                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setWaiveFee(false); setShowPayment(true) }}
+                    style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
+                  >
+                    <span>💳 Card</span>
+                    <span>${(totalDue/100).toFixed(2)}</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }}
+                  style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+                >
+                  Collect Payment · ${(totalDue/100).toFixed(2)}
+                </button>
+              )}
+            </div>
           )}
 
           {overpaid > 0 && (

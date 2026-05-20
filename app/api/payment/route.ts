@@ -114,6 +114,7 @@ export async function POST(request: NextRequest) {
         camper_amperage: camperAmperage || '',
         base_nightly_rate: nightlyRate,
         extra_guest_fee_total: extraGuestFee,
+        fees_total: feesTotal || 0,
         addons_total: addonTotal,
         discount_amount: discountAmount,
         total_price: totalPrice,
@@ -195,6 +196,7 @@ export async function POST(request: NextRequest) {
           extraGuestFee,
           discountAmount,
           discountCode: discountCode || null,
+          feesTotal: feesTotal || 0,
         }),
       })
     } catch (e) {
