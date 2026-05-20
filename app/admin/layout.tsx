@@ -24,7 +24,6 @@ const navGroups: NavGroup[] = [
     label: 'Reservations',
     icon: '🏕️',
     items: [
-      { name: 'Dashboard', href: '/admin', icon: '▦' },
       { name: 'Reservations', href: '/admin/reservations', icon: '📋' },
       { name: 'Calendar', href: '/admin/calendar', icon: '📅' },
       { name: 'Manual Booking', href: '/admin/manual-booking', icon: '✍️' },
@@ -162,6 +161,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Nav groups */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-1">
+
+        {/* Dashboard — always visible */}
+        <Link
+          href="/admin"
+          onClick={() => setSidebarOpen(false)}
+          className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all duration-150 mb-2"
+          style={{
+            background: pathname === '/admin' ? 'var(--accent-color, #12c9e5)' : 'rgba(255,255,255,0.07)',
+            color: pathname === '/admin' ? '#fff' : 'rgba(255,255,255,0.8)',
+            boxShadow: pathname === '/admin' ? '0 2px 8px rgba(18,201,229,0.3)' : 'none',
+          }}
+        >
+          <span className="text-base leading-none">▦</span>
+          <span>Dashboard</span>
+        </Link>
+
         {visibleGroups.map((group) => {
           const active = isGroupActive(group)
           const open = openGroup === group.label
