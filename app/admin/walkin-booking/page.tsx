@@ -442,6 +442,20 @@ export default function WalkInBookingPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', minHeight: 'calc(100vh - 120px)' }}>
         {/* Left: Tab */}
         <div style={{ padding: '1.25rem', overflowY: 'auto', background: '#C9D2D9' }}>
+
+          {/* Reservation stay charge */}
+          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '0.875rem 1rem', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>Reservation balance</div>
+                <div style={{ fontSize: 12, color: '#92400e', marginTop: 2 }}>
+                  {nights} night stay · {siteTypeLabel(selectedSite?.site_type || '')} {selectedSite?.site_number}
+                </div>
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 17, color: '#92400e' }}>${(total/100).toFixed(2)}</div>
+            </div>
+          </div>
+
           {lineItems.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
               <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Charges</div>
