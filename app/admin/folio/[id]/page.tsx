@@ -288,9 +288,8 @@ export default function FolioPage() {
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
   // Cash balance removes proportional fees from remaining balance
   const feesTotal = reservation?.fees_total || 0
-  const baseTotal = reservation ? reservation.total_price - feesTotal : 0
-  const basePaid = reservation ? Math.min(reservation.amount_paid, baseTotal) : 0
-  const cashReservationBalance = reservation ? Math.max(0, baseTotal - basePaid) : 0
+  const feeAlreadyPaid = reservation && feesTotal > 0 ? Math.round(reservation.amount_paid * feesTotal / reservation.total_price) : 0
+  const cashReservationBalance = reservation ? Math.max(0, reservationBalance - (feesTotal - feeAlreadyPaid)) : 0
   const hasFeeDiscount = feesTotal > 0 && cashReservationBalance < reservationBalance
   const grandTotal = reservationBalance + itemsTotal
   const totalDue = Math.max(0, grandTotal - paymentsTotal)
