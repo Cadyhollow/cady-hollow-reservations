@@ -183,7 +183,7 @@ export default function WalkInBookingPage() {
       reservation_id: data.reservationId,
       guest_name: form.guest_name,
       guest_email: form.guest_email || '',
-      folio_type: 'reservation',
+      folio_type: 'walkup',
       status: 'open',
     }).select().single()
     if (newFolio) {
