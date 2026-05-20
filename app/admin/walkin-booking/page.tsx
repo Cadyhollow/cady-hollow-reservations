@@ -140,7 +140,7 @@ export default function WalkInBookingPage() {
   }) : []
   const cardOnlyFees = applicableFees.filter((f: any) => f.card_only && f.is_active)
   const stayCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
-    sum + (f.type === 'percentage' ? Math.round((calculatedTotal / 100) * f.amount / 100) * 100 : f.amount), 0)
+    sum + (f.type === 'percentage' ? Math.round(calculatedTotal * f.amount / 100) : f.amount), 0)
 
   async function createBooking() {
     if (!form.guest_name.trim()) { toast.error('Guest name is required'); return }
@@ -493,14 +493,14 @@ export default function WalkInBookingPage() {
                     style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💵 Cash / Check</span>
-                    <span>${((totalDue + stayCardOnlyFeeTotal)/100).toFixed(2)}</span>
+                    <span>${(totalDue/100).toFixed(2)}</span>
                   </button>
                   <button
                     onClick={() => { setPaymentAmount(((totalDue + stayCardOnlyFeeTotal)/100).toFixed(2)); setPaymentMethod('card'); setShowPayment(true) }}
                     style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💳 Card</span>
-                    <span>${(totalDue/100).toFixed(2)}</span>
+                    <span>${((totalDue + stayCardOnlyFeeTotal)/100).toFixed(2)}</span>
                   </button>
                 </div>
               ) : (
