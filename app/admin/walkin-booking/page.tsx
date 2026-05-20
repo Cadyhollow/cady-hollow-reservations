@@ -139,7 +139,7 @@ export default function WalkInBookingPage() {
     return targets.includes(selectedSite.site_type)
   }) : []
   const cardOnlyFees = applicableFees.filter((f: any) => f.card_only && f.is_active)
-  const realCardOnlyFeeTotal = 0 // calculated after totalDue below
+
 
   async function createBooking() {
     if (!form.guest_name.trim()) { toast.error('Guest name is required'); return }
