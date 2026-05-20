@@ -80,6 +80,8 @@ export default function WalkInBookingPage() {
   const [customQty, setCustomQty] = useState('1')
   const [showPayment, setShowPayment] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [waiveFee, setWaiveFee] = useState(false)
+  const [lockedMethod, setLockedMethod] = useState('')
   const [paymentAmount, setPaymentAmount] = useState('')
   const [cashTendered, setCashTendered] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
