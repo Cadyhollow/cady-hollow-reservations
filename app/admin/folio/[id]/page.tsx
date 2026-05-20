@@ -457,7 +457,7 @@ export default function FolioPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 12, color: '#4a6275', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Select payment method</div>
                   <button
-                    onClick={() => { const cashTotal = Math.max(0, cashReservationBalance + itemsTotal - paymentsTotal); setPaymentAmount((cashTotal/100).toFixed(2)); setWaiveFee(true); setShowPayment(true) }}
+                    onClick={() => { const cashTotal = Math.max(0, cashReservationBalance + itemsTotal - paymentsTotal); setPaymentAmount((cashTotal/100).toFixed(2)); setPaymentMethod('cash'); setWaiveFee(true); setFeeAlreadyIncluded(true); setShowPayment(true) }}
                     style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💵 Cash / Check</span>
