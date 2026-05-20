@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
       nights,
       waiverSigned,
       signatureData,
+      feesTotal = 0,
     } = body
 
     // Double-check availability before charging
