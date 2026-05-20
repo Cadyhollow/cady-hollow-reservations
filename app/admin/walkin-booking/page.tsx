@@ -188,17 +188,6 @@ export default function WalkInBookingPage() {
     }).select().single()
     if (newFolio) {
       setFolioId(newFolio.id)
-      // Add reservation charge as first line item
-      await supabase.from('folio_line_items').insert({
-        folio_id: newFolio.id,
-        product_id: null,
-        description: nights + ' night stay · ' + siteTypeLabel(selectedSite?.site_type || '') + ' ' + selectedSite?.site_number,
-        quantity: nights,
-        unit_price: selectedSite?.base_rate || 0,
-        tax_amount: 0,
-        line_total: total,
-        category: 'Stays',
-      })
       await loadFolioData(newFolio.id)
     }
     setReservationId(data.reservationId)
