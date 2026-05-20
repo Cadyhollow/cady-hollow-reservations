@@ -284,7 +284,7 @@ export default function WalkInBookingPage() {
 
   const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
-  const totalDue = Math.max(0, itemsTotal - paymentsTotal)
+  const totalDue = Math.max(0, total + itemsTotal - paymentsTotal)
   const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
     sum + (f.type === 'percentage' ? Math.round(totalDue * f.amount / 100) : f.amount), 0)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
