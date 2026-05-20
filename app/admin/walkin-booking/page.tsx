@@ -139,8 +139,7 @@ export default function WalkInBookingPage() {
     return targets.includes(selectedSite.site_type)
   }) : []
   const cardOnlyFees = applicableFees.filter((f: any) => f.card_only && f.is_active)
-  const stayCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
-    sum + (f.type === 'percentage' ? Math.round(calculatedTotal * f.amount / 100) : f.amount), 0)
+  const realCardOnlyFeeTotal = 0 // calculated after totalDue below
 
   async function createBooking() {
     if (!form.guest_name.trim()) { toast.error('Guest name is required'); return }
@@ -297,6 +296,8 @@ export default function WalkInBookingPage() {
   const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
+  const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
+    sum + (f.type === 'percentage' ? Math.round(totalDue * f.amount / 100) : f.amount), 0)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
@@ -485,7 +486,7 @@ export default function WalkInBookingPage() {
 
           {totalDue > 0 && (
             <div style={{ marginTop: 8 }}>
-              {stayCardOnlyFeeTotal > 0 ? (
+              {realCardOnlyFeeTotal > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 12, color: '#4a6275', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Select payment method</div>
                   <button
@@ -496,11 +497,11 @@ export default function WalkInBookingPage() {
                     <span>${(totalDue/100).toFixed(2)}</span>
                   </button>
                   <button
-                    onClick={() => { setPaymentAmount(((totalDue + stayCardOnlyFeeTotal)/100).toFixed(2)); setPaymentMethod('card'); setShowPayment(true) }}
+                    onClick={() => { setPaymentAmount(((totalDue + realCardOnlyFeeTotal)/100).toFixed(2)); setPaymentMethod('card'); setShowPayment(true) }}
                     style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💳 Card</span>
-                    <span>${((totalDue + stayCardOnlyFeeTotal)/100).toFixed(2)}</span>
+                    <span>${((totalDue + realCardOnlyFeeTotal)/100).toFixed(2)}</span>
                   </button>
                 </div>
               ) : (
