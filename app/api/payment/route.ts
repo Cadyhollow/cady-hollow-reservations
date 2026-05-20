@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
       waiverSigned,
       signatureData,
       feesTotal = 0,
+      cardOnlyFeesTotal = 0,
     } = body
 
     // Double-check availability before charging
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
         camper_amperage: camperAmperage || '',
         base_nightly_rate: nightlyRate,
         extra_guest_fee_total: extraGuestFee,
-        fees_total: feesTotal || 0,
+        fees_total: cardOnlyFeesTotal || 0,
         addons_total: addonTotal,
         discount_amount: discountAmount,
         total_price: totalPrice,
