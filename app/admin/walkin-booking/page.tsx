@@ -493,14 +493,14 @@ export default function WalkInBookingPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 12, color: '#4a6275', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Select payment method</div>
                   <button
-                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('cash'); setShowPayment(true) }}
+                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('cash'); setWaiveFee(true); setLockedMethod('cash_check'); setShowPayment(true) }}
                     style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💵 Cash / Check</span>
                     <span>${(totalDue/100).toFixed(2)}</span>
                   </button>
                   <button
-                    onClick={() => { setPaymentAmount(((totalDue + realCardOnlyFeeTotal)/100).toFixed(2)); setPaymentMethod('card'); setShowPayment(true) }}
+                    onClick={() => { setPaymentAmount(((totalDue + realCardOnlyFeeTotal)/100).toFixed(2)); setPaymentMethod('card'); setWaiveFee(true); setLockedMethod('card'); setShowPayment(true) }}
                     style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
                   >
                     <span>💳 Card</span>
@@ -589,11 +589,11 @@ export default function WalkInBookingPage() {
           <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
-              <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
+              <button onClick={() => { setShowPayment(false); setCashTendered(''); setWaiveFee(false); setLockedMethod('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
             <label style={ml}>Payment method</label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
-              {['cash', 'card', 'check'].map(m => (
+            <div style={{ display: 'grid', gridTemplateColumns: lockedMethod === 'cash_check' ? '1fr 1fr' : '1fr', gap: 8, marginBottom: 16 }}>
+              {(lockedMethod === 'cash_check' ? ['cash', 'check'] : lockedMethod === 'card' ? ['card'] : ['cash', 'card', 'check']).map(m => (
                 <button key={m} onClick={() => setPaymentMethod(m)} style={{ padding: '12px', border: '2px solid ' + (paymentMethod === m ? '#2E6B8A' : '#e5e7eb'), borderRadius: 8, background: paymentMethod === m ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', textTransform: 'capitalize', color: paymentMethod === m ? '#2E6B8A' : '#374151' }}>
                   {m}
                 </button>
