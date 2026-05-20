@@ -107,12 +107,7 @@ export default function ManualBookingPage() {
   const feesTotal = enabledApplicableFees.reduce((sum, f) =>
     sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
 
-  // Card-only fees (excluded from cash total)
-  const cardOnlyFees = enabledApplicableFees.filter(f => f.card_only)
-  const cardOnlyFeesTotal = cardOnlyFees.reduce((sum, f) =>
-    sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
-  const cashTotal = calculatedTotal - cardOnlyFeesTotal
-  const hasCashCardSplit = cardOnlyFeesTotal > 0
+
 
   const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
     const addon = addons.find(a => a.id === id)
@@ -121,6 +116,13 @@ export default function ManualBookingPage() {
 
   const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
+
+  // Card-only fees (excluded from cash total)
+  const cardOnlyFees = enabledApplicableFees.filter(f => f.card_only)
+  const cardOnlyFeesTotal = cardOnlyFees.reduce((sum, f) =>
+    sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
+  const cashTotal = total - cardOnlyFeesTotal
+  const hasCashCardSplit = cardOnlyFeesTotal > 0
 
   const firstNightBase = selectedSite ? selectedSite.base_rate : 0
   const proportionalFees = nights > 0 ? Math.round(feesTotal / nights) : 0
