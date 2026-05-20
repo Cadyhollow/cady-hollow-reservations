@@ -500,7 +500,7 @@ export default function ReportsPage() {
       {activeTab === 'transactions' && posEnabled && (
         <>
           {/* Filters row */}
-          <div className="flex flex-wrap gap-2 items-center mb-6">
+          <div className="flex flex-wrap gap-2 items-center mb-6" style={{rowGap: "8px"}}>
             <select
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
               value={txDateRange}
