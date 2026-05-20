@@ -373,7 +373,7 @@ export default function FolioPage() {
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
 
           {/* Reservation balance */}
-          {reservation && reservationBalance > 0 && (
+          {reservation && reservationBalance > 0 && folio?.folio_type === 'reservation' && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '0.875rem 1rem', marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
@@ -387,7 +387,7 @@ export default function FolioPage() {
             </div>
           )}
 
-          {reservation && reservationBalance === 0 && (
+          {reservation && reservationBalance === 0 && folio?.folio_type === 'reservation' && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '0.75rem 1rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: '#15803d', fontWeight: 700 }}>✓</span>
               <span style={{ fontSize: 14, color: '#15803d', fontWeight: 600 }}>Reservation paid in full</span>
