@@ -66,6 +66,8 @@ export default function WalkInBookingPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [cardSurcharge, setCardSurcharge] = useState(0)
+  const [cardOnlyFeeTotal, setCardOnlyFeeTotal] = useState(0)
+  const [allFees, setAllFees] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
   const [reservationId, setReservationId] = useState('')
   const [folioId, setFolioId] = useState('')
@@ -104,16 +106,22 @@ export default function WalkInBookingPage() {
   useEffect(() => { fetchData() }, [])
 
   async function fetchData() {
-    const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }] = await Promise.all([
+    const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
       supabase.from('settings').select('card_surcharge_percent').single(),
       supabase.from('product_categories').select('name').order('display_order'),
+      supabase.from('fees').select('*').eq('is_active', true),
     ])
     setSites(siteData || [])
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
+    if (feesData) {
+      const site = siteData?.[0]
+      // Will be recalculated when site is selected — store raw fees for now
+      setAllFees(feesData)
+    }
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
@@ -123,6 +131,16 @@ export default function WalkInBookingPage() {
     : 0
   const calculatedTotal = selectedSite ? selectedSite.base_rate * nights : 0
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
+
+  // Card-only fee calculation for cash/card split
+  const applicableFees = selectedSite ? allFees.filter((f: any) => {
+    if (f.applies_to === 'all') return true
+    const targets = f.applies_to.split(',').map((s: string) => s.trim())
+    return targets.includes(selectedSite.site_type)
+  }) : []
+  const cardOnlyFees = applicableFees.filter((f: any) => f.card_only && f.is_active)
+  const stayCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
+    sum + (f.type === 'percentage' ? Math.round((calculatedTotal / 100) * f.amount / 100) * 100 : f.amount), 0)
 
   async function createBooking() {
     if (!form.guest_name.trim()) { toast.error('Guest name is required'); return }
@@ -466,9 +484,31 @@ export default function WalkInBookingPage() {
           )}
 
           {totalDue > 0 && (
-            <button onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
-              Collect Payment · ${(totalDue/100).toFixed(2)}
-            </button>
+            <div style={{ marginTop: 8 }}>
+              {stayCardOnlyFeeTotal > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: '#4a6275', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Select payment method</div>
+                  <button
+                    onClick={() => { const cashDue = Math.max(0, totalDue - stayCardOnlyFeeTotal); setPaymentAmount((cashDue/100).toFixed(2)); setPaymentMethod('cash'); setShowPayment(true) }}
+                    style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
+                  >
+                    <span>💵 Cash / Check</span>
+                    <span>${(Math.max(0, totalDue - stayCardOnlyFeeTotal)/100).toFixed(2)}</span>
+                  </button>
+                  <button
+                    onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('card'); setShowPayment(true) }}
+                    style={{ width: '100%', background: '#1e3f52', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 20, paddingRight: 20 }}
+                  >
+                    <span>💳 Card</span>
+                    <span>${(totalDue/100).toFixed(2)}</span>
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+                  Collect Payment · ${(totalDue/100).toFixed(2)}
+                </button>
+              )}
+            </div>
           )}
 
           {totalDue === 0 && paymentsTotal > 0 && (
