@@ -171,6 +171,7 @@ export default function ManualBookingPage() {
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
         total_price: total,
+        fees_total: Math.round(cardOnlyFeesTotal),
         amount_paid: amountPaid,
         payment_type: form.payment_type,
         notes: form.notes,
@@ -445,32 +446,7 @@ export default function ManualBookingPage() {
                   </p>
                 )}
               </div>
-              {hasCashCardSplit && total > 0 && (
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
-                  <p className="text-xs text-gray-400 mb-3">Card fee is waived for cash and check payments.</p>
-                  <div className="flex flex-col gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, amount_paid: (cashTotal / 100).toFixed(2), payment_type: form.payment_type === 'unpaid' ? 'full' : form.payment_type })}
-                      className="w-full flex justify-between items-center px-5 py-4 rounded-xl font-bold text-white text-base"
-                      style={{ background: '#2E6B8A' }}
-                    >
-                      <span>💵 Cash / Check</span>
-                      <span>${(cashTotal / 100).toFixed(2)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, amount_paid: (total / 100).toFixed(2), payment_type: form.payment_type === 'unpaid' ? 'full' : form.payment_type })}
-                      className="w-full flex justify-between items-center px-5 py-4 rounded-xl font-bold text-white text-base"
-                      style={{ background: '#1e3f52' }}
-                    >
-                      <span>💳 Card</span>
-                      <span>${(total / 100).toFixed(2)}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+
 
               {/* Price Override */}
               <div className="md:col-span-2">
