@@ -275,9 +275,20 @@ export default function FolioPage() {
       setTerminalStatus('waiting')
       setShowPayment(false)
       let attempts = 0
+      const prevCount = payments.length
       const interval = setInterval(async () => {
         attempts++
-        await loadFolioData(folio.id)
+        const [{ data: items }, { data: pmts }] = await Promise.all([
+          supabase.from('folio_line_items').select('*').eq('folio_id', folio.id).order('charged_at'),
+          supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at'),
+        ])
+        setLineItems(items || [])
+        setPayments(pmts || [])
+        if (pmts && pmts.length > prevCount) {
+          clearInterval(interval)
+          setTerminalStatus('completed')
+          setTimeout(() => setTerminalStatus(''), 3000)
+        }
         if (attempts >= 60) { clearInterval(interval); setTerminalStatus('timeout') }
       }, 3000)
     } else {
@@ -753,6 +764,12 @@ function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string,
 
   return (
     <div style={{ marginTop: 12, display: 'flex', gap: 8, flexDirection: 'column' }}>
+      <button
+        onClick={() => window.location.href = '/admin/folio/new'}
+        style={{ width: '100%', background: '#15803d', color: '#fff', border: 'none', borderRadius: 8, padding: '12px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
+      >
+        + New Sale
+      </button>
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={sendReceipt}
