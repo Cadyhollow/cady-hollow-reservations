@@ -115,7 +115,7 @@ export default function ManualBookingPage() {
   }, 0)
 
   const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
-  const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
+  const total = calculatedTotal
 
   // Card-only fees (excluded from cash total)
   const cardOnlyFees = enabledApplicableFees.filter(f => f.card_only)
