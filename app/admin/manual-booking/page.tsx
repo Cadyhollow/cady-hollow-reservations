@@ -241,7 +241,7 @@ export default function ManualBookingPage() {
       notes: '',
     })
     setSelectedAddons({})
-    setPriceOverride('')
+    setBalanceDue('')
   }
 
   return (
@@ -521,22 +521,12 @@ export default function ManualBookingPage() {
                       </div>
                     )
                   })}
-                  {priceOverride !== '' && (
-                    <div className="flex justify-between text-amber-600 text-xs pt-1">
-                      <span>⚡ Price overridden</span>
-                      <span>was ${(calculatedTotal / 100).toFixed(2)}</span>
-                    </div>
-                  )}
+
                   <div className="flex justify-between font-bold text-gray-900 border-t border-gray-100 pt-2 mt-2">
                     <span>Total</span>
                     <span>${(total / 100).toFixed(2)}</span>
                   </div>
-                  {form.payment_type === 'deposit' && depositAmount > 0 && (
-                    <div className="flex justify-between text-green-700 text-xs pt-1">
-                      <span>Deposit due today</span>
-                      <span>${(depositAmount / 100).toFixed(2)}</span>
-                    </div>
-                  )}
+
                 </div>
               </div>
             )}
