@@ -470,7 +470,7 @@ export default function FolioPage() {
           )}
 
           {/* Receipt buttons */}
-          {(lineItems.length > 0 || payments.length > 0) && (
+          {payments.length > 0 && (
             <ReceiptButtons folioId={folio?.id || ''} guestEmail={folio?.guest_email || reservation?.guest_email || ''} receiptType='reservation' />
           )}
         </div>
