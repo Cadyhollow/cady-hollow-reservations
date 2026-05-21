@@ -38,7 +38,7 @@ export default function ManualBookingPage() {
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<Fee[]>([])
   const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
-  const [priceOverride, setPriceOverride] = useState('')
+  const [balanceDue, setBalanceDue] = useState('')
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -170,10 +170,10 @@ export default function ManualBookingPage() {
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
-        total_price: total,
-        fees_total: Math.round(cardOnlyFeesTotal),
+        total_price: amountPaid + Math.round(parseFloat(balanceDue || '0') * 100),
+        fees_total: 0,
         amount_paid: amountPaid,
-        payment_type: form.payment_type,
+        payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
         notes: form.notes,
         addonItems,
       }),
@@ -423,58 +423,32 @@ export default function ManualBookingPage() {
           {/* Payment */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment</h3>
+            <p className="text-xs text-gray-500 mb-4">Enter what was collected today and what the guest will owe at arrival. Balance due is the cash price — card adds 3% at check-in.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type</label>
-                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.payment_type} onChange={e => setForm({ ...form, payment_type: e.target.value })}>
-                  <option value="full">Paid in Full</option>
-                  <option value="deposit">Deposit Only</option>
-                  <option value="unpaid">Pay on Arrival</option>
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid Today ($)</label>
+                <input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
+                <p className="text-xs text-gray-400 mt-1">Card total: ${(total / 100).toFixed(2)} · Cash total: ${(cashTotal / 100).toFixed(2)}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid ($)</label>
-                <input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
-                {form.payment_type === 'deposit' && depositAmount > 0 && (
-                  <p className="text-xs text-green-700 mt-1">
-                    Suggested deposit: ${(depositAmount / 100).toFixed(2)} (1 night + fees)
-                  </p>
-                )}
-                {form.payment_type === 'full' && total > 0 && (
-                  <p className="text-xs text-green-700 mt-1">
-                    Full amount: ${(total / 100).toFixed(2)}
-                  </p>
-                )}
-              </div>
-
-
-              {/* Price Override */}
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Override Total Price ($)
-                  <span className="ml-2 text-xs text-gray-400 font-normal">Optional — use for special deals or discounts</span>
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Balance Due at Arrival ($)</label>
                 <input
                   type="number"
+                  min="0"
+                  step="0.01"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder={`Calculated: $${(calculatedTotal / 100).toFixed(2)}`}
-                  value={priceOverride}
-                  onChange={e => setPriceOverride(e.target.value)}
+                  placeholder={(cashTotal / 100).toFixed(2)}
+                  value={balanceDue}
+                  onChange={e => setBalanceDue(e.target.value)}
                 />
-                {priceOverride !== '' && (
-                  <button onClick={() => setPriceOverride('')} className="text-xs text-red-500 hover:text-red-700 mt-1">
-                    ✕ Clear override — revert to calculated total
-                  </button>
-                )}
+                <p className="text-xs text-gray-400 mt-1">Suggested: ${(cashTotal / 100).toFixed(2)} cash. Card adds 3% at check-in.</p>
               </div>
-
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
                 <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Any notes about this booking..." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
               </div>
             </div>
           </div>
-
           <button onClick={handleSave} disabled={saving} className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors">
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
           </button>
