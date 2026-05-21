@@ -81,7 +81,7 @@ export default function ManualBookingPage() {
 
   function toggleFee(name: string) {
     setEnabledFees(prev => ({ ...prev, [name]: !prev[name] }))
-    setPriceOverride('')
+    setBalanceDue('')
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
