@@ -68,15 +68,19 @@ export async function POST(request: NextRequest) {
     const checkoutId = squareData.checkout.id
 
     // Save terminal checkout record
-    await supabase.from('terminal_checkouts').insert({
-      folio_id: folioId,
-      square_checkout_id: checkoutId,
-      amount: amount,
-      surcharge_amount: surchargeAmount || 0,
-      status: 'pending',
-      device_id: deviceId,
-      note: note || '',
-    })
+    const { error: insertError } = await supabase.from('terminal_checkouts').insert({
+  folio_id: folioId,
+  square_checkout_id: checkoutId,
+  amount: amount,
+  surcharge_amount: surchargeAmount || 0,
+  status: 'pending',
+  device_id: deviceId,
+  note: note || '',
+})
+
+if (insertError) {
+  console.error('Failed to insert terminal_checkout:', insertError.message)
+}
 
     return NextResponse.json({
       success: true,
