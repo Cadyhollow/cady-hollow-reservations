@@ -716,7 +716,7 @@ export default function WalkInBookingPage() {
         <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#2E6B8A', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60, display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#fff', animation: 'pulse 1s infinite' }} />
           Waiting for customer to tap card on Terminal...
-          <style>{\`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }\`}</style>
+          <style>{"\@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }"}</style>
         </div>
       )}
       {terminalStatus === 'completed' && (
