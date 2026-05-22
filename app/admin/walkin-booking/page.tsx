@@ -86,6 +86,9 @@ export default function WalkInBookingPage() {
   const [cashTendered, setCashTendered] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
+  const [terminalDeviceId, setTerminalDeviceId] = useState('')
+  const [terminalStatus, setTerminalStatus] = useState('')
+  const [sendingToTerminal, setSendingToTerminal] = useState(false)
   const [priceOverride, setPriceOverride] = useState('')
   const [adultsDisplay, setAdultsDisplay] = useState('2')
   const [childrenDisplay, setChildrenDisplay] = useState('')
@@ -111,13 +114,14 @@ export default function WalkInBookingPage() {
     const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent').single(),
+      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
       supabase.from('product_categories').select('name').order('display_order'),
       supabase.from('fees').select('*').eq('is_active', true),
     ])
     setSites(siteData || [])
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
+    if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
     if (feesData) {
       const site = siteData?.[0]
@@ -251,6 +255,49 @@ export default function WalkInBookingPage() {
     if (!confirm('Remove this item?')) return
     await supabase.from('folio_line_items').delete().eq('id', id)
     await loadFolioData(folioId)
+  }
+
+  async function sendToTerminal() {
+    if (!folioId) return
+    const surchargeAmount = cardSurcharge > 0 ? Math.round(totalDue * (cardSurcharge / 100)) : 0
+    const totalAmount = totalDue + surchargeAmount
+    setSendingToTerminal(true)
+    setTerminalStatus('')
+    const res = await fetch('/api/terminal/charge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folioId,
+        amount: totalAmount,
+        surchargeAmount,
+        note: form.guest_name + (selectedSite ? ' · Site ' + selectedSite.site_number : ''),
+      }),
+    })
+    const data = await res.json()
+    setSendingToTerminal(false)
+    if (data.success) {
+      setTerminalStatus('waiting')
+      setShowPayment(false)
+      let attempts = 0
+      const prevCount = payments.length
+      const interval = setInterval(async () => {
+        attempts++
+        const [{ data: items }, { data: pmts }] = await Promise.all([
+          supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at'),
+          supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at'),
+        ])
+        setLineItems(items || [])
+        setPayments(pmts || [])
+        if (pmts && pmts.length > prevCount) {
+          clearInterval(interval)
+          setTerminalStatus('completed')
+          setTimeout(() => setTerminalStatus(''), 3000)
+        }
+        if (attempts >= 60) { clearInterval(interval); setTerminalStatus('timeout') }
+      }, 3000)
+    } else {
+      setTerminalStatus('error: ' + (data.error || 'Failed to send to Terminal'))
+    }
   }
 
   async function collectPayment() {
@@ -601,6 +648,24 @@ export default function WalkInBookingPage() {
                 </button>
               ))}
             </div>
+            {paymentMethod === 'card' && terminalDeviceId ? (
+              <div style={{ background: '#e8f2f7', border: '1px solid #b8d4e8', borderRadius: 10, padding: '1.25rem', marginBottom: 16, textAlign: 'center' }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>💳</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: '#1e3f52', marginBottom: 4 }}>Send to Square Terminal</div>
+                <div style={{ fontSize: 13, color: '#4a6275', marginBottom: 12 }}>
+                  Amount: <strong>${(totalDue/100).toFixed(2)}</strong>
+                  {cardSurcharge > 0 && <span> + {cardSurcharge}% fee = <strong>${((totalDue + Math.round(totalDue * cardSurcharge / 100))/100).toFixed(2)}</strong></span>}
+                </div>
+                <button
+                  onClick={() => { setShowPayment(false); sendToTerminal() }}
+                  disabled={sendingToTerminal}
+                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 28px', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
+                >
+                  {sendingToTerminal ? 'Sending...' : 'Send to Terminal →'}
+                </button>
+              </div>
+            ) : (
+              <>
             <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
@@ -642,7 +707,26 @@ export default function WalkInBookingPage() {
             <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
               {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
             </button>
+              </>
+            )}
           </div>
+        </div>
+      )}
+      {terminalStatus === 'waiting' && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#2E6B8A', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#fff', animation: 'pulse 1s infinite' }} />
+          Waiting for customer to tap card on Terminal...
+          <style>{\`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }\`}</style>
+        </div>
+      )}
+      {terminalStatus === 'completed' && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#15803d', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60 }}>
+          ✓ Card payment completed!
+        </div>
+      )}
+      {terminalStatus.startsWith('error') && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#dc2626', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 14, fontWeight: 600, zIndex: 60 }}>
+          {terminalStatus}
         </div>
       )}
     </div>
