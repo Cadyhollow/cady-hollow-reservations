@@ -21,6 +21,7 @@ type LineItem = {
   charged_at: string
   product_id: string | null
   voided: boolean
+  notes: string | null
 }
 
 type Payment = {
@@ -164,20 +165,21 @@ export default function FolioPage() {
     }
   }
 
-  async function addProduct(product: Product, overridePrice?: number) {
+  async function addProduct(product: Product, overridePrice?: number, qty: number = 1, notes: string = '') {
     if (!folio) return
     const price = overridePrice ?? product.price
     const taxAmount = product.tax_class === 'standard' ? Math.round(price * 0.06) : 0
-    const lineTotal = price + taxAmount
+    const lineTotal = (price + taxAmount) * qty
     await supabase.from('folio_line_items').insert({
       folio_id: folio.id,
       product_id: product.id,
       description: product.name,
-      quantity: 1,
+      quantity: qty,
       unit_price: price,
       tax_amount: taxAmount,
       line_total: lineTotal,
       category: product.category,
+      notes: notes.trim() || null,
     })
     await loadFolioData(folio.id)
     setActiveTab('tab')
@@ -414,7 +416,8 @@ export default function FolioPage() {
               {activeItems.map((item, i) => (
                 <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < activeItems.length - 1 ? '1px solid #f9fafb' : 'none' }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}</div>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
+                    {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>{item.notes}</div>}
                     {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
                   </div>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>${(item.line_total/100).toFixed(2)}</div>
@@ -702,22 +705,58 @@ export default function FolioPage() {
   )
 }
 
-function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any, price?: number) => void }) {
+function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any, price?: number, qty?: number, notes?: string) => void }) {
   const [customPrice, setCustomPrice] = useState('')
+  const [qty, setQty] = useState(1)
+  const [notes, setNotes] = useState('')
+
+  function handleAdd(overridePrice?: number) {
+    onAdd(product, overridePrice, qty, notes)
+    setQty(1)
+    setNotes('')
+    setCustomPrice('')
+  }
+
+  const tileStyle: React.CSSProperties = { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }
+
+  const qtyRow = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+      <button
+        onClick={() => setQty(q => Math.max(1, q - 1))}
+        style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', flexShrink: 0 }}
+      >−</button>
+      <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 700, fontSize: 14 }}>{qty}</span>
+      <button
+        onClick={() => setQty(q => q + 1)}
+        style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', flexShrink: 0 }}
+      >+</button>
+      <input
+        placeholder="Note (optional)"
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        style={{ flex: 1, border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 11, color: '#374151', minWidth: 0 }}
+      />
+    </div>
+  )
+
   if (!product.variable_price) {
     return (
-      <button
-        onClick={() => onAdd(product)}
-        style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '14px 10px', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4 }}
-      >
-        <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
-        <div style={{ fontSize: 15, color: '#15803d', fontWeight: 700 }}>${(product.price/100).toFixed(2)}</div>
-        {product.tax_class === 'standard' && <div style={{ fontSize: 10, color: '#9ca3af' }}>+ tax</div>}
-      </button>
+      <div style={tileStyle}>
+        <button
+          onClick={() => handleAdd()}
+          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
+          <div style={{ fontSize: 15, color: '#15803d', fontWeight: 700 }}>${(product.price/100).toFixed(2)}</div>
+          {product.tax_class === 'standard' && <div style={{ fontSize: 10, color: '#9ca3af' }}>+ tax</div>}
+        </button>
+        {qtyRow}
+      </div>
     )
   }
+
   return (
-    <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={tileStyle}>
       <div style={{ fontWeight: 600, fontSize: 13 }}>{product.name}</div>
       <div style={{ position: 'relative' }}>
         <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
@@ -731,8 +770,9 @@ function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any,
           style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 6px 6px 20px', fontSize: 13, boxSizing: 'border-box' }}
         />
       </div>
+      {qtyRow}
       <button
-        onClick={() => { if (customPrice) { onAdd(product, Math.round(parseFloat(customPrice) * 100)); setCustomPrice('') } }}
+        onClick={() => { if (customPrice) handleAdd(Math.round(parseFloat(customPrice) * 100)) }}
         disabled={!customPrice || parseFloat(customPrice) <= 0}
         style={{ background: customPrice && parseFloat(customPrice) > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 6, padding: '6px', fontSize: 12, fontWeight: 600, cursor: customPrice ? 'pointer' : 'default' }}
       >
