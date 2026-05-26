@@ -299,7 +299,15 @@ function ReservationsPageInner() {
     const matchesStatus = statusFilter === 'all' || res.status === statusFilter
     return matchesSearch && matchesStatus
   }).sort((a, b) => {
-    if (sortBy === 'arrival_date') return a.arrival_date.localeCompare(b.arrival_date)
+    if (sortBy === 'arrival_date') {
+      const today = new Date().toISOString().split('T')[0]
+      const aUpcoming = a.arrival_date >= today
+      const bUpcoming = b.arrival_date >= today
+      if (aUpcoming && !bUpcoming) return -1
+      if (!aUpcoming && bUpcoming) return 1
+      if (aUpcoming && bUpcoming) return a.arrival_date.localeCompare(b.arrival_date)
+      return b.arrival_date.localeCompare(a.arrival_date)
+    }
     if (sortBy === 'created_at') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     if (sortBy === 'guest_name') return a.guest_name.localeCompare(b.guest_name)
     return 0
