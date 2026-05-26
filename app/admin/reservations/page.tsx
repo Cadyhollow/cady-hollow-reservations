@@ -73,6 +73,7 @@ function ReservationsPageInner() {
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([])
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  const [sortBy, setSortBy] = useState<'arrival_date' | 'created_at' | 'guest_name'>('arrival_date')
 
   // Edit mode state
   const [editing, setEditing] = useState(false)
@@ -262,9 +263,21 @@ function ReservationsPageInner() {
   }
 
   async function handleCancel(res: Reservation) {
-    if (!confirm(`Cancel reservation for ${res.guest_name}? This cannot be undone.`)) return
+    if (!confirm(`Cancel reservation for ${res.guest_name}?\n\nThis marks it as cancelled but keeps the record in your history.`)) return
     await supabase.from('reservations').update({ status: 'cancelled' }).eq('id', res.id)
     toast.success('Reservation cancelled.')
+    fetchReservations()
+    setSelected(null)
+  }
+
+  async function handleDelete(res: Reservation) {
+    if (!confirm(`PERMANENTLY DELETE this reservation for ${res.guest_name}?\n\nThis cannot be undone and will remove all records. Only use this for test data or duplicates.`)) return
+    const secondConfirm = prompt(`Type DELETE to confirm permanently removing this reservation:`)
+    if (secondConfirm !== 'DELETE') { toast.error('Deletion cancelled.'); return }
+    await supabase.from('reservation_addons').delete().eq('reservation_id', res.id)
+    await supabase.from('folios').delete().eq('reservation_id', res.id)
+    await supabase.from('reservations').delete().eq('id', res.id)
+    toast.success('Reservation permanently deleted.')
     fetchReservations()
     setSelected(null)
   }
@@ -285,6 +298,11 @@ function ReservationsPageInner() {
       res.sites?.site_number.includes(search)
     const matchesStatus = statusFilter === 'all' || res.status === statusFilter
     return matchesSearch && matchesStatus
+  }).sort((a, b) => {
+    if (sortBy === 'arrival_date') return a.arrival_date.localeCompare(b.arrival_date)
+    if (sortBy === 'created_at') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    if (sortBy === 'guest_name') return a.guest_name.localeCompare(b.guest_name)
+    return 0
   })
 
   const statusColor = (status: string) => ({
@@ -350,6 +368,16 @@ function ReservationsPageInner() {
           <option value="pending">Pending</option>
           <option value="manual">Manual</option>
           <option value="cancelled">Cancelled</option>
+        </select>
+        <select
+          className="border border-gray-200 rounded-lg px-4 py-2.5 text-sm shrink-0"
+          style={{ width: '180px' }}
+          value={sortBy}
+          onChange={e => setSortBy(e.target.value as any)}
+        >
+          <option value="arrival_date">Sort: Arrival Date</option>
+          <option value="created_at">Sort: Date Booked</option>
+          <option value="guest_name">Sort: Guest Name</option>
         </select>
       </div>
 
@@ -512,6 +540,17 @@ function ReservationsPageInner() {
                       className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
                     >
                       Cancel
+                    </button>
+                  </div>
+                )}
+                {selected.status === 'cancelled' && (
+                  <div className="pt-3">
+                    <div className="text-xs text-gray-400 mb-2 text-center">This reservation is cancelled and kept for records.</div>
+                    <button
+                      onClick={() => handleDelete(selected)}
+                      className="w-full bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700"
+                    >
+                      🗑 Permanently Delete
                     </button>
                   </div>
                 )}
