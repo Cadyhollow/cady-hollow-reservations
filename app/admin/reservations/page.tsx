@@ -237,8 +237,9 @@ function ReservationsPageInner() {
       ? Math.round(parseFloat(overrideTotalValue) * 100)
       : newTotal
 
+    const prevTotal = newTotal > 0 ? newTotal : selected.total_price
     const overrideNote = overrideTotal && overrideTotalValue
-      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Auto-calc: $${(newTotal/100).toFixed(2)} → Manual: $${parseFloat(overrideTotalValue).toFixed(2)}`
+      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Previous total: $${(prevTotal/100).toFixed(2)} → New total: $${parseFloat(overrideTotalValue).toFixed(2)}`
       : ''
 
     const { error } = await supabase.from('reservations').update({
