@@ -111,6 +111,24 @@ export default function ReportsPage() {
     }
   }
 
+  // For stay-date mode: extend end to cover the full period (e.g. all of this year)
+  // so future reservations are included. Payments still use today as the cutoff.
+  function getStayDateEnd(range: string, customE: string) {
+    const now = new Date()
+    if (range === 'custom' && customE) return customE
+    if (range === 'this_month') return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
+    if (range === 'last_month') return new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0]
+    if (range === 'this_year') return new Date(now.getFullYear(), 11, 31).toISOString().split('T')[0]
+    if (range === 'last_year') return new Date(now.getFullYear() - 1, 11, 31).toISOString().split('T')[0]
+    if (range === 'this_week') {
+      const day = now.getDay()
+      const sun = new Date(now)
+      sun.setDate(now.getDate() + (day === 0 ? 0 : 7 - day))
+      return sun.toISOString().split('T')[0]
+    }
+    return now.toISOString().split('T')[0]
+  }
+
   async function fetchAll() {
     setLoading(true)
     setTxLoading(true)
@@ -119,12 +137,14 @@ export default function ReportsPage() {
     const endISO = end + 'T23:59:59'
 
     // ── Reservations by stay date ──────────────────────────────────────────
+    const stayEnd = getStayDateEnd(dateRange, customEnd)
+
     const { data: resData } = await supabase
       .from('reservations')
       .select('id, arrival_date, departure_date, total_price, status, site_id, sites(site_number, site_type)')
       .neq('status', 'cancelled')
       .gte('arrival_date', start)
-      .lte('arrival_date', end)
+      .lte('arrival_date', stayEnd)
       .order('arrival_date')
 
     const { data: cancelledData } = await supabase
@@ -132,7 +152,7 @@ export default function ReportsPage() {
       .select('id', { count: 'exact', head: true })
       .eq('status', 'cancelled')
       .gte('arrival_date', start)
-      .lte('arrival_date', end)
+      .lte('arrival_date', stayEnd)
 
     // ── All payments (reservation + POS) in date range ────────────────────
     const { data: pmtData } = await supabase
