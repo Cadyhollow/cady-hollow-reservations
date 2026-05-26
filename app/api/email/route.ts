@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
               ${hasExtraGuests ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Extra guest fees</td><td style="padding:6px 0;font-size:14px;">$${(extraGuestFee / 100).toFixed(2)}</td></tr>` : ''}
               ${addonRowsLight}
               ${hasDiscount ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td><td style="padding:6px 0;font-size:14px;color:#166534;">-$${(discountAmount / 100).toFixed(2)}</td></tr>` : ''}
-              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Paid</td><td style="padding:6px 0;font-size:14px;color:#166534;font-weight:bold;">$${(amountPaid / 100).toFixed(2)} (${paymentType === 'deposit' ? 'Deposit' : paymentType === 'unpaid' ? 'Pay on Arrival' : 'Full Payment'})</td></tr>
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Paid</td><td style="padding:6px 0;font-size:14px;color:#166534;font-weight:bold;">$${(amountPaid / 100).toFixed(2)} (${paymentType === 'deposit' ? 'Deposit' : paymentType === 'unpaid' ? 'Pay on Arrival' : paymentType === 'full' ? 'Full Payment' : amountPaid >= totalPrice ? 'Full Payment' : amountPaid > 0 ? 'Deposit' : 'Pay on Arrival'})</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Total</td><td style="padding:6px 0;font-size:14px;font-weight:bold;">$${(totalPrice / 100).toFixed(2)}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Confirmation #</td><td style="padding:6px 0;font-size:14px;">${confirmationNumber}</td></tr>
             </table>
