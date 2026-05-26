@@ -490,10 +490,10 @@ export default function FolioPage() {
         </div>
 
         {/* Right: Product picker */}
-        <div style={{ width: 'min(420px, 100%)', background: '#C9D2D9', borderLeft: '1px solid #b8c4cc', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
+        <div style={{ flex: 1, background: '#C9D2D9', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           {/* Category or Items view */}
           {activeCategory === '' ? (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, alignContent: 'start' }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#4a6275', marginBottom: 4 }}>Select a category</div>
               {categories.map(cat => (
                 <button
@@ -519,7 +519,7 @@ export default function FolioPage() {
                 </button>
                 <span style={{ fontWeight: 700, fontSize: 14, color: '#1e3f52' }}>{activeCategory}</span>
               </div>
-              <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignContent: 'start' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, alignContent: 'start' }}>
                 {filteredProducts.map(product => (
                   <VariableProductTile key={product.id} product={product} onAdd={addProduct} />
                 ))}
