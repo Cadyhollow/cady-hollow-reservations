@@ -92,8 +92,10 @@ export default function FoliosPage() {
     setLoading(false)
   }
 
-  // Search filter
+  // Search filter — also hide empty folios (no payments, no items, no reservation balance)
   const filtered = folios.filter(f => {
+    const hasActivity = f.payments_total > 0 || f.items_total > 0 || (f.reservations && f.reservations.total_price > 0)
+    if (!hasActivity) return false
     if (!search.trim()) return true
     const q = search.toLowerCase()
     const nameMatch = (f.guest_name || '').toLowerCase().includes(q)
