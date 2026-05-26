@@ -88,6 +88,8 @@ function ReservationsPageInner() {
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
+  const [overrideTotal, setOverrideTotal] = useState(false)
+  const [overrideTotalValue, setOverrideTotalValue] = useState('')
 
   useEffect(() => {
     fetchReservations()
@@ -199,6 +201,8 @@ function ReservationsPageInner() {
     if (res.arrival_date && res.departure_date) {
       fetchBookedSites(res.arrival_date, res.departure_date, res.id)
     }
+    setOverrideTotal(false)
+    setOverrideTotalValue('')
     setEditing(true)
   }
 
@@ -229,15 +233,23 @@ function ReservationsPageInner() {
     const existingNotes = selected.notes || ''
     const updatedNotes = existingNotes ? `${existingNotes}\n${auditNote}` : auditNote
 
+    const finalTotal = overrideTotal && overrideTotalValue
+      ? Math.round(parseFloat(overrideTotalValue) * 100)
+      : newTotal
+
+    const overrideNote = overrideTotal && overrideTotalValue
+      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Auto-calc: $${(newTotal/100).toFixed(2)} → Manual: $${parseFloat(overrideTotalValue).toFixed(2)}`
+      : ''
+
     const { error } = await supabase.from('reservations').update({
       site_id: editForm.site_id,
       arrival_date: editForm.arrival_date,
       departure_date: editForm.departure_date,
       num_adults: editForm.num_adults,
       num_children: editForm.num_children,
-      total_price: newTotal,
+      total_price: finalTotal,
       amount_paid: Math.round(parseFloat(editForm.amount_paid) * 100),
-      notes: updatedNotes,
+      notes: updatedNotes + overrideNote,
     }).eq('id', selected.id)
 
     if (error) { toast.error('Error saving changes.'); setSaving(false); return }
@@ -680,6 +692,48 @@ function ReservationsPageInner() {
                     </div>
                   </div>
                 )}
+
+                {/* Override total */}
+                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={overrideTotal}
+                      onChange={e => {
+                        setOverrideTotal(e.target.checked)
+                        if (e.target.checked && editNights > 0 && editSite) {
+                          setOverrideTotalValue((editTotal / 100).toFixed(2))
+                        } else {
+                          setOverrideTotalValue('')
+                        }
+                      }}
+                      className="w-4 h-4 accent-green-700"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Override total price</span>
+                  </label>
+                  {overrideTotal && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1">Enter the actual total (e.g. what was agreed at booking)</p>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="w-full border border-green-300 rounded-lg pl-7 pr-3 py-2 text-sm font-semibold"
+                          value={overrideTotalValue}
+                          onChange={e => setOverrideTotalValue(e.target.value)}
+                        />
+                      </div>
+                      {overrideTotalValue && (
+                        <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                          Balance due will be: <strong>${Math.max(0, parseFloat(overrideTotalValue || '0') - parseFloat(editForm.amount_paid || '0')).toFixed(2)}</strong>
+                          {' · '}An audit note will be added automatically.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex gap-2 pt-2">
                   <button onClick={handleSaveEdit} disabled={saving}
