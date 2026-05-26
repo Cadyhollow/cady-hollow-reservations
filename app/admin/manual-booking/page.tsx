@@ -170,7 +170,7 @@ export default function ManualBookingPage() {
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
-        total_price: amountPaid + Math.round(parseFloat(balanceDue || '0') * 100),
+        total_price: balanceDue ? amountPaid + Math.round(parseFloat(balanceDue) * 100) : calculatedTotal,
         fees_total: 0,
         amount_paid: amountPaid,
         payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
