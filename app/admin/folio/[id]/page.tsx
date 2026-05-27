@@ -369,15 +369,6 @@ export default function FolioPage() {
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading folio...</div>
 
-  // Gate walk-up sale by pos_enabled
-  useEffect(() => {
-    if (isNew) {
-      supabase.from('settings').select('pos_enabled').single().then(({ data }) => {
-        if (!data?.pos_enabled) router.replace('/admin')
-      })
-    }
-  }, [isNew])
-
   if (isNew && !folio) {
     return (
       <div style={{ padding: '2rem', maxWidth: 480, margin: '0 auto', fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
