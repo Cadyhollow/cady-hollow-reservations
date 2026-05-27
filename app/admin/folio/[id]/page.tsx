@@ -124,6 +124,7 @@ export default function FolioPage() {
 
     if (isNew) { setLoading(false); return }
 
+    // First try: treat the ID as a reservation ID
     const { data: res } = await supabase.from('reservations').select('*').eq('id', reservationId).single()
     if (res) setReservation(res)
 
@@ -142,6 +143,13 @@ export default function FolioPage() {
       if (newFolio) {
         setFolio(newFolio)
         await loadFolioData(newFolio.id)
+      }
+    } else {
+      // Second try: treat the ID as a direct folio ID (walk-up folios)
+      const { data: directFolio } = await supabase.from('folios').select('*').eq('id', reservationId).single()
+      if (directFolio) {
+        setFolio(directFolio)
+        await loadFolioData(directFolio.id)
       }
     }
     setLoading(false)
