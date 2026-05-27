@@ -37,9 +37,14 @@ export async function POST(request: NextRequest) {
 
     const itemizedRows = otherCharges.map((item: any) => `
       <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}${item.charged_at ? ' · ' + new Date(item.charged_at).toLocaleDateString() : ''}</td>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}${item.charged_at ? ' · ' + new Date(item.charged_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}</td>
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>
       </tr>`).join('')
+
+    // Previous balance = total due minus this month's new charges
+    const newChargesTotal = electricAmount + otherCharges.reduce((s: number, i: any) => s + i.line_total, 0)
+    const previousBalance = totalBalance - newChargesTotal
+    const hasPreviousBalance = previousBalance > 0
 
     const html = `<!DOCTYPE html>
 <html>
@@ -65,12 +70,19 @@ export async function POST(request: NextRequest) {
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
     <h3 style="color:#ffffff;margin:0 0 16px;font-size:16px;">Account Statement</h3>
     <table style="width:100%;border-collapse:collapse;">
+      ${hasPreviousBalance ? `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Previous balance</td>
+        <td style="padding:6px 0;color:#FCA5A5;font-size:14px;font-weight:bold;text-align:right;">$${(previousBalance/100).toFixed(2)}</td>
+      </tr>
+      <tr><td colspan="2" style="padding:4px 0;border-top:1px solid #374151;"></td></tr>
+      ` : ''}
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${billingMonth} Electric</td>
         <td style="padding:6px 0;color:#FCD34D;font-size:14px;font-weight:bold;text-align:right;">$${(electricAmount/100).toFixed(2)}</td>
       </tr>
       ${itemizedRows}
-      ${otherCharges.length > 0 ? '<tr><td colspan="2" style="padding:8px 0 0;border-top:1px solid #374151;"></td></tr>' : ''}
+      <tr><td colspan="2" style="padding:8px 0 0;border-top:1px solid #374151;"></td></tr>
       <tr>
         <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">Total Balance Due</td>
         <td style="padding:8px 0 4px;color:${totalBalance === 0 ? '#4ADE80' : '#FCD34D'};font-size:16px;font-weight:bold;text-align:right;">
