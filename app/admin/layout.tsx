@@ -10,13 +10,26 @@ type NavItem = {
   name: string
   href: string
   icon: string
+  minPlan?: 'ridgeline' | 'summit'
 }
 
 type NavGroup = {
   label: string
   icon: string
   posOnly?: boolean
+  minPlan?: 'ridgeline' | 'summit'
   items: NavItem[]
+}
+
+// Plan hierarchy for comparison
+const PLAN_LEVELS: { [key: string]: number } = {
+  trailhead: 1,
+  ridgeline: 2,
+  summit: 3,
+}
+
+function planAtLeast(current: string, required: 'ridgeline' | 'summit'): boolean {
+  return (PLAN_LEVELS[current] || 1) >= (PLAN_LEVELS[required] || 99)
 }
 
 const navGroups: NavGroup[] = [
@@ -46,7 +59,7 @@ const navGroups: NavGroup[] = [
     label: 'Guests',
     icon: '👥',
     items: [
-      { name: 'Guest Folios', href: '/admin/folios', icon: '🗂️' },
+      { name: 'Guest Folios', href: '/admin/folios', icon: '🗂️', minPlan: 'summit' as const },
       { name: 'Guest Directory', href: '/admin/guests', icon: '📇' },
     ],
   },
@@ -55,9 +68,9 @@ const navGroups: NavGroup[] = [
     icon: '💰',
     items: [
       { name: 'Taxes & Fees', href: '/admin/fees', icon: '🧾' },
-      { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡' },
+      { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
-      { name: 'Reports', href: '/admin/reports', icon: '📊' },
+      { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
     ],
   },
   {
@@ -98,6 +111,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const [openGroup, setOpenGroup] = useState<string | null>(null)
 
+  const [plan, setPlan] = useState<string>('summit') // default to summit for Cady Hollow
+
   useEffect(() => {
     supabase
       .from('settings')
@@ -108,6 +123,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         if (data) {
           setSettings(data)
           setPosEnabled(!!data.pos_enabled)
+          if (data.plan) setPlan(data.plan)
         }
       })
   }, [])
@@ -126,7 +142,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     'rounded-none'
 
-  const visibleGroups = navGroups.filter(g => !g.posOnly || posEnabled)
+  const visibleGroups = navGroups.filter(g => (!g.posOnly || posEnabled) && (!g.minPlan || planAtLeast(plan, g.minPlan)))
 
   function toggleGroup(label: string) {
     setOpenGroup(prev => prev === label ? null : label)
@@ -217,7 +233,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               {/* Group items */}
               {open && (
                 <div className="mt-0.5 ml-2 pl-3 space-y-0.5" style={{ borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
-                  {group.items.map((item) => {
+                  {group.items.filter(item => !item.minPlan || planAtLeast(plan, item.minPlan) || posEnabled).map((item) => {
                     const itemActive = item.href === pathname ||
                       (item.href !== '/admin' && pathname.startsWith(item.href))
                     return (
