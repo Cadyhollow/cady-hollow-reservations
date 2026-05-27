@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
         idempotency_key: `admin-card-${folioId}-${Date.now()}`,
         amount_money: { amount, currency: 'USD' },
         location_id: process.env.SQUARE_LOCATION_ID,
-        note: guestName ? `${guestName} · Manual entry` : 'Admin manual card entry',
+          note: (guestName ? `${guestName.slice(0, 28)} Manual entry` : 'Admin manual card entry').slice(0, 45),
       }),
     })
 
