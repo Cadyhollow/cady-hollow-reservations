@@ -70,6 +70,7 @@ const navGroups: NavGroup[] = [
       { name: 'Taxes & Fees', href: '/admin/fees', icon: '🧾' },
       { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
+      { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
       { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
     ],
   },
