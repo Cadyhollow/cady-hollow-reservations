@@ -62,11 +62,11 @@ export default function ElectricBillingPage() {
       .from('guests')
       .select('*')
       .eq('is_seasonal', true)
-      .order('site_number', { ascending: true })
 
-    if (!guests || guests.length === 0) { setLoading(false); return }
+    const sortedGuests = (guests || []).sort((a, b) => parseInt(a.site_number) - parseInt(b.site_number))
+    if (sortedGuests.length === 0) { setLoading(false); return }
 
-    const rows: CamperRow[] = await Promise.all(guests.map(async (guest: Guest) => {
+    const rows: CamperRow[] = await Promise.all(sortedGuests.map(async (guest: Guest) => {
       const { data: folio } = await supabase
         .from('folios')
         .select('id')
