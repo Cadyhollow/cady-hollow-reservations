@@ -49,8 +49,15 @@ export default function TransactionsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [lineItems, setLineItems] = useState<{ [folioId: string]: LineItem[] }>({})
   const [loadingItems, setLoadingItems] = useState<string | null>(null)
+  const [folioIdsByItem, setFolioIdsByItem] = useState<Set<string>>(new Set())
+  const [searchingItems, setSearchingItems] = useState(false)
 
   useEffect(() => { fetchPayments() }, [dateRange])
+
+  useEffect(() => {
+    const timer = setTimeout(() => { searchLineItems(search) }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
 
   function getDateBounds() {
     const now = new Date()
@@ -174,6 +181,18 @@ export default function TransactionsPage() {
     setLoading(false)
   }
 
+  // Search line items by description when query doesn't match payment fields
+  async function searchLineItems(q: string) {
+    if (!q.trim()) { setFolioIdsByItem(new Set()); return }
+    setSearchingItems(true)
+    const { data } = await supabase
+      .from('folio_line_items')
+      .select('folio_id')
+      .ilike('description', '%' + q + '%')
+    setFolioIdsByItem(new Set((data || []).map((r: any) => r.folio_id)))
+    setSearchingItems(false)
+  }
+
   async function loadLineItems(folioId: string) {
     if (lineItems[folioId]) return // already loaded
     setLoadingItems(folioId)
@@ -224,7 +243,8 @@ export default function TransactionsPage() {
       (p.amount / 100).toFixed(2).includes(q) ||
       p.method.toLowerCase().includes(q) ||
       p.note.toLowerCase().includes(q) ||
-      p.folio_type.toLowerCase().includes(q)
+      p.folio_type.toLowerCase().includes(q) ||
+      (p.folio_id && folioIdsByItem.has(p.folio_id)) // match by line item description
     const matchMethod = methodFilter === 'all' || p.method === methodFilter
     const matchType = typeFilter === 'all' ||
       (typeFilter === 'reservation' && p.folio_type === 'reservation') ||
@@ -301,14 +321,19 @@ export default function TransactionsPage() {
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center mb-4">
         <div className="relative flex-1" style={{ minWidth: 200 }}>
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+            {searchingItems ? '⏳' : '🔍'}
+          </span>
           <input
             type="text"
-            placeholder="Search by name, amount, method, or note..."
+            placeholder="Search by name, amount, method, note, or item (e.g. firewood)..."
             className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-sm"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+          )}
         </div>
         <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={methodFilter} onChange={e => setMethodFilter(e.target.value)}>
           <option value="all">All Methods</option>
