@@ -112,6 +112,7 @@ export default function FolioPage() {
   const [refundReason, setRefundReason] = useState('')
   const [processingRefund, setProcessingRefund] = useState(false)
   const [refundError, setRefundError] = useState('')
+  const [refundSuccess, setRefundSuccess] = useState(false)
 
   useEffect(() => { init() }, [reservationId])
 
@@ -333,9 +334,13 @@ export default function FolioPage() {
     const data = await res.json()
     setProcessingRefund(false)
     if (data.success) {
-      setShowRefund(false)
-      setRefundPayment(null)
+      setRefundSuccess(true)
       await loadFolioData(folio.id)
+      setTimeout(() => {
+        setShowRefund(false)
+        setRefundPayment(null)
+        setRefundSuccess(false)
+      }, 3000)
     } else {
       setRefundError(data.error || 'Refund failed. Please try again.')
     }
@@ -728,13 +733,21 @@ export default function FolioPage() {
             <label style={ml}>Reason</label>
             <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. Cancellation — outside 7 days' value={refundReason} onChange={e => setRefundReason(e.target.value)} />
             {refundError && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#dc2626' }}>{refundError}</div>}
-            <button
-              onClick={processRefund}
-              disabled={processingRefund || !refundAmount || parseFloat(refundAmount) <= 0}
-              style={{ width: '100%', background: processingRefund || !refundAmount ? '#d1d5db' : '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
-            >
-              {processingRefund ? 'Processing...' : `Issue Refund · $${refundAmount || '0.00'}`}
-            </button>
+            {refundSuccess ? (
+              <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#15803d', marginBottom: 6 }}>Refund Successful!</div>
+                <div style={{ fontSize: 14, color: '#6b7280' }}>${refundAmount} has been refunded{refundPayment?.method === 'card' ? ' to the card' : ' — return cash to guest'}</div>
+              </div>
+            ) : (
+              <button
+                onClick={processRefund}
+                disabled={processingRefund || !refundAmount || parseFloat(refundAmount) <= 0}
+                style={{ width: '100%', background: processingRefund || !refundAmount ? '#d1d5db' : '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+              >
+                {processingRefund ? 'Processing...' : `Issue Refund · $${refundAmount || '0.00'}`}
+              </button>
+            )}
             {refundPayment.method !== 'card' && (
               <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
                 Cash/check refunds are recorded here. Please return ${refundAmount} to the guest manually.
