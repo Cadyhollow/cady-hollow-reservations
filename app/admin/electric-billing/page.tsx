@@ -16,11 +16,33 @@ type Guest = {
   is_seasonal: boolean
 }
 
+type ElectricReading = {
+  id: string
+  billing_month: string
+  previous_reading: number
+  current_reading: number
+  kwh_used: number
+  rate_per_kwh: number
+  final_amount: number
+  created_at: string
+  notes: string
+}
+
+type FolioPayment = {
+  id: string
+  amount: number
+  surcharge_amount: number
+  method: string
+  paid_at: string
+  note: string
+}
+
 type CamperRow = {
   guest: Guest
   folioId: string
   folioBalance: number
-  recentCharges: { description: string; line_total: number; charged_at: string }[]
+  recentCharges: { id: string; description: string; line_total: number; charged_at: string }[]
+  folioPayments: FolioPayment[]
   previousReading: string
   currentReading: string
   kwhUsed: number
@@ -30,6 +52,16 @@ type CamperRow = {
   sent: boolean
   sending: boolean
   error: string
+  // UI state
+  showHistory: boolean
+  showPayment: boolean
+  paymentAmount: string
+  paymentMethod: string
+  paymentNote: string
+  savingPayment: boolean
+  // History data
+  readings: ElectricReading[]
+  historyLoaded: boolean
 }
 
 export default function ElectricBillingPage() {
@@ -37,11 +69,12 @@ export default function ElectricBillingPage() {
   const [loading, setLoading] = useState(true)
   const [ratePerKwh, setRatePerKwh] = useState('0.27')
   const [minimumCharge, setMinimumCharge] = useState('15.00')
+  const [activeTab, setActiveTab] = useState<'billing' | 'history'>('billing')
   const [billingMonth, setBillingMonth] = useState(() => {
     const now = new Date()
     return now.toLocaleString('default', { month: 'long' }) + ' ' + now.getFullYear()
   })
-  const [emailMessage, setEmailMessage] = useState('Please find your monthly electric statement below. If you have any questions, please don\'t hesitate to reach out.')
+  const [emailMessage, setEmailMessage] = useState("Please find your monthly electric statement below. If you have any questions, please don't hesitate to reach out.")
   const [sendingAll, setSendingAll] = useState(false)
 
   useEffect(() => { fetchCampers(); fetchMessage() }, [])
@@ -77,16 +110,18 @@ export default function ElectricBillingPage() {
 
       let folioBalance = 0
       let recentCharges: any[] = []
+      let folioPayments: FolioPayment[] = []
 
       if (folio) {
         const [{ data: items }, { data: pmts }] = await Promise.all([
           supabase.from('folio_line_items').select('*').eq('folio_id', folio.id).order('charged_at'),
-          supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed'),
+          supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at', { ascending: false }),
         ])
         const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
         const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
         folioBalance = Math.max(0, itemsTotal - paymentsTotal)
         recentCharges = items || []
+        folioPayments = pmts || []
       }
 
       return {
@@ -94,6 +129,7 @@ export default function ElectricBillingPage() {
         folioId: folio?.id || '',
         folioBalance,
         recentCharges,
+        folioPayments,
         previousReading: '',
         currentReading: '',
         kwhUsed: 0,
@@ -103,11 +139,79 @@ export default function ElectricBillingPage() {
         sent: false,
         sending: false,
         error: '',
+        showHistory: false,
+        showPayment: false,
+        paymentAmount: '',
+        paymentMethod: 'cash',
+        paymentNote: '',
+        savingPayment: false,
+        readings: [],
+        historyLoaded: false,
       }
     }))
 
     setCampers(rows)
     setLoading(false)
+  }
+
+  async function loadHistory(index: number) {
+    const row = campers[index]
+    if (row.historyLoaded) {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], showHistory: !u[index].showHistory }; return u })
+      return
+    }
+    const { data } = await supabase
+      .from('electric_readings')
+      .select('*')
+      .eq('guest_id', row.guest.id)
+      .order('created_at', { ascending: false })
+
+    setCampers(prev => {
+      const u = [...prev]
+      u[index] = { ...u[index], readings: data || [], historyLoaded: true, showHistory: true }
+      return u
+    })
+  }
+
+  async function recordPayment(index: number) {
+    const row = campers[index]
+    if (!row.folioId || !row.paymentAmount) return
+
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: true }; return u })
+
+    const amountCents = Math.round(parseFloat(row.paymentAmount) * 100)
+
+    await supabase.from('folio_payments').insert({
+      folio_id: row.folioId,
+      method: row.paymentMethod,
+      amount: amountCents,
+      surcharge_amount: 0,
+      status: 'completed',
+      note: row.paymentNote || null,
+    })
+
+    // Recalculate balance
+    const [{ data: items }, { data: pmts }] = await Promise.all([
+      supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
+      supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed'),
+    ])
+    const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
+    const newBalance = Math.max(0, itemsTotal - paymentsTotal)
+
+    setCampers(prev => {
+      const u = [...prev]
+      u[index] = {
+        ...u[index],
+        folioBalance: newBalance,
+        folioPayments: pmts || [],
+        savingPayment: false,
+        showPayment: false,
+        paymentAmount: '',
+        paymentNote: '',
+      }
+      return u
+    })
   }
 
   function updateReading(index: number, field: 'previousReading' | 'currentReading', value: string) {
@@ -130,19 +234,15 @@ export default function ElectricBillingPage() {
   }
 
   function updateFinalAmount(index: number, value: string) {
-    setCampers(prev => {
-      const updated = [...prev]
-      updated[index] = { ...updated[index], finalAmount: value }
-      return updated
-    })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], finalAmount: value }; return u })
   }
 
   function toggleSkip(index: number) {
-    setCampers(prev => {
-      const updated = [...prev]
-      updated[index] = { ...updated[index], skip: !updated[index].skip }
-      return updated
-    })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], skip: !u[index].skip }; return u })
+  }
+
+  function updatePaymentField(index: number, field: string, value: string) {
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], [field]: value }; return u })
   }
 
   async function sendBill(index: number) {
@@ -160,7 +260,6 @@ export default function ElectricBillingPage() {
 
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: true, error: '' }; return u })
 
-    // Add electric charge to folio
     let folioId = row.folioId
     if (!folioId) {
       const { data: newFolio } = await supabase.from('folios').insert({
@@ -185,7 +284,6 @@ export default function ElectricBillingPage() {
       category: 'Fees',
     }).select().single()
 
-    // Save meter reading record
     await supabase.from('electric_readings').insert({
       guest_id: row.guest.id,
       billing_month: billingMonth,
@@ -199,14 +297,12 @@ export default function ElectricBillingPage() {
       folio_line_item_id: lineItem?.id || null,
     })
 
-    // Reload folio data for email
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed')
     const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const newBalance = Math.max(0, itemsTotal - paymentsTotal)
 
-    // Send email
     const res = await fetch('/api/electric-bill-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -225,7 +321,15 @@ export default function ElectricBillingPage() {
     const data = await res.json()
     setCampers(prev => {
       const u = [...prev]
-      u[index] = { ...u[index], sending: false, sent: data.success, error: data.success ? '' : (data.error || 'Failed to send') }
+      u[index] = {
+        ...u[index],
+        sending: false,
+        sent: data.success,
+        folioId: folioId,
+        folioBalance: newBalance,
+        historyLoaded: false, // reset so history reloads fresh
+        error: data.success ? '' : (data.error || 'Failed to send'),
+      }
       return u
     })
   }
@@ -233,9 +337,7 @@ export default function ElectricBillingPage() {
   async function sendAllBills() {
     setSendingAll(true)
     for (let i = 0; i < campers.length; i++) {
-      if (!campers[i].skip && !campers[i].sent) {
-        await sendBill(i)
-      }
+      if (!campers[i].skip && !campers[i].sent) await sendBill(i)
     }
     setSendingAll(false)
   }
@@ -245,136 +347,352 @@ export default function ElectricBillingPage() {
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading seasonal campers...</div>
 
   return (
-    <div style={{ padding: '2rem', maxWidth: 1100, margin: '0 auto', fontFamily: 'sans-serif' }}>
+    <div style={{ padding: '2rem', maxWidth: 1200, margin: '0 auto', fontFamily: 'sans-serif' }}>
       <div style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Electric Billing</h1>
         <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Generate and send monthly electric bills to seasonal campers</p>
       </div>
 
-      {/* Settings */}
-      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 20 }}>
-        <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700 }}>Billing Settings</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
-          <div>
-            <label style={lbl}>Billing month</label>
-            <input style={inp} value={billingMonth} onChange={e => setBillingMonth(e.target.value)} placeholder='e.g. May 2026' />
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
+        {(['billing', 'history'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '10px 20px', fontSize: 14, fontWeight: 600, border: 'none',
+              background: 'none', cursor: 'pointer', borderBottom: activeTab === tab ? '2px solid #2E6B8A' : '2px solid transparent',
+              color: activeTab === tab ? '#2E6B8A' : '#6b7280', marginBottom: -1,
+            }}
+          >
+            {tab === 'billing' ? 'Monthly Billing' : 'Account History'}
+          </button>
+        ))}
+      </div>
+
+      {/* ── BILLING TAB ── */}
+      {activeTab === 'billing' && (
+        <>
+          {/* Settings */}
+          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 20 }}>
+            <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700 }}>Billing Settings</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+              <div>
+                <label style={lbl}>Billing month</label>
+                <input style={inp} value={billingMonth} onChange={e => setBillingMonth(e.target.value)} placeholder='e.g. May 2026' />
+              </div>
+              <div>
+                <label style={lbl}>Rate per kWh ($)</label>
+                <input style={inp} type='number' step='0.01' value={ratePerKwh} onChange={e => setRatePerKwh(e.target.value)} />
+              </div>
+              <div>
+                <label style={lbl}>Minimum charge ($)</label>
+                <input style={inp} type='number' step='0.01' value={minimumCharge} onChange={e => setMinimumCharge(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>Custom email message</label>
+              <textarea style={{ ...inp, height: 80, resize: 'vertical' }} value={emailMessage} onChange={e => setEmailMessage(e.target.value)} />
+              <button onClick={saveMessage} style={{ marginTop: 8, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Message</button>
+            </div>
           </div>
-          <div>
-            <label style={lbl}>Rate per kWh ($)</label>
-            <input style={inp} type='number' step='0.01' value={ratePerKwh} onChange={e => setRatePerKwh(e.target.value)} />
-          </div>
-          <div>
-            <label style={lbl}>Minimum charge ($)</label>
-            <input style={inp} type='number' step='0.01' value={minimumCharge} onChange={e => setMinimumCharge(e.target.value)} />
-          </div>
-        </div>
+
+          {campers.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found.</div>
+          ) : (
+            <>
+              <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 960 }}>
+                  {/* Header */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
+                    <div>Guest</div><div>Site</div><div>Prev reading</div><div>Curr reading</div><div>kWh</div><div>Calculated</div><div>Final amount</div><div>Balance</div><div>Skip</div>
+                  </div>
+
+                  {campers.map((row, i) => (
+                    <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
+                      {/* Main row */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>{row.guest.name}</div>
+                          <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>{row.guest.site_number}</div>
+                        <input style={{ ...si, opacity: row.skip ? 0.4 : 1 }} type='number' placeholder='0' value={row.previousReading} disabled={row.skip || row.sent} onChange={e => updateReading(i, 'previousReading', e.target.value)} />
+                        <input style={{ ...si, opacity: row.skip ? 0.4 : 1 }} type='number' placeholder='0' value={row.currentReading} disabled={row.skip || row.sent} onChange={e => updateReading(i, 'currentReading', e.target.value)} />
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{row.kwhUsed > 0 ? row.kwhUsed.toFixed(1) : '—'}</div>
+                        <div style={{ fontSize: 13, color: '#6b7280' }}>{row.calculatedAmount > 0 ? '$' + (row.calculatedAmount / 100).toFixed(2) : '—'}</div>
+                        <div style={{ position: 'relative' }}>
+                          <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
+                          <input style={{ ...si, paddingLeft: 20, opacity: row.skip ? 0.4 : 1 }} type='number' step='0.01' placeholder='0.00' value={row.finalAmount} disabled={row.skip || row.sent} onChange={e => updateFinalAmount(i, e.target.value)} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
+                            {row.folioBalance > 0 ? '$' + (row.folioBalance / 100).toFixed(2) : '✓ Current'}
+                          </div>
+                        </div>
+                        <button onClick={() => toggleSkip(i)} disabled={row.sent} style={{ fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: row.skip ? '#d1d5db' : '#fca5a5', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', background: row.skip ? '#f3f4f6' : '#fef2f2', color: row.skip ? '#6b7280' : '#dc2626' }}>
+                          {row.skip ? 'Skipped' : 'Skip'}
+                        </button>
+                      </div>
+
+                      {/* Action row */}
+                      {!row.skip && (
+                        <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          {/* Send bill */}
+                          <button onClick={() => sendBill(i)} disabled={row.sending || row.sent || !row.finalAmount}
+                            style={{ background: row.sent ? '#15803d' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: row.sent || !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
+                            {row.sending ? 'Sending...' : row.sent ? '✓ Sent!' : '✉ Send Bill'}
+                          </button>
+
+                          {/* Record payment */}
+                          {row.folioBalance > 0 && !row.showPayment && (
+                            <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (row.folioBalance / 100).toFixed(2)) }}
+                              style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                              💵 Record Payment
+                            </button>
+                          )}
+
+                          {/* History toggle */}
+                          <button onClick={() => loadHistory(i)}
+                            style={{ background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                            {row.showHistory ? 'Hide History' : '📋 View History'}
+                          </button>
+
+                          {row.error && <span style={{ fontSize: 12, color: '#dc2626' }}>{row.error}</span>}
+                          {!row.guest.email && <span style={{ fontSize: 12, color: '#9ca3af' }}>No email on file</span>}
+                        </div>
+                      )}
+
+                      {/* Payment entry */}
+                      {row.showPayment && (
+                        <div style={{ margin: '0 14px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '14px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#15803d', marginBottom: 10 }}>Record Payment — {row.guest.name}</div>
+                          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                            <div>
+                              <label style={{ ...lbl, marginTop: 0 }}>Amount ($)</label>
+                              <input style={{ ...si, width: 110 }} type='number' step='0.01' value={row.paymentAmount} onChange={e => updatePaymentField(i, 'paymentAmount', e.target.value)} />
+                            </div>
+                            <div>
+                              <label style={{ ...lbl, marginTop: 0 }}>Method</label>
+                              <select style={{ ...si, width: 110 }} value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
+                                <option value='cash'>Cash</option>
+                                <option value='check'>Check</option>
+                                <option value='card'>Card</option>
+                              </select>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 120 }}>
+                              <label style={{ ...lbl, marginTop: 0 }}>Note (optional)</label>
+                              <input style={si} placeholder='e.g. Check #1042' value={row.paymentNote} onChange={e => updatePaymentField(i, 'paymentNote', e.target.value)} />
+                            </div>
+                            <button onClick={() => recordPayment(i)} disabled={row.savingPayment || !row.paymentAmount}
+                              style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', height: 34 }}>
+                              {row.savingPayment ? 'Saving...' : 'Save Payment'}
+                            </button>
+                            <button onClick={() => updatePaymentField(i, 'showPayment', 'false')}
+                              style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer', height: 34 }}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* History panel */}
+                      {row.showHistory && (
+                        <div style={{ margin: '0 14px 14px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
+                          <div style={{ padding: '10px 14px', fontSize: 12, fontWeight: 700, color: '#374151', background: '#f1f5f9', borderBottom: '1px solid #e5e7eb' }}>
+                            Billing History — {row.guest.name} · Site {row.guest.site_number}
+                          </div>
+                          {row.readings.length === 0 ? (
+                            <div style={{ padding: '1rem', fontSize: 13, color: '#9ca3af' }}>No billing history yet.</div>
+                          ) : (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <thead>
+                                <tr style={{ background: '#f9fafb' }}>
+                                  {['Month', 'Prev', 'Curr', 'kWh', 'Rate', 'Billed', 'Date'].map(h => (
+                                    <th key={h} style={{ padding: '7px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {row.readings.map((r, ri) => (
+                                  <tr key={r.id} style={{ borderBottom: ri < row.readings.length - 1 ? '1px solid #f3f4f6' : 'none', background: ri % 2 === 0 ? '#fff' : '#fafafa' }}>
+                                    <td style={{ padding: '8px 12px', fontWeight: 600, color: '#111827' }}>{r.billing_month}</td>
+                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.previous_reading).toLocaleString()}</td>
+                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.current_reading).toLocaleString()}</td>
+                                    <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>{Number(r.kwh_used).toFixed(1)}</td>
+                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>${Number(r.rate_per_kwh).toFixed(3)}</td>
+                                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#15803d' }}>${(r.final_amount / 100).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
+                                  <td colSpan={5} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, color: '#15803d' }}>Total billed (all time)</td>
+                                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#15803d' }}>${(row.readings.reduce((s, r) => s + r.final_amount, 0) / 100).toFixed(2)}</td>
+                                  <td />
+                                </tr>
+                              </tfoot>
+                            </table>
+                          )}
+
+                          {/* Payment history */}
+                          {row.folioPayments.length > 0 && (
+                            <div style={{ borderTop: '1px solid #e5e7eb' }}>
+                              <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb' }}>Payments received</div>
+                              {row.folioPayments.map((p, pi) => (
+                                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 14px', borderBottom: pi < row.folioPayments.length - 1 ? '1px solid #f3f4f6' : 'none', fontSize: 12 }}>
+                                  <div>
+                                    <span style={{ fontWeight: 600, color: '#374151', textTransform: 'capitalize' }}>{p.method}</span>
+                                    {p.note && <span style={{ color: '#9ca3af', marginLeft: 8 }}>{p.note}</span>}
+                                    <span style={{ color: '#9ca3af', marginLeft: 8 }}>{new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                  </div>
+                                  <span style={{ fontWeight: 700, color: '#15803d' }}>-${((p.amount - (p.surcharge_amount || 0)) / 100).toFixed(2)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Send all */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
+                <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
+                <button onClick={sendAllBills} disabled={sendingAll || readyToSend === 0}
+                  style={{ background: readyToSend > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: readyToSend > 0 ? 'pointer' : 'default' }}>
+                  {sendingAll ? 'Sending all...' : 'Send All Bills'}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── HISTORY TAB ── */}
+      {activeTab === 'history' && (
         <div>
-          <label style={lbl}>Custom email message</label>
-          <textarea style={{ ...inp, height: 80, resize: 'vertical' }} value={emailMessage} onChange={e => setEmailMessage(e.target.value)} />
-          <button onClick={saveMessage} style={{ marginTop: 8, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Message</button>
+          {campers.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {campers.map((row) => (
+                <GuestAccountCard key={row.guest.id} guest={row.guest} folioBalance={row.folioBalance} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance: number }) {
+  const [readings, setReadings] = useState<any[]>([])
+  const [payments, setPayments] = useState<any[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  async function load() {
+    if (loaded) { setOpen(!open); return }
+    const [{ data: r }, { data: p }, { data: folio }] = await Promise.all([
+      supabase.from('electric_readings').select('*').eq('guest_id', guest.id).order('created_at', { ascending: false }),
+      supabase.from('folios').select('id').eq('guest_id', guest.id).eq('folio_type', 'guest_account').single(),
+      supabase.from('folios').select('id').eq('guest_id', guest.id).eq('folio_type', 'guest_account').single(),
+    ])
+    let pmts: any[] = []
+    if (folio) {
+      const { data: pData } = await supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at', { ascending: false })
+      pmts = pData || []
+    }
+    setReadings(r || [])
+    setPayments(pmts)
+    setLoaded(true)
+    setOpen(true)
+  }
+
+  const totalBilled = readings.reduce((s, r) => s + r.final_amount, 0)
+  const totalPaid = payments.reduce((s, p) => s + p.amount - (p.surcharge_amount || 0), 0)
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
+      <div onClick={load} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', cursor: 'pointer' }}
+        onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
+        onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>{guest.name}</div>
+          <div style={{ fontSize: 12, color: '#9ca3af' }}>Site {guest.site_number} · {guest.email || 'No email'}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          {loaded && <div style={{ fontSize: 12, color: '#6b7280' }}>{readings.length} bill{readings.length !== 1 ? 's' : ''} · ${(totalBilled / 100).toFixed(2)} billed · ${(totalPaid / 100).toFixed(2)} paid</div>}
+          <div style={{ fontWeight: 800, fontSize: 16, color: folioBalance > 0 ? '#dc2626' : '#15803d' }}>
+            {folioBalance > 0 ? '$' + (folioBalance / 100).toFixed(2) + ' due' : '✓ Current'}
+          </div>
+          <span style={{ color: '#9ca3af', fontSize: 18 }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
 
-      {/* Camper rows */}
-      {campers.length === 0 ? (
-        <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found. Add them in the Guest Directory first.</div>
-      ) : (
-        <>
-          <div style={{ overflowX: 'auto', marginBottom: 20 }}>
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 900 }}>
-            {/* Header */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px 100px 60px 90px 100px 100px 70px', gap: 6, padding: '10px 12px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
-              <div>Guest</div>
-              <div>Site</div>
-              <div>Prev reading</div>
-              <div>Curr reading</div>
-              <div>kWh</div>
-              <div>Calculated</div>
-              <div>Final amount</div>
-              <div>Balance due</div>
-              <div>Skip</div>
-            </div>
+      {open && (
+        <div style={{ borderTop: '1px solid #e5e7eb' }}>
+          {readings.length === 0 ? (
+            <div style={{ padding: '1rem 20px', fontSize: 13, color: '#9ca3af' }}>No billing history yet.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: '#f9fafb' }}>
+                  {['Month', 'Prev Reading', 'Curr Reading', 'kWh Used', 'Rate', 'Amount Billed', 'Billed On'].map(h => (
+                    <th key={h} style={{ padding: '8px 16px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {readings.map((r, i) => (
+                  <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                    <td style={{ padding: '10px 16px', fontWeight: 600, color: '#111827' }}>{r.billing_month}</td>
+                    <td style={{ padding: '10px 16px', color: '#6b7280' }}>{Number(r.previous_reading).toLocaleString()}</td>
+                    <td style={{ padding: '10px 16px', color: '#6b7280' }}>{Number(r.current_reading).toLocaleString()}</td>
+                    <td style={{ padding: '10px 16px', fontWeight: 600 }}>{Number(r.kwh_used).toFixed(1)}</td>
+                    <td style={{ padding: '10px 16px', color: '#6b7280' }}>${Number(r.rate_per_kwh).toFixed(3)}/kWh</td>
+                    <td style={{ padding: '10px 16px', fontWeight: 700, color: '#15803d' }}>${(r.final_amount / 100).toFixed(2)}</td>
+                    <td style={{ padding: '10px 16px', color: '#9ca3af' }}>{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
+                  <td colSpan={5} style={{ padding: '10px 16px', fontWeight: 700, color: '#15803d' }}>All-time totals</td>
+                  <td style={{ padding: '10px 16px', fontWeight: 800, color: '#15803d' }}>${(totalBilled / 100).toFixed(2)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          )}
 
-            {campers.map((row, i) => (
-              <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px 100px 60px 90px 100px 100px 70px', gap: 6, padding: '10px 12px', alignItems: 'center' }}>
+          {payments.length > 0 && (
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '0 0 4px' }}>
+              <div style={{ padding: '10px 16px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>Payments received</div>
+              {payments.map((p, pi) => (
+                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 16px', borderBottom: pi < payments.length - 1 ? '1px solid #f3f4f6' : 'none', fontSize: 13 }}>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>{row.guest.name}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
+                    <span style={{ fontWeight: 600, textTransform: 'capitalize' }}>{p.method}</span>
+                    {p.note && <span style={{ color: '#9ca3af', marginLeft: 10 }}>{p.note}</span>}
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>Site {row.guest.site_number}</div>
-                  <input
-                    style={{ ...si, opacity: row.skip ? 0.4 : 1 }}
-                    type='number'
-                    placeholder='0'
-                    value={row.previousReading}
-                    disabled={row.skip || row.sent}
-                    onChange={e => updateReading(i, 'previousReading', e.target.value)}
-                  />
-                  <input
-                    style={{ ...si, opacity: row.skip ? 0.4 : 1 }}
-                    type='number'
-                    placeholder='0'
-                    value={row.currentReading}
-                    disabled={row.skip || row.sent}
-                    onChange={e => updateReading(i, 'currentReading', e.target.value)}
-                  />
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{row.kwhUsed > 0 ? row.kwhUsed.toFixed(1) : '—'}</div>
-                  <div style={{ fontSize: 13, color: '#6b7280' }}>{row.calculatedAmount > 0 ? '$' + (row.calculatedAmount/100).toFixed(2) : '—'}</div>
-                  <div style={{ position: 'relative' }}>
-                    <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
-                    <input
-                      style={{ ...si, paddingLeft: 20, opacity: row.skip ? 0.4 : 1 }}
-                      type='number'
-                      step='0.01'
-                      placeholder='0.00'
-                      value={row.finalAmount}
-                      disabled={row.skip || row.sent}
-                      onChange={e => updateFinalAmount(i, e.target.value)}
-                    />
+                  <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+                    <span style={{ color: '#9ca3af', fontSize: 12 }}>{new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                    <span style={{ fontWeight: 700, color: '#15803d' }}>-${((p.amount - (p.surcharge_amount || 0)) / 100).toFixed(2)}</span>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
-                    {row.folioBalance > 0 ? '$' + (row.folioBalance/100).toFixed(2) + ' due' : '✓ Current'}
-                  </div>
-                  <button
-                    onClick={() => toggleSkip(i)}
-                    disabled={row.sent}
-                    style={{ fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: row.skip ? '#d1d5db' : '#fca5a5', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', background: row.skip ? '#f3f4f6' : '#fef2f2', color: row.skip ? '#6b7280' : '#dc2626' }}
-                  >
-                    {row.skip ? 'Skipped' : 'Skip'}
-                  </button>
                 </div>
-                {/* Send row */}
-                {!row.skip && (
-                  <div style={{ padding: '0 16px 12px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <button
-                      onClick={() => sendBill(i)}
-                      disabled={row.sending || row.sent || !row.finalAmount}
-                      style={{ background: row.sent ? '#15803d' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: row.sent || !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}
-                    >
-                      {row.sending ? 'Sending...' : row.sent ? '✓ Sent!' : '✉ Send Bill'}
-                    </button>
-                    {row.error && <span style={{ fontSize: 12, color: '#dc2626' }}>{row.error}</span>}
-                    {!row.guest.email && <span style={{ fontSize: 12, color: '#9ca3af' }}>No email on file</span>}
-                  </div>
-                )}
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', borderTop: '2px solid #bbf7d0', background: '#f0fdf4' }}>
+                <span style={{ fontWeight: 700, color: '#15803d' }}>Total paid</span>
+                <span style={{ fontWeight: 800, color: '#15803d' }}>${(totalPaid / 100).toFixed(2)}</span>
               </div>
-            ))}
-          </div>
-          </div>
-
-          {/* Send all button */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
-            <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
-            <button
-              onClick={sendAllBills}
-              disabled={sendingAll || readyToSend === 0}
-              style={{ background: readyToSend > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: readyToSend > 0 ? 'pointer' : 'default' }}
-            >
-              {sendingAll ? 'Sending all...' : 'Send All Bills'}
-            </button>
-          </div>
-        </>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
