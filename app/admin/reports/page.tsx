@@ -293,10 +293,12 @@ export default function ReportsPage() {
 
   // ── Computed: combined overview ───────────────────────────────────────────
   const totalCombined = resRevenue + (posEnabled ? posRevenue : 0) + electricRevenue + otherGuestRevenue
-  const totalCash = transactions.filter(t => t.method === 'cash').reduce((s, t) => s + t.amount, 0) / 100
-  const totalCard = transactions.filter(t => t.method === 'card').reduce((s, t) => s + t.amount, 0) / 100
-  const totalCheck = transactions.filter(t => t.method === 'check').reduce((s, t) => s + t.amount, 0) / 100
-  const totalSurcharge = transactions.reduce((s, t) => s + (t.surcharge_amount || 0), 0) / 100
+  // Include seasonal payments in method totals
+  const allPayments = [...transactions, ...guestAccountPayments]
+  const totalCash = allPayments.filter(t => t.method === 'cash').reduce((s, t) => s + t.amount, 0) / 100
+  const totalCard = allPayments.filter(t => t.method === 'card').reduce((s, t) => s + t.amount, 0) / 100
+  const totalCheck = allPayments.filter(t => t.method === 'check').reduce((s, t) => s + t.amount, 0) / 100
+  const totalSurcharge = allPayments.reduce((s, t) => s + (t.surcharge_amount || 0), 0) / 100
 
   // ── Computed: monthly chart ───────────────────────────────────────────────
   const monthlyMap: { [key: string]: { label: string; value: number } } = {}
