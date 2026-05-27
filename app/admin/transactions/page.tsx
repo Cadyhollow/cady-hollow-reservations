@@ -215,8 +215,13 @@ export default function TransactionsPage() {
   }
 
   function getFolioHref(p: Payment) {
+    // Seasonal guest account — goes to guest folio page
     if (p.folio_type === 'guest_account' && p.guest_id) return '/admin/folio/guest/' + p.guest_id
+    // Online reservation payment (no folio) — go to reservation detail
+    if (p.is_reservation_payment && p.reservation_id) return '/admin/reservations?id=' + p.reservation_id
+    // Folio linked to a reservation — use reservation ID as the folio route param
     if (p.reservation_id) return '/admin/folio/' + p.reservation_id
+    // Walk-up folio — use folio ID directly
     if (p.folio_id) return '/admin/folio/' + p.folio_id
     return '/admin/reservations'
   }
