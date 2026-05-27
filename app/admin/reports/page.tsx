@@ -44,6 +44,14 @@ const COLORS = ['#12c9e5', '#C4873C', '#2D6A4F', '#9B59B6', '#E74C3C']
 export default function ReportsPage() {
   const router = useRouter()
 
+  // ── Plan/feature gate — redirect if not authorized ──────────────────────
+  useEffect(() => {
+    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
+      if (data?.plan && !['ridgeline','summit'].includes(data.plan)) router.replace('/admin')
+    })
+  }, [])
+
+
   const [activeTab, setActiveTab] = useState<'overview' | 'reservations' | 'transactions'>('overview')
   const [posEnabled, setPosEnabled] = useState(false)
   const [reportBy, setReportBy] = useState<'payment_date' | 'stay_date'>('payment_date')

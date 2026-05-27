@@ -1,4 +1,5 @@
 'use client'
+import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -65,6 +66,14 @@ type CamperRow = {
 }
 
 export default function ElectricBillingPage() {
+  const router = useRouter()
+
+  // ── Plan/feature gate — redirect if not authorized ──────────────────────
+  useEffect(() => {
+    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
+      if (data?.plan !== 'summit') router.replace('/admin')
+    })
+  }, [])
   const [campers, setCampers] = useState<CamperRow[]>([])
   const [loading, setLoading] = useState(true)
   const [ratePerKwh, setRatePerKwh] = useState('0.27')

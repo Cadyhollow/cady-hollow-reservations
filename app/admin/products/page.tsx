@@ -1,4 +1,5 @@
 'use client'
+import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -42,6 +43,14 @@ const blank = (): Omit<Product, 'id'> => ({
 })
 
 export default function ProductsPage() {
+  const router = useRouter()
+
+  // ── Plan/feature gate — redirect if not authorized ──────────────────────
+  useEffect(() => {
+    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
+      if (!data?.pos_enabled) router.replace('/admin')
+    })
+  }, [])
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)

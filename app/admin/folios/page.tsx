@@ -32,6 +32,14 @@ type FolioSummary = FolioRow & {
 
 export default function FoliosPage() {
   const router = useRouter()
+
+  // ── Plan/feature gate — redirect if not authorized ──────────────────────
+  useEffect(() => {
+    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
+      if (data?.plan !== 'summit') router.replace('/admin')
+    })
+  }, [])
+
   const [folios, setFolios] = useState<FolioSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'open' | 'all' | 'walkin' | 'reservation'>('all')
