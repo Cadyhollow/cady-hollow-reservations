@@ -470,6 +470,10 @@ function ReservationsPageInner() {
                   <p className="font-medium text-gray-900">{selected.arrival_date} → {selected.departure_date} ({nights(selected)} nights)</p>
                 </div>
                 <div>
+                  <p className="text-gray-500">Reservation Made</p>
+                  <p className="font-medium text-gray-900">{new Date(selected.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                </div>
+                <div>
                   <p className="text-gray-500">Guests</p>
                   <p className="font-medium text-gray-900">{selected.num_adults} adults · {selected.num_children} children</p>
                 </div>

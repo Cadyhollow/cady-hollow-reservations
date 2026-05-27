@@ -22,6 +22,7 @@ type Payment = {
   guest_name: string
   reservation_id: string | null
   guest_id: string | null
+  is_reservation_payment?: boolean // true for direct reservation payments (no folio)
 }
 
 type LineItem = {
@@ -105,8 +106,52 @@ export default function TransactionsPage() {
       .lte('paid_at', endISO)
       .order('paid_at', { ascending: false })
 
+    // Also fetch online reservation payments (stored directly on reservations, no folio)
+    const { data: resData } = await supabase
+      .from('reservations')
+      .select('id, guest_name, amount_paid, payment_type, created_at, square_payment_id')
+      .gt('amount_paid', 0)
+      .gte('created_at', startISO)
+      .lte('created_at', endISO)
+      .neq('status', 'cancelled')
+      .is('id', null) // placeholder — will be replaced below
+
+    // Get reservation IDs that already have folios (to avoid double counting)
+    const { data: folioResIds } = await supabase
+      .from('folios')
+      .select('reservation_id')
+      .not('reservation_id', 'is', null)
+    const folioResIdSet = new Set((folioResIds || []).map((f: any) => f.reservation_id))
+
+    // Fetch online reservations WITHOUT folios
+    const { data: onlineResData } = await supabase
+      .from('reservations')
+      .select('id, guest_name, amount_paid, payment_type, created_at, square_payment_id')
+      .gt('amount_paid', 0)
+      .gte('created_at', startISO)
+      .lte('created_at', endISO)
+      .neq('status', 'cancelled')
+
+    const onlinePayments: Payment[] = (onlineResData || [])
+      .filter((r: any) => !folioResIdSet.has(r.id))
+      .map((r: any) => ({
+        id: 'res-' + r.id,
+        paid_at: r.created_at,
+        method: 'card',
+        amount: r.amount_paid,
+        surcharge_amount: 0,
+        status: 'completed',
+        note: r.payment_type === 'deposit' ? 'Deposit' : r.payment_type === 'unpaid' ? 'Pay on arrival' : 'Full payment',
+        folio_id: '',
+        folio_type: 'reservation',
+        guest_name: r.guest_name,
+        reservation_id: r.id,
+        guest_id: null,
+        is_reservation_payment: true,
+      }))
+
     if (pmtData) {
-      const mapped: Payment[] = (pmtData as any[]).map(p => ({
+      const folioPayments: Payment[] = (pmtData as any[]).map(p => ({
         id: p.id,
         paid_at: p.paid_at,
         method: p.method,
@@ -119,8 +164,12 @@ export default function TransactionsPage() {
         guest_name: p.folios?.guest_name || 'Unknown',
         reservation_id: p.folios?.reservation_id || null,
         guest_id: p.folios?.guest_id || null,
+        is_reservation_payment: false,
       }))
-      setPayments(mapped)
+      // Merge and sort by date descending
+      const all = [...folioPayments, ...onlinePayments]
+        .sort((a, b) => new Date(b.paid_at).getTime() - new Date(a.paid_at).getTime())
+      setPayments(all)
     }
     setLoading(false)
   }
@@ -149,7 +198,8 @@ export default function TransactionsPage() {
   function getFolioHref(p: Payment) {
     if (p.folio_type === 'guest_account' && p.guest_id) return '/admin/folio/guest/' + p.guest_id
     if (p.reservation_id) return '/admin/folio/' + p.reservation_id
-    return '/admin/folio/' + p.folio_id
+    if (p.folio_id) return '/admin/folio/' + p.folio_id
+    return '/admin/reservations'
   }
 
   function getTypeLabel(p: Payment) {
@@ -352,8 +402,13 @@ export default function TransactionsPage() {
                               <p className="text-xs text-gray-400 py-3">Loading details...</p>
                             ) : (
                               <>
-                                {/* Line items */}
-                                {folioLineItems.length > 0 ? (
+                                {/* Online reservation payments have no line items */}
+                                {p.is_reservation_payment ? (
+                                  <div className="mt-3 bg-white rounded-lg border border-gray-200 px-3 py-3">
+                                    <p className="text-sm text-gray-600">Online reservation payment via Square.</p>
+                                    <p className="text-xs text-gray-400 mt-1">Full itemized details are on the reservation record.</p>
+                                  </div>
+                                ) : folioLineItems.length > 0 ? (
                                   <div className="mt-3">
                                     <p className="text-xs font-700 text-gray-500 uppercase tracking-wide mb-2">Items Charged</p>
                                     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
