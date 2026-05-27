@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         source_id: sourceId,
-        idempotency_key: `admin-card-${folioId}-${Date.now()}`,
+        idempotency_key: `ac-${folioId.slice(0,8)}-${Date.now()}`,
         amount_money: { amount, currency: 'USD' },
         location_id: process.env.SQUARE_LOCATION_ID,
       }),
