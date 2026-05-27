@@ -158,7 +158,7 @@ export default function ReportsPage() {
       .gte('arrival_date', start)
       .lte('arrival_date', stayEnd)
 
-    // ── All payments (reservation + POS) in date range ────────────────────
+    // ── All payments (reservation + POS only, NOT guest_account) ────────────
     const { data: pmtData } = await supabase
       .from('folio_payments')
       .select(`
@@ -168,6 +168,7 @@ export default function ReportsPage() {
       .eq('status', 'completed')
       .gte('paid_at', startISO)
       .lte('paid_at', endISO)
+      .not('folio_id', 'in', gaFolioIds.length > 0 ? '(' + gaFolioIds.join(',') + ')' : '(null)')
       .order('paid_at', { ascending: false })
 
     // Line items for category breakdown
@@ -183,20 +184,27 @@ export default function ReportsPage() {
     }
 
     // ── Guest account payments (electric + other seasonal charges) ──────────
-    const { data: gaPmtData } = await supabase
-      .from('folio_payments')
-      .select(`
-        id, paid_at, method, amount, surcharge_amount, status, folio_id,
-        folios ( id, guest_name, folio_type, reservation_id )
-      `)
-      .eq('status', 'completed')
-      .gte('paid_at', startISO)
-      .lte('paid_at', endISO)
-      .eq('folios.folio_type', 'guest_account')
+    // Step 1: get guest_account folio IDs in this period
+    const { data: gaFolios } = await supabase
+      .from('folios')
+      .select('id')
+      .eq('folio_type', 'guest_account')
 
-    // Line items for guest account folios to break out electric vs other
-    if (gaPmtData && gaPmtData.length > 0) {
-      const gaFolioIds = [...new Set(gaPmtData.map((t: any) => t.folio_id))]
+    const gaFolioIds = (gaFolios || []).map((f: any) => f.id)
+
+    let gaPmtData: any[] = []
+    if (gaFolioIds.length > 0) {
+      // Step 2: get payments on those folios in the date range
+      const { data: gaPmts } = await supabase
+        .from('folio_payments')
+        .select('id, paid_at, method, amount, surcharge_amount, status, folio_id')
+        .eq('status', 'completed')
+        .gte('paid_at', startISO)
+        .lte('paid_at', endISO)
+        .in('folio_id', gaFolioIds)
+      gaPmtData = gaPmts || []
+
+      // Step 3: get line items on those folios in the date range
       const { data: gaLiData } = await supabase
         .from('folio_line_items')
         .select('folio_id, category, line_total, description, quantity, unit_price, charged_at')
@@ -215,7 +223,7 @@ export default function ReportsPage() {
       setResPayments(all.filter(p => p.folios?.reservation_id !== null))
       setTransactions(all)
     }
-    setGuestAccountPayments((gaPmtData as any) || [])
+    setGuestAccountPayments(gaPmtData)
 
     setLoading(false)
     setTxLoading(false)
