@@ -101,6 +101,11 @@ export default function FolioPage() {
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
+  const [cardEntryMode, setCardEntryMode] = useState<'terminal' | 'manual'>('terminal')
+  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
+  const [squareCardRef, setSquareCardRef] = useState<any>(null)
+  const [squareInstanceRef, setSquareInstanceRef] = useState<any>(null)
+  const [chargingCard, setChargingCard] = useState(false)
   const [showRefund, setShowRefund] = useState(false)
   const [refundPayment, setRefundPayment] = useState<any>(null)
   const [refundAmount, setRefundAmount] = useState('')
@@ -153,6 +158,71 @@ export default function FolioPage() {
       }
     }
     setLoading(false)
+  }
+
+  async function loadSquareCard() {
+    if (squareCardLoaded) return
+    const existing = document.getElementById('admin-square-card-container')
+    if (!existing) return
+    try {
+      let sq = squareInstanceRef
+      if (!sq) {
+        const script = document.createElement('script')
+        script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
+          ? 'https://web.squarecdn.com/v1/square.js'
+          : 'https://sandbox.web.squarecdn.com/v1/square.js'
+        await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        setSquareInstanceRef(sq)
+      }
+      const card = await sq.card()
+      await card.attach('#admin-square-card-container')
+      setSquareCardRef(card)
+      setSquareCardLoaded(true)
+    } catch (e) { console.error('Square card load error:', e) }
+  }
+
+  async function chargeManualCard() {
+    if (!squareCardRef || !folio) return
+    setChargingCard(true)
+    try {
+      const result = await squareCardRef.tokenize()
+      if (result.status !== 'OK') {
+        setChargingCard(false)
+        return
+      }
+      const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
+      const surchargeAmount = cardSurcharge > 0 && !waiveFee
+        ? Math.round(baseAmount * (cardSurcharge / 100))
+        : 0
+      const totalAmount = baseAmount + surchargeAmount
+
+      const res = await fetch('/api/admin-card-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: result.token,
+          folioId: folio.id,
+          amount: totalAmount,
+          surchargeAmount,
+          note: paymentNote,
+          guestName: folio.guest_name,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setShowPayment(false)
+        setPaymentAmount('')
+        setPaymentNote('')
+        setCardEntryMode('terminal')
+        setSquareCardLoaded(false)
+        setSquareCardRef(null)
+        await loadFolioData(folio.id)
+      } else {
+        alert(data.error || 'Card payment failed')
+      }
+    } catch (e) { console.error('Card charge error:', e) }
+    setChargingCard(false)
   }
 
   async function loadFolioData(folioId: string) {
@@ -709,7 +779,24 @@ export default function FolioPage() {
               ))}
             </div>
 
-            {paymentMethod === 'card' && terminalDeviceId ? (
+            {paymentMethod === 'card' && (
+              <div style={{ marginBottom: 16 }}>
+                {/* Card mode selector */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  {terminalDeviceId && (
+                    <button onClick={() => setCardEntryMode('terminal')}
+                      style={{ padding: '10px', border: '2px solid', borderColor: cardEntryMode === 'terminal' ? '#2E6B8A' : '#e5e7eb', borderRadius: 8, background: cardEntryMode === 'terminal' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'terminal' ? '#2E6B8A' : '#374151' }}>
+                      💳 Use Terminal
+                    </button>
+                  )}
+                  <button onClick={() => { setCardEntryMode('manual'); setTimeout(loadSquareCard, 100) }}
+                    style={{ padding: '10px', border: '2px solid', borderColor: cardEntryMode === 'manual' ? '#2E6B8A' : '#e5e7eb', borderRadius: 8, background: cardEntryMode === 'manual' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'manual' ? '#2E6B8A' : '#374151', gridColumn: terminalDeviceId ? 'auto' : '1 / -1' }}>
+                    ⌨️ Enter Card Manually
+                  </button>
+                </div>
+              </div>
+            )}
+            {paymentMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId ? (
               <div style={{ background: '#e8f2f7', border: '1px solid #b8d4e8', borderRadius: 10, padding: '1.25rem', marginBottom: 16, textAlign: 'center' }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>💳</div>
                 <div style={{ fontWeight: 700, fontSize: 16, color: '#1e3f52', marginBottom: 4 }}>Send to Square Terminal</div>
@@ -784,7 +871,31 @@ export default function FolioPage() {
               </>
             )}
 
-            {!(paymentMethod === 'card' && terminalDeviceId) && (
+            {paymentMethod === 'card' && cardEntryMode === 'manual' && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={ml}>Card Details</label>
+                <div id='admin-square-card-container' style={{ minHeight: 89, border: '1px solid #d1d5db', borderRadius: 8, padding: 4 }} />
+                {!squareCardLoaded && <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Loading card form...</p>}
+                {cardSurcharge > 0 && !waiveFee && (
+                  <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginTop: 8, fontSize: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(Math.round(Math.round(parseFloat(paymentAmount || '0') * 100) * cardSurcharge / 100) / 100).toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
+                <label style={{ ...ml, marginTop: 12 }}>Note (optional)</label>
+                <input style={{ ...si, marginBottom: 12 }} placeholder='e.g. phone reservation' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
+                <button
+                  onClick={chargeManualCard}
+                  disabled={chargingCard || !squareCardLoaded || !paymentAmount}
+                  style={{ width: '100%', background: chargingCard || !squareCardLoaded || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+                >
+                  {chargingCard ? 'Processing...' : `Charge Card · $${paymentAmount || '0.00'}`}
+                </button>
+              </div>
+            )}
+            {!(paymentMethod === 'card' && terminalDeviceId && cardEntryMode === 'terminal') && !(paymentMethod === 'card' && cardEntryMode === 'manual') && (
               <>
               {/* Card surcharge preview */}
               {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
