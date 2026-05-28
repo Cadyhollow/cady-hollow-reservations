@@ -104,9 +104,17 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   }
 
   function siteLabel(site: Site) {
+    if (siteStatuses) {
+      const status = siteStatuses[site.site_number]
+      if (status === 'arriving') return `Site ${site.site_number} · Arriving Today`
+      if (status === 'occupied') return `Site ${site.site_number} · Occupied`
+      if (status === 'departing') return `Site ${site.site_number} · Departing Today`
+      if (status === 'blocked') return `Site ${site.site_number} · Blocked`
+      return `Site ${site.site_number} · Available`
+    }
     const available = availableSiteIds.includes(site.id)
     const rate = site.nightly_rate || site.base_rate
-    return `Site ${site.site_number} · ${available ? '$' + (rate / 100).toFixed(0) + '/night' : 'Booked'}`
+    return \`Site \${site.site_number} · \${available ? '$' + (rate / 100).toFixed(0) + '/night' : 'Booked'}\`
   }
 
   function ampLabel(a: string) {
