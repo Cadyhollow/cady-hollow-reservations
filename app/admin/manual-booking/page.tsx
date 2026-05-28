@@ -62,6 +62,15 @@ export default function ManualBookingPage() {
 
   useEffect(() => { fetchSites(); fetchAddons(); fetchFees() }, [])
 
+  useEffect(() => {
+    if (form.payment_method === 'card') {
+      setTimeout(loadSquareCard, 100)
+    } else {
+      setSquareCardLoaded(false)
+      setSquareCardRef(null)
+    }
+  }, [form.payment_method])
+
   async function fetchSites() {
     const { data } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
     setSites(data || [])
