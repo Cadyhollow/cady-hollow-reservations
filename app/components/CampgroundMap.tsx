@@ -114,7 +114,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
     }
     const available = availableSiteIds.includes(site.id)
     const rate = site.nightly_rate || site.base_rate
-    return \`Site \${site.site_number} · \${available ? '$' + (rate / 100).toFixed(0) + '/night' : 'Booked'}\`
+    return `Site ${site.site_number} · ${available ? '$' + (rate / 100).toFixed(0) + '/night' : 'Booked'}`
   }
 
   function ampLabel(a: string) {
