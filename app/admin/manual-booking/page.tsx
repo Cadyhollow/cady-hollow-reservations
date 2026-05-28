@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -42,6 +42,7 @@ export default function ManualBookingPage() {
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareCardLoaded, setSquareCardLoaded] = useState(false)
   const [squareInstance, setSquareInstance] = useState<any>(null)
+  const cardLoadingRef = useRef(false)
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -81,9 +82,10 @@ export default function ManualBookingPage() {
   }
 
   async function loadSquareCard() {
+    if (cardLoadingRef.current) return
     const container = document.getElementById('manual-booking-card')
     if (!container) return
-    // Clear container first to prevent duplicates
+    cardLoadingRef.current = true
     container.innerHTML = ''
     try {
       let sq = squareInstance
