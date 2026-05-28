@@ -39,6 +39,9 @@ export default function ManualBookingPage() {
   const [fees, setFees] = useState<Fee[]>([])
   const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
   const [balanceDue, setBalanceDue] = useState('')
+  const [squareCardRef, setSquareCardRef] = useState<any>(null)
+  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
+  const [squareInstance, setSquareInstance] = useState<any>(null)
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -68,6 +71,28 @@ export default function ManualBookingPage() {
   async function fetchAddons() {
     const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
     setAddons(data || [])
+  }
+
+  async function loadSquareCard() {
+    if (squareCardLoaded) return
+    const container = document.getElementById('manual-booking-card')
+    if (!container) return
+    try {
+      let sq = squareInstance
+      if (!sq) {
+        const script = document.createElement('script')
+        script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
+          ? 'https://web.squarecdn.com/v1/square.js'
+          : 'https://sandbox.web.squarecdn.com/v1/square.js'
+        await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        setSquareInstance(sq)
+      }
+      const card = await sq.card()
+      await card.attach('#manual-booking-card')
+      setSquareCardRef(card)
+      setSquareCardLoaded(true)
+    } catch (e) { console.error('Square card load error:', e) }
   }
 
   async function fetchFees() {
@@ -145,6 +170,23 @@ export default function ManualBookingPage() {
 
     setSaving(true)
     const amountPaid = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+
+    // If card payment, tokenize first before creating reservation
+    let cardToken: string | null = null
+    if (form.payment_method === 'card' && amountPaid > 0) {
+      if (!squareCardRef) {
+        toast.error('Card form not ready. Please wait a moment.')
+        setSaving(false)
+        return
+      }
+      const result = await squareCardRef.tokenize()
+      if (result.status !== 'OK') {
+        toast.error('Card details invalid. Please check and try again.')
+        setSaving(false)
+        return
+      }
+      cardToken = result.token
+    }
 
     const addonItems = Object.entries(selectedAddons)
       .filter(([_, qty]) => qty > 0)
@@ -224,8 +266,42 @@ export default function ManualBookingPage() {
       console.error('Email failed:', e)
     }
 
+    // Charge card if applicable — create folio first then charge
+    if (cardToken && data.reservationId && amountPaid > 0) {
+      // Create folio for this reservation
+      const { data: newFolio } = await supabase.from('folios').insert({
+        reservation_id: data.reservationId,
+        guest_name: form.guest_name,
+        guest_email: form.guest_email || '',
+        folio_type: 'reservation',
+        status: 'open',
+      }).select().single()
+
+      if (newFolio) {
+        const cardRes = await fetch('/api/admin-card-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceId: cardToken,
+            folioId: newFolio.id,
+            amount: amountPaid,
+            surchargeAmount: 0,
+            guestName: form.guest_name,
+          }),
+        })
+        const cardData = await cardRes.json()
+        if (!cardData.success) {
+          toast.error('Reservation created but card charge failed: ' + (cardData.error || 'Unknown error'))
+          setSaving(false)
+          return
+        }
+      }
+    }
+
     toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
     setSaving(false)
+    setSquareCardLoaded(false)
+    setSquareCardRef(null)
     setForm({
       site_id: '',
       arrival_date: '',
@@ -445,6 +521,15 @@ export default function ManualBookingPage() {
                 <input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
                 <p className="text-xs text-gray-400 mt-1">Card total: ${(total / 100).toFixed(2)} · Cash total: ${(cashTotal / 100).toFixed(2)}</p>
               </div>
+              {form.payment_method === 'card' && (
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Card Details</label>
+                  <div id="manual-booking-card" className="border border-gray-200 rounded-lg p-2 min-h-[89px]"
+                    ref={el => { if (el && !squareCardLoaded) setTimeout(loadSquareCard, 100) }}
+                  />
+                  {!squareCardLoaded && <p className="text-xs text-gray-400 mt-1">Loading card form...</p>}
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Balance Due at Arrival ($)</label>
                 <input
