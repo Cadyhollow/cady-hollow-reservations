@@ -133,7 +133,7 @@ export default function TransactionsPage() {
     // Fetch online reservations WITHOUT folios
     const { data: onlineResData } = await supabase
       .from('reservations')
-      .select('id, guest_name, amount_paid, payment_type, created_at, square_payment_id')
+      .select('id, guest_name, amount_paid, payment_type, payment_method, created_at, square_payment_id')
       .gt('amount_paid', 0)
       .gte('created_at', startISO)
       .lte('created_at', endISO)
@@ -144,7 +144,7 @@ export default function TransactionsPage() {
       .map((r: any) => ({
         id: 'res-' + r.id,
         paid_at: r.created_at,
-        method: 'card',
+        method: r.payment_method || (r.square_payment_id ? 'card' : 'cash'),
         amount: r.amount_paid,
         surcharge_amount: 0,
         status: 'completed',

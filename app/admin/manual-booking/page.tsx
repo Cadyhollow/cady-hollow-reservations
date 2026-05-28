@@ -53,6 +53,7 @@ export default function ManualBookingPage() {
     camper_amperage: '',
     payment_type: 'full',
     amount_paid: '',
+    payment_method: 'cash',
     notes: '',
   })
 
@@ -174,6 +175,7 @@ export default function ManualBookingPage() {
         fees_total: 0,
         amount_paid: amountPaid,
         payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
+        payment_method: form.payment_method,
         notes: form.notes,
         addonItems,
       }),
@@ -238,6 +240,7 @@ export default function ManualBookingPage() {
       camper_amperage: '',
       payment_type: 'full',
       amount_paid: '',
+      payment_method: 'cash',
       notes: '',
     })
     setSelectedAddons({})
@@ -425,6 +428,18 @@ export default function ManualBookingPage() {
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment</h3>
             <p className="text-xs text-gray-500 mb-4">Enter what was collected today and what the guest will owe at arrival. Balance due is the cash price — card adds 3% at check-in.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['cash', 'card', 'check'] as const).map(m => (
+                    <button key={m} type="button" onClick={() => setForm({ ...form, payment_method: m })}
+                      className="py-2 rounded-lg text-sm font-semibold border-2 capitalize transition-colors"
+                      style={{ borderColor: form.payment_method === m ? '#15803d' : '#e5e7eb', background: form.payment_method === m ? '#f0fdf4' : '#fff', color: form.payment_method === m ? '#15803d' : '#374151' }}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid Today ($)</label>
                 <input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />

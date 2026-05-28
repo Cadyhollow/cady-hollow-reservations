@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
       fees_total,
       amount_paid,
       payment_type,
+      payment_method,
       notes,
       addonItems,
     } = body
@@ -71,6 +72,7 @@ export async function POST(request: NextRequest) {
         fees_total: fees_total || 0,
         amount_paid,
         payment_type,
+        payment_method: payment_method || 'cash',
         square_payment_id: null,
         waiver_signed: false,
         notes,
