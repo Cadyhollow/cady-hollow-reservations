@@ -307,7 +307,7 @@ export default function WalkInBookingPage() {
           folioId,
           amount: totalAmount,
           surchargeAmount,
-          guestName: guestInfo?.guest_name || '',
+          guestName: form.guest_name || '',
         }),
       })
       const data = await res.json()
