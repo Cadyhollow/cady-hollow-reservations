@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -30,7 +31,7 @@ type Fee = {
   card_only: boolean
 }
 
-export default function ManualBookingPage() {
+function ManualBookingInner() {
   const [sites, setSites] = useState<Site[]>([])
   const [addons, setAddons] = useState<Addon[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
@@ -62,6 +63,13 @@ export default function ManualBookingPage() {
   })
 
   useEffect(() => { fetchSites(); fetchAddons(); fetchFees() }, [])
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const siteIdFromUrl = searchParams.get('site_id')
+    if (siteIdFromUrl && sites.length > 0) {
+      setForm(prev => ({ ...prev, site_id: siteIdFromUrl }))
+    }
+  }, [searchParams, sites])
 
   useEffect(() => {
     if (form.payment_method === 'card') {
@@ -646,5 +654,13 @@ export default function ManualBookingPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ManualBookingPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-500">Loading...</div>}>
+      <ManualBookingInner />
+    </Suspense>
   )
 }

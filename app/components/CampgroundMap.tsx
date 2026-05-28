@@ -24,6 +24,7 @@ type Props = {
   selectedSiteId?: string
   onSelectSite: (site: Site) => void
   nights?: number
+  siteStatuses?: Record<string, 'arriving' | 'occupied' | 'departing' | 'available' | 'blocked'>
 }
 
 const SITE_NUMBERS: Record<string, string[]> = {
@@ -35,7 +36,7 @@ const SITE_NUMBERS: Record<string, string[]> = {
   topRight: ['80','81','82','83','84','85','C2','C3'],
 }
 
-export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId, onSelectSite, nights }: Props) {
+export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId, onSelectSite, nights, siteStatuses }: Props) {
   const [hoveredNum, setHoveredNum] = useState<string | null>(null)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; site: Site } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -45,13 +46,20 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   function getColor(num: string) {
   const site = siteByNumber[num]
   if (!site) return '#d1d5db'
-  
+
+  if (siteStatuses) {
+    const status = siteStatuses[num]
+    if (status === 'arriving') return '#fbbf24'
+    if (status === 'occupied') return '#4ade80'
+    if (status === 'departing') return '#fb923c'
+    if (status === 'blocked') return '#6b7280'
+    return '#d1d5db'
+  }
+
   const isAvailable = availableSiteIds.includes(site.id)
-  
   if (!isAvailable) return '#d1d5db'
   if (selectedSiteId === site.id) return 'var(--accent-color)'
   if (hoveredNum === num) return '#6ee7b7'
-  
   if (num === 'C1') return '#f5e07a'
   if (num === 'C2' || num === 'C3') return '#e88a8a'
   if (site.hookups === 'water_electric') return '#bfdbfe'
@@ -72,7 +80,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   function handleClick(num: string, e: React.MouseEvent) {
     const site = siteByNumber[num]
     if (!site) return
-    if (!availableSiteIds.includes(site.id)) return
+    if (!siteStatuses && !availableSiteIds.includes(site.id)) return
     onSelectSite(site)
   }
 
