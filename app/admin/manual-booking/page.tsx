@@ -64,10 +64,8 @@ export default function ManualBookingPage() {
 
   useEffect(() => {
     if (form.payment_method === 'card') {
-      setTimeout(loadSquareCard, 100)
-    } else {
-      setSquareCardLoaded(false)
-      setSquareCardRef(null)
+      const timer = setTimeout(loadSquareCard, 150)
+      return () => clearTimeout(timer)
     }
   }, [form.payment_method])
 
@@ -83,17 +81,20 @@ export default function ManualBookingPage() {
   }
 
   async function loadSquareCard() {
-    if (squareCardLoaded) return
     const container = document.getElementById('manual-booking-card')
     if (!container) return
+    // Clear container first to prevent duplicates
+    container.innerHTML = ''
     try {
       let sq = squareInstance
       if (!sq) {
-        const script = document.createElement('script')
-        script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-          ? 'https://web.squarecdn.com/v1/square.js'
-          : 'https://sandbox.web.squarecdn.com/v1/square.js'
-        await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        if (!(window as any).Square) {
+          const script = document.createElement('script')
+          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
+            ? 'https://web.squarecdn.com/v1/square.js'
+            : 'https://sandbox.web.squarecdn.com/v1/square.js'
+          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        }
         sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
         setSquareInstance(sq)
       }
