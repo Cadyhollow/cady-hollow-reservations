@@ -20,6 +20,7 @@ type LineItem = {
   category: string
   charged_at: string
   product_id: string | null
+  notes?: string | null
 }
 
 type Payment = {

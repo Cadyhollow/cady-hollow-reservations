@@ -31,6 +31,7 @@ type LineItem = {
   line_total: number
   category: string
   charged_at: string
+  notes?: string | null
 }
 
 type Payment = {
