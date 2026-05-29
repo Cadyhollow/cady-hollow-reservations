@@ -133,7 +133,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
     const site = siteByNumber[num]
     const isCabin = num === 'C1' || num === 'C2' || num === 'C3'
     const isAvailable = site ? availableSiteIds.includes(site.id) : false
-    const isClickable = site && (isAvailable || isCabin)
+    const isClickable = site && (!!siteStatuses || isAvailable || isCabin)
 
     return (
       <g
@@ -377,10 +377,23 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
             {tooltip.site.max_rv_length && (
               <p className="text-gray-600">Max RV: {tooltip.site.max_rv_length}ft</p>
             )}
-            <p className="font-semibold mt-1" style={{ color: availableSiteIds.includes(tooltip.site.id) ? '#16a34a' : '#dc2626' }}>
-              {availableSiteIds.includes(tooltip.site.id)
-                ? '$' + ((tooltip.site.nightly_rate || tooltip.site.base_rate) / 100).toFixed(0) + '/night'
-                : 'Not available'}
+            <p className="font-semibold mt-1" style={{ color: siteStatuses
+                ? siteStatuses[tooltip.site.site_number] === 'available' ? '#16a34a'
+                  : siteStatuses[tooltip.site.site_number] === 'arriving' ? '#d97706'
+                  : siteStatuses[tooltip.site.site_number] === 'departing' ? '#ea580c'
+                  : siteStatuses[tooltip.site.site_number] === 'occupied' ? '#15803d'
+                  : '#6b7280'
+                : availableSiteIds.includes(tooltip.site.id) ? '#16a34a' : '#dc2626' }}>
+              {siteStatuses
+                ? siteStatuses[tooltip.site.site_number] === 'available' ? 'Available — click to book'
+                  : siteStatuses[tooltip.site.site_number] === 'arriving' ? 'Arriving Today'
+                  : siteStatuses[tooltip.site.site_number] === 'departing' ? 'Departing Today'
+                  : siteStatuses[tooltip.site.site_number] === 'occupied' ? 'Occupied'
+                  : siteStatuses[tooltip.site.site_number] === 'blocked' ? 'Blocked'
+                  : 'Available'
+                : availableSiteIds.includes(tooltip.site.id)
+                  ? '$' + ((tooltip.site.nightly_rate || tooltip.site.base_rate) / 100).toFixed(0) + '/night'
+                  : 'Not available'}
             </p>
           </div>
         )}

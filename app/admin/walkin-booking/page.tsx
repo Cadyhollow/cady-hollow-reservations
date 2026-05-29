@@ -406,7 +406,7 @@ export default function WalkInBookingPage() {
   const totalDue = Math.max(0, total + itemsTotal - paymentsTotal)
   const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
     sum + (f.type === 'percentage' ? Math.round(totalDue * f.amount / 100) : f.amount), 0)
-  const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
+  const overpaid = cashTendered !== '' && parseFloat(cashTendered) > parseFloat(paymentAmount) ? Math.round((parseFloat(cashTendered) - parseFloat(paymentAmount)) * 100) : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
