@@ -232,7 +232,8 @@ export default function WalkUpFolioPage() {
               {lineItems.map((item, i) => (
                 <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < lineItems.length - 1 ? '1px solid #f9fafb' : 'none' }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}</div>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
+                    {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 2 }}>{item.notes}</div>}
                     {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
                   </div>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>${(item.line_total/100).toFixed(2)}</div>
