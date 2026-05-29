@@ -26,6 +26,10 @@ export default function AdminDashboard() {
     revenueThisMonth: 0,
   })
   const [recentReservations, setRecentReservations] = useState<any[]>([])
+  const [upcomingReservations, setUpcomingReservations] = useState<any[]>([])
+  const [totalActiveSites, setTotalActiveSites] = useState(0)
+  const [occupancyTonight, setOccupancyTonight] = useState({ arriving: 0, occupied: 0, departing: 0 })
+  const [plan, setPlan] = useState<string>('summit')
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -49,7 +53,10 @@ export default function AdminDashboard() {
         .neq('status', 'cancelled'),
     ])
 
-    if (settingsData) setSettings(settingsData)
+    if (settingsData) {
+      setSettings(settingsData)
+      if (settingsData.plan) setPlan(settingsData.plan)
+    }
 
     if (resData) {
       const thisMonth = resData.filter((r: any) =>
@@ -66,7 +73,23 @@ export default function AdminDashboard() {
         revenueThisMonth: revenue,
       })
       setRecentReservations(resData.slice(0, 8))
+      const upcoming = resData
+        .filter((r: any) => r.arrival_date >= today)
+        .sort((a: any, b: any) => a.arrival_date.localeCompare(b.arrival_date))
+        .slice(0, 5)
+      setUpcomingReservations(upcoming)
+      const occupiedTonight = resData.filter((r: any) =>
+        r.arrival_date < today && r.departure_date > today
+      ).length
+      const arrivingTonight = resData.filter((r: any) => r.arrival_date === today).length
+      const departingTonight = resData.filter((r: any) => r.departure_date === today).length
+      setOccupancyTonight({ arriving: arrivingTonight, occupied: occupiedTonight, departing: departingTonight })
     }
+    const { count } = await supabase
+      .from('sites')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_available', true)
+    setTotalActiveSites(count || 0)
 
     if (todayArrivals && todayArrivals.length > 0) {
       const ids = todayArrivals.map((r: any) => r.id)
@@ -185,6 +208,7 @@ export default function AdminDashboard() {
           { label: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🏕️' },
           { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
+          ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
           { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
           { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
         ].map(link => (
@@ -288,31 +312,97 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {/* Recent reservations */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">Recent Reservations</h2>
-          <Link href="/admin/reservations" className="text-sm text-green-700 hover:underline">View all →</Link>
+      {/* Occupancy + Upcoming */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Occupancy Bar */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-gray-900">Tonight's Occupancy</h2>
+            <span className="text-2xl font-bold text-gray-900">
+              {occupancyTonight.arriving + occupancyTonight.occupied + occupancyTonight.departing}
+              <span className="text-sm font-normal text-gray-400"> / {totalActiveSites}</span>
+            </span>
+          </div>
+          {/* Bar */}
+          <div className="w-full h-4 rounded-full overflow-hidden bg-gray-100 flex mb-4">
+            {totalActiveSites > 0 && (
+              <>
+                {occupancyTonight.occupied > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.occupied / totalActiveSites) * 100}%`, backgroundColor: '#4ade80' }} />
+                )}
+                {occupancyTonight.arriving > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.arriving / totalActiveSites) * 100}%`, backgroundColor: '#fbbf24' }} />
+                )}
+                {occupancyTonight.departing > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.departing / totalActiveSites) * 100}%`, backgroundColor: '#fb923c' }} />
+                )}
+              </>
+            )}
+          </div>
+          {/* Legend */}
+          <div className="flex flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#4ade80' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.occupied} Occupied</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#fbbf24' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.arriving} Arriving</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#fb923c' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.departing} Departing</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-gray-200" />
+              <span className="text-xs text-gray-600">{Math.max(0, totalActiveSites - occupancyTonight.arriving - occupancyTonight.occupied - occupancyTonight.departing)} Available</span>
+            </div>
+          </div>
         </div>
-        <div className="divide-y divide-gray-50">
-          {recentReservations.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">No reservations yet.</p>
-          ) : recentReservations.map(r => (
-            <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
-              className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
-              <div>
-                <p className="text-sm font-medium text-gray-900">{r.guest_name}</p>
-                <p className="text-xs text-gray-500">{siteTypeLabel(r.sites?.site_type)} {r.sites?.site_number} · {r.arrival_date} → {r.departure_date}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${statusColor(r.status)}`}>
-                  {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
-                </span>
-                <span className="text-sm font-medium text-gray-700">${(r.amount_paid / 100).toFixed(0)}</span>
-              </div>
-            </Link>
-          ))}
+
+        {/* Upcoming Arrivals */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h2 className="text-base font-semibold text-gray-900">Upcoming Arrivals</h2>
+            <Link href="/admin/reservations" className="text-sm text-green-700 hover:underline">View all →</Link>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {upcomingReservations.length === 0 ? (
+              <p className="text-gray-400 text-sm text-center py-8">No upcoming arrivals.</p>
+            ) : upcomingReservations.map(r => {
+              const isToday = r.arrival_date === new Date().toISOString().split('T')[0]
+              const paidInFull = r.amount_paid >= r.total_price
+              return (
+                <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
+                  className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0"
+                      style={{ background: isToday ? '#f0fdf4' : '#f9fafb', border: '1px solid', borderColor: isToday ? '#bbf7d0' : '#e5e7eb' }}>
+                      <span className="text-xs font-bold" style={{ color: isToday ? '#15803d' : '#6b7280' }}>
+                        {new Date(r.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short' })}
+                      </span>
+                      <span className="text-sm font-extrabold leading-none" style={{ color: isToday ? '#15803d' : '#111827' }}>
+                        {new Date(r.arrival_date + 'T12:00:00').getDate()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{r.guest_name}</p>
+                      <p className="text-xs text-gray-500">{siteTypeLabel(r.sites?.site_type)} {r.sites?.site_number}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="text-sm font-medium text-gray-700">${(r.total_price / 100).toFixed(0)}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${paidInFull ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {paidInFull ? 'Paid' : 'Balance due'}
+                    </span>
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
         </div>
+
       </div>
 
     </div>
