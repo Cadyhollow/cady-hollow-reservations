@@ -9,6 +9,7 @@ type Site = {
   amp_service: string
   hookups: string
   base_rate: number
+  is_available?: boolean
   nightly_rate?: number
   total_price?: number
   nights?: number

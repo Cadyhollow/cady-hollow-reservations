@@ -11,7 +11,7 @@ type Site = {
   amp_service: string
   hookups: string
   base_rate: number
-  is_available: boolean
+  is_available?: boolean
   nightly_rate?: number
   total_price?: number
   nights?: number
@@ -72,7 +72,7 @@ function AdminMapInner() {
     sites.forEach(s => { siteMap[s.site_number] = s })
 
     // Mark all sites as available or blocked based on is_available flag
-    sites.forEach(s => { statuses[s.site_number] = s.is_available ? 'available' : 'blocked' })
+    sites.forEach(s => { statuses[s.site_number] = (s.is_available !== false) ? 'available' : 'blocked' })
 
     // Overlay reservation statuses
     reservations.forEach(res => {
