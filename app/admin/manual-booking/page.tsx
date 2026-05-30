@@ -73,7 +73,7 @@ function ManualBookingInner() {
 
   useEffect(() => {
     if (form.payment_method === 'card') {
-      const timer = setTimeout(loadSquareCard, 150)
+      const timer = setTimeout(loadSquareCard, 500)
       return () => clearTimeout(timer)
     }
   }, [form.payment_method])
@@ -112,7 +112,7 @@ function ManualBookingInner() {
       await card.attach('#manual-booking-card')
       setSquareCardRef(card)
       setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e) }
+    } catch (e) { console.error('Square card load error:', e); cardLoadingRef.current = false }
   }
 
   async function fetchFees() {
@@ -318,7 +318,11 @@ function ManualBookingInner() {
       }
     }
 
-    toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
+    if (cardToken && amountPaid > 0) {
+      toast.success(`✓ Card approved! Reservation #${data.confirmationNumber} created.`)
+    } else {
+      toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
+    }
     setSaving(false)
     setSquareCardLoaded(false)
     setSquareCardRef(null)
@@ -569,7 +573,14 @@ function ManualBookingInner() {
               </div>
             </div>
           </div>
-          <button onClick={handleSave} disabled={saving} className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors">
+          {form.payment_method === 'card' && !squareCardLoaded && (
+            <p className="text-center text-sm text-amber-600 font-medium mb-2">⏳ Waiting for card form to load — please wait before submitting.</p>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || (form.payment_method === 'card' && parseFloat(form.amount_paid || '0') > 0 && !squareCardLoaded)}
+            className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors"
+          >
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
           </button>
         </div>
