@@ -85,7 +85,10 @@ function ReservationsPageInner() {
     num_adults: 2,
     num_children: 0,
     amount_paid: '',
+    guest_email: '',
+    guest_phone: '',
   })
+  const [resendingEmail, setResendingEmail] = useState(false)
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
@@ -202,6 +205,8 @@ function ReservationsPageInner() {
       num_adults: res.num_adults,
       num_children: res.num_children,
       amount_paid: (res.amount_paid / 100).toFixed(2),
+      guest_email: res.guest_email || '',
+      guest_phone: res.guest_phone || '',
     })
     fetchAddonsForEdit(res.id)
     if (res.arrival_date && res.departure_date) {
@@ -257,6 +262,8 @@ function ReservationsPageInner() {
       total_price: finalTotal,
       amount_paid: Math.round(parseFloat(editForm.amount_paid) * 100),
       notes: updatedNotes + overrideNote,
+      guest_email: editForm.guest_email,
+      guest_phone: editForm.guest_phone,
     }).eq('id', selected.id)
 
     if (error) { toast.error('Error saving changes.'); setSaving(false); return }
@@ -608,6 +615,49 @@ function ReservationsPageInner() {
                       Cancel
                     </button>
                   </div>
+                  <div className="pt-2">
+                    <button
+                      onClick={async () => {
+                        if (!selected.guest_email) { toast.error('No email address on file.'); return }
+                        setResendingEmail(true)
+                        try {
+                          const nights = Math.round((new Date(selected.departure_date).getTime() - new Date(selected.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
+                          await fetch('/api/email', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              guestName: selected.guest_name,
+                              guestEmail: selected.guest_email,
+                              siteNumber: selected.sites?.site_number || '',
+                              siteType: selected.sites?.site_type || 'rv_site',
+                              arrival: selected.arrival_date,
+                              departure: selected.departure_date,
+                              nights,
+                              adults: selected.num_adults,
+                              children: selected.num_children,
+                              camperType: '',
+                              camperLength: 0,
+                              camperAmperage: '',
+                              totalPrice: selected.total_price,
+                              amountPaid: selected.amount_paid,
+                              paymentType: selected.payment_type,
+                              confirmationNumber: selected.confirmation_number || selected.id.slice(0,8).toUpperCase(),
+                              addonDetails: [],
+                              extraGuestFee: 0,
+                            }),
+                          })
+                          toast.success('Confirmation email resent!')
+                        } catch (e) {
+                          toast.error('Failed to resend email.')
+                        }
+                        setResendingEmail(false)
+                      }}
+                      disabled={resendingEmail}
+                      className="w-full bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 disabled:opacity-50"
+                    >
+                      {resendingEmail ? 'Sending...' : '✉️ Resend Confirmation Email'}
+                    </button>
+                  </div>
                 )}
                 {selected.amount_paid > 0 && selected.status !== 'cancelled' && (
                   <div className="pt-2">
@@ -730,6 +780,16 @@ function ReservationsPageInner() {
                     <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                       value={editForm.num_children} onChange={e => setEditForm({ ...editForm, num_children: parseInt(e.target.value) })} />
                   </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={editForm.guest_email} onChange={e => setEditForm({ ...editForm, guest_email: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input type="tel" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={editForm.guest_phone} onChange={e => setEditForm({ ...editForm, guest_phone: e.target.value })} />
                 </div>
 
                 {availableAddons.length > 0 && (
