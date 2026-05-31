@@ -594,6 +594,7 @@ function ReservationsPageInner() {
                 </div>
 
                 {selected.status !== 'cancelled' && (
+                  <>
                   <div className="flex gap-2 pt-3 flex-wrap">
                     <button
                       onClick={() => startEditing(selected)}
@@ -641,7 +642,7 @@ function ReservationsPageInner() {
                               totalPrice: selected.total_price,
                               amountPaid: selected.amount_paid,
                               paymentType: selected.payment_type,
-                              confirmationNumber: selected.confirmation_number || selected.id.slice(0,8).toUpperCase(),
+                              confirmationNumber: selected.id.slice(0,8).toUpperCase(),
                               addonDetails: [],
                               extraGuestFee: 0,
                             }),
@@ -658,6 +659,7 @@ function ReservationsPageInner() {
                       {resendingEmail ? 'Sending...' : '✉️ Resend Confirmation Email'}
                     </button>
                   </div>
+                  </>
                 )}
                 {selected.amount_paid > 0 && selected.status !== 'cancelled' && (
                   <div className="pt-2">
