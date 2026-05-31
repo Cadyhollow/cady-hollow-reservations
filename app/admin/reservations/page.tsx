@@ -92,6 +92,7 @@ function ReservationsPageInner() {
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
+  const [pricingRules, setPricingRules] = useState<any[]>([])
   const [overrideTotal, setOverrideTotal] = useState(false)
   const [overrideTotalValue, setOverrideTotalValue] = useState('')
   const [showResRefund, setShowResRefund] = useState(false)
@@ -143,6 +144,8 @@ function ReservationsPageInner() {
   async function fetchFees() {
     const { data } = await supabase.from('fees').select('*').eq('is_active', true)
     setFees(data || [])
+    const { data: rulesData } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
+    setPricingRules(rulesData || [])
   }
 
   async function fetchBookedSites(arrival: string, departure: string, excludeReservationId: string) {
@@ -225,7 +228,17 @@ function ReservationsPageInner() {
     const nights = Math.round(
       (new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24)
     )
-    const basePrice = site ? site.base_rate * nights : selected.total_price
+    const applicable = site ? pricingRules.filter(rule => {
+      const withinDates = rule.start_date <= editForm.departure_date && rule.end_date >= editForm.arrival_date
+      if (!withinDates) return false
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+      if (rule.site_id) return rule.site_id === site.id
+      if (rule.site_type) return rule.site_type === site.site_type
+      return false
+    }) : []
+    const bestRule = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+    const nightlyRate = site ? (bestRule ? bestRule.nightly_rate : site.base_rate) : 0
+    const basePrice = site ? nightlyRate * nights : selected.total_price
     const addonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
       const addon = availableAddons.find(a => a.id === id)
       return sum + (addon ? addon.price * qty : 0)
@@ -393,7 +406,20 @@ function ReservationsPageInner() {
     ? Math.round((new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
   const editSite = allSites.find(s => s.id === editForm.site_id)
-  const editBasePrice = editSite ? editSite.base_rate * editNights : 0
+  const editNightlyRate = (() => {
+    if (!editSite || !editForm.arrival_date || !editForm.departure_date) return editSite?.base_rate || 0
+    const applicable = pricingRules.filter(rule => {
+      const withinDates = rule.start_date <= editForm.departure_date && rule.end_date >= editForm.arrival_date
+      if (!withinDates) return false
+      if (rule.site_ids) return rule.site_ids.split(',').includes(editSite.id)
+      if (rule.site_id) return rule.site_id === editSite.id
+      if (rule.site_type) return rule.site_type === editSite.site_type
+      return false
+    })
+    const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+    return best ? best.nightly_rate : editSite.base_rate
+  })()
+  const editBasePrice = editNightlyRate * editNights
   const editAddonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
     const addon = availableAddons.find(a => a.id === id)
     return sum + (addon ? addon.price * qty : 0)
@@ -516,6 +542,21 @@ function ReservationsPageInner() {
                 <div>
                   <p className="text-gray-500">Dates</p>
                   <p className="font-medium text-gray-900">{selected.arrival_date} → {selected.departure_date} ({nights(selected)} nights)</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Nightly Rate</p>
+                  <p className="font-medium text-gray-900">
+                    ${nights(selected) > 0 ? ((selected.total_price / nights(selected)) / 100).toFixed(2) : '—'}/night
+                    {(() => {
+                      const site = allSites.find(s => s.id === selected.site_id)
+                      if (!site) return null
+                      const effective = nights(selected) > 0 ? selected.total_price / nights(selected) : 0
+                      if (Math.abs(effective - site.base_rate) > 50) {
+                        return <span className="ml-2 text-xs text-amber-600 font-normal">(pricing rule applied)</span>
+                      }
+                      return null
+                    })()}
+                  </p>
                 </div>
                 <div>
                   <p className="text-gray-500">Reservation Made</p>
@@ -740,7 +781,7 @@ function ReservationsPageInner() {
                       const isCurrent = site.id === selected.site_id
                       return (
                         <option key={site.id} value={site.id}>
-                          {siteTypeLabel(site.site_type)} {site.site_number} — ${(site.base_rate / 100).toFixed(2)}/night
+                          {siteTypeLabel(site.site_type)} {site.site_number} — ${((editForm.site_id === site.id ? editNightlyRate : site.base_rate) / 100).toFixed(2)}/night
                           {isCurrent ? ' (current)' : isBooked ? ' ⚠ booked' : ' ✓ available'}
                         </option>
                       )
