@@ -546,15 +546,24 @@ function ReservationsPageInner() {
                 <div>
                   <p className="text-gray-500">Nightly Rate</p>
                   <p className="font-medium text-gray-900">
-                    ${nights(selected) > 0 ? ((selected.total_price / nights(selected)) / 100).toFixed(2) : '—'}/night
                     {(() => {
                       const site = allSites.find(s => s.id === selected.site_id)
-                      if (!site) return null
-                      const effective = nights(selected) > 0 ? selected.total_price / nights(selected) : 0
-                      if (Math.abs(effective - site.base_rate) > 50) {
-                        return <span className="ml-2 text-xs text-amber-600 font-normal">(pricing rule applied)</span>
-                      }
-                      return null
+                      if (!site) return '—'
+                      const applicable = pricingRules.filter(rule => {
+                        const withinDates = rule.start_date <= selected.departure_date && rule.end_date >= selected.arrival_date
+                        if (!withinDates) return false
+                        if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+                        if (rule.site_id) return rule.site_id === site.id
+                        if (rule.site_type) return rule.site_type === site.site_type
+                        return false
+                      })
+                      const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+                      const rate = best ? best.nightly_rate : site.base_rate
+                      const isRule = !!best
+                      return <>
+                        ${(rate / 100).toFixed(2)}/night
+                        {isRule && <span className="ml-2 text-xs text-amber-600 font-normal">(pricing rule applied)</span>}
+                      </>
                     })()}
                   </p>
                 </div>
