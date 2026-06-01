@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
       electricAmount,
       lineItems,
       totalBalance,
-      previousBillSentAt,
+      previousBalance,
     } = body
 
     const { data: settings } = await supabase
@@ -33,23 +33,6 @@ export async function POST(request: NextRequest) {
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
     const replyToEmail = settings?.park_email || fromEmail
 
-    // Split line items into new charges (since last bill) and previous balance
-    const cutoffDate = previousBillSentAt ? new Date(previousBillSentAt) : null
-    const thisElectricDesc = billingMonth + ' Electric'
-
-    // New charges = added after last bill was sent (excluding this month's electric which we show separately)
-    const newOtherCharges = lineItems.filter((item: any) => {
-      if (item.description === thisElectricDesc) return false
-      if (!cutoffDate) return true
-      return new Date(item.charged_at) > cutoffDate
-    })
-
-    // Previous balance = sum of all items added before the last bill, minus any payments applied
-    const oldItemsTotal = lineItems
-      .filter((item: any) => cutoffDate && new Date(item.charged_at) <= cutoffDate)
-      .reduce((s: number, i: any) => s + i.line_total, 0)
-    const newChargesTotal = electricAmount + newOtherCharges.reduce((s: number, i: any) => s + i.line_total, 0)
-    const previousBalance = totalBalance - newChargesTotal
     const hasPreviousBalance = previousBalance > 0
 
     const formatDateTime = (dateStr: string) => {
@@ -58,7 +41,7 @@ export async function POST(request: NextRequest) {
         ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
     }
 
-    const itemizedRows = newOtherCharges.map((item: any) => `
+    const itemizedRows = lineItems.map((item: any) => `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}${item.charged_at ? ' · ' + formatDateTime(item.charged_at) : ''}</td>
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>

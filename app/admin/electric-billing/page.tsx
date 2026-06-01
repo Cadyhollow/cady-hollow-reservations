@@ -388,9 +388,22 @@ export default function ElectricBillingPage() {
       .limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
 
+    // Only pass line items added AFTER the previous bill (excluding this month's electric — shown separately)
+    // Everything before the previous bill becomes "previous balance"
+    const thisElectricDesc = billingMonth + ' Electric'
+    const newLineItems = (allItems || []).filter((item: any) => {
+      if (item.description === thisElectricDesc) return false
+      if (!previousBillSentAt) return true
+      return new Date(item.charged_at) > new Date(previousBillSentAt)
+    })
+
+    // Previous balance = total minus this electric charge minus new line items
+    const newLineItemsTotal = newLineItems.reduce((s: number, i: any) => s + i.line_total, 0)
+    const previousBalance = newBalance - finalAmountCents - newLineItemsTotal
+
     const res = await fetch('/api/electric-bill-email', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: allItems || [], totalBalance: newBalance, previousBillSentAt }),
+      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: newLineItems, totalBalance: newBalance, previousBalance: previousBalance > 0 ? previousBalance : 0 }),
     })
     const data = await res.json()
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: newBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
