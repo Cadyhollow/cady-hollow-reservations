@@ -152,12 +152,16 @@ export default function ElectricBillingPage() {
         folioPayments = pmts || []
       }
 
+      // Check if the most recent payment has a receipt sent
+      const mostRecentPayment = folioPayments.length > 0 ? folioPayments[0] : null
+      const receiptAlreadySent = mostRecentPayment?.receipt_sent_at ? true : false
+
       return {
         guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
         showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false,
-        lastPaymentRecorded: null, showReceiptConfirm: false, sendingReceipt: false, receiptSent: false,
+        lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
       }
     }))
