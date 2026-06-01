@@ -165,7 +165,7 @@ export default function ElectricBillingPage() {
     setLoading(false)
   }
 
-  async function handleMonthChange(newMonth: string) {
+ async function handleMonthChange(newMonth: string) {
     setBillingMonth(newMonth)
     if (campers.length === 0) return
     setAutoPopulating(true)
@@ -174,15 +174,35 @@ export default function ElectricBillingPage() {
     const updatedCampers = await Promise.all(campers.map(async (row) => {
       const { data: readings } = await supabase
         .from('electric_readings')
-        .select('billing_month, current_reading, created_at')
+        .select('billing_month, previous_reading, current_reading, created_at')
         .eq('guest_id', row.guest.id)
         .order('created_at', { ascending: false })
 
       if (!readings || readings.length === 0) return row
+
+      // If this month already has a recorded reading, show that exact data
+      const thisMonthReading = readings.find(r => r.billing_month === newMonth)
+      if (thisMonthReading) {
+        return {
+          ...row,
+          previousReading: String(thisMonthReading.previous_reading),
+          currentReading: String(thisMonthReading.current_reading),
+          sent: true,
+        }
+      }
+
+      // Otherwise find the most recent reading before this month and pre-fill prev reading
       const priorReadings = readings.filter(r => parseMonthValue(r.billing_month) < selectedVal)
       if (priorReadings.length === 0) return row
-      const mostRecent = priorReadings[0]
-      return { ...row, previousReading: String(mostRecent.current_reading), currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '', sent: false }
+      return {
+        ...row,
+        previousReading: String(priorReadings[0].current_reading),
+        currentReading: '',
+        kwhUsed: 0,
+        calculatedAmount: 0,
+        finalAmount: '',
+        sent: false,
+      }
     }))
 
     setCampers(updatedCampers)
