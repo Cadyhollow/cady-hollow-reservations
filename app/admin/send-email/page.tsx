@@ -234,7 +234,7 @@ export default function SendEmailPage() {
             {/* Check/uncheck all */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
               <input type='checkbox' checked={recipients.every(r => r.checked || !r.email)} onChange={e => toggleAll(e.target.checked)}
-                style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                style={{ width: 16, height: 16, cursor: 'pointer', appearance: 'auto' as any }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
                 {recipients.filter(r => r.checked).length} of {recipients.filter(r => r.email).length} selected
               </span>
@@ -246,7 +246,7 @@ export default function SendEmailPage() {
               {recipients.map((r, i) => (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px', borderBottom: '1px solid #f3f4f6', background: r.checked ? '#fff' : '#f9fafb', opacity: !r.email ? 0.5 : 1 }}>
                   <input type='checkbox' checked={r.checked} disabled={!r.email} onChange={() => toggleOne(i)}
-                    style={{ width: 16, height: 16, cursor: r.email ? 'pointer' : 'default' }} />
+                    style={{ width: 16, height: 16, cursor: r.email ? 'pointer' : 'default', appearance: 'auto' as any }} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{r.name}</div>
                     <div style={{ fontSize: 11, color: '#9ca3af' }}>{r.email || 'No email'}{r.site_number ? ' · Site ' + r.site_number : ''}</div>
@@ -311,7 +311,7 @@ export default function SendEmailPage() {
         <h3 style={cardTitle}>Step 3 — Send Options</h3>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 16, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: 14 }}>
           <input type='checkbox' id='bypass' checked={bypassOptOut} onChange={e => setBypassOptOut(e.target.checked)}
-            style={{ width: 16, height: 16, marginTop: 2, cursor: 'pointer' }} />
+            style={{ width: 16, height: 16, marginTop: 2, cursor: 'pointer', appearance: 'auto' as any }} />
           <label htmlFor='bypass' style={{ fontSize: 13, color: '#374151', cursor: 'pointer', lineHeight: 1.5 }}>
             <strong style={{ color: '#dc2626' }}>Emergency override</strong> — send to ALL selected recipients including those who opted out.
             Only use for urgent operational messages (power outages, safety alerts, schedule changes).
