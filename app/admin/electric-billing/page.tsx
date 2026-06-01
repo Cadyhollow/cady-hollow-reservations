@@ -53,38 +53,64 @@ type CamperRow = {
   sent: boolean
   sending: boolean
   error: string
-  // UI state
   showHistory: boolean
   showPayment: boolean
   paymentAmount: string
   paymentMethod: string
   paymentNote: string
   savingPayment: boolean
-  // History data
+  lastPaymentRecorded: FolioPayment | null
+  showReceiptConfirm: boolean
+  sendingReceipt: boolean
+  receiptSent: boolean
   readings: ElectricReading[]
   historyLoaded: boolean
+}
+
+function generateMonthOptions(): string[] {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const options: string[] = []
+  for (const year of [currentYear, currentYear + 1]) {
+    for (const month of months) {
+      options.push(`${month} ${year}`)
+    }
+  }
+  return options
+}
+
+function getCurrentMonthOption(): string {
+  const now = new Date()
+  return now.toLocaleString('default', { month: 'long' }) + ' ' + now.getFullYear()
+}
+
+function parseMonthValue(s: string): number {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
+  const p = s.split(' ')
+  return p.length === 2 ? parseInt(p[1]) * 12 + months.indexOf(p[0]) : 0
 }
 
 export default function ElectricBillingPage() {
   const router = useRouter()
 
-  // ── Plan/feature gate — redirect if not authorized ──────────────────────
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
       if (data?.plan !== 'summit') router.replace('/admin')
     })
   }, [])
+
   const [campers, setCampers] = useState<CamperRow[]>([])
   const [loading, setLoading] = useState(true)
   const [ratePerKwh, setRatePerKwh] = useState('0.27')
   const [minimumCharge, setMinimumCharge] = useState('15.00')
   const [activeTab, setActiveTab] = useState<'billing' | 'history'>('billing')
-  const [billingMonth, setBillingMonth] = useState(() => {
-    const now = new Date()
-    return now.toLocaleString('default', { month: 'long' }) + ' ' + now.getFullYear()
-  })
+  const [billingMonth, setBillingMonth] = useState(getCurrentMonthOption)
   const [emailMessage, setEmailMessage] = useState("Please find your monthly electric statement below. If you have any questions, please don't hesitate to reach out.")
   const [sendingAll, setSendingAll] = useState(false)
+  const [autoPopulating, setAutoPopulating] = useState(false)
+
+  const monthOptions = generateMonthOptions()
 
   useEffect(() => { fetchCampers(); fetchMessage() }, [])
 
@@ -100,22 +126,14 @@ export default function ElectricBillingPage() {
 
   async function fetchCampers() {
     setLoading(true)
-    const { data: guests } = await supabase
-      .from('guests')
-      .select('*')
-      .eq('is_seasonal', true)
-
+    const { data: guests } = await supabase.from('guests').select('*').eq('is_seasonal', true)
     const sortedGuests = (guests || []).sort((a, b) => parseInt(a.site_number) - parseInt(b.site_number))
     if (sortedGuests.length === 0) { setLoading(false); return }
 
     const rows: CamperRow[] = await Promise.all(sortedGuests.map(async (guest: Guest) => {
       const { data: folio } = await supabase
-        .from('folios')
-        .select('id')
-        .eq('guest_id', guest.id)
-        .eq('folio_type', 'guest_account')
-        .eq('status', 'open')
-        .single()
+        .from('folios').select('id').eq('guest_id', guest.id)
+        .eq('folio_type', 'guest_account').eq('status', 'open').single()
 
       let folioBalance = 0
       let recentCharges: any[] = []
@@ -134,33 +152,41 @@ export default function ElectricBillingPage() {
       }
 
       return {
-        guest,
-        folioId: folio?.id || '',
-        folioBalance,
-        recentCharges,
-        folioPayments,
-        previousReading: '',
-        currentReading: '',
-        kwhUsed: 0,
-        calculatedAmount: 0,
-        finalAmount: '',
-        skip: false,
-        sent: false,
-        sending: false,
-        error: '',
-        showHistory: false,
-        showPayment: false,
-        paymentAmount: '',
-        paymentMethod: 'cash',
-        paymentNote: '',
-        savingPayment: false,
-        readings: [],
-        historyLoaded: false,
+        guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
+        previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
+        skip: false, sent: false, sending: false, error: '',
+        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false,
+        lastPaymentRecorded: null, showReceiptConfirm: false, sendingReceipt: false, receiptSent: false,
+        readings: [], historyLoaded: false,
       }
     }))
 
     setCampers(rows)
     setLoading(false)
+  }
+
+  async function handleMonthChange(newMonth: string) {
+    setBillingMonth(newMonth)
+    if (campers.length === 0) return
+    setAutoPopulating(true)
+    const selectedVal = parseMonthValue(newMonth)
+
+    const updatedCampers = await Promise.all(campers.map(async (row) => {
+      const { data: readings } = await supabase
+        .from('electric_readings')
+        .select('billing_month, current_reading, created_at')
+        .eq('guest_id', row.guest.id)
+        .order('created_at', { ascending: false })
+
+      if (!readings || readings.length === 0) return row
+      const priorReadings = readings.filter(r => parseMonthValue(r.billing_month) < selectedVal)
+      if (priorReadings.length === 0) return row
+      const mostRecent = priorReadings[0]
+      return { ...row, previousReading: String(mostRecent.current_reading), currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '', sent: false }
+    }))
+
+    setCampers(updatedCampers)
+    setAutoPopulating(false)
   }
 
   async function loadHistory(index: number) {
@@ -169,37 +195,21 @@ export default function ElectricBillingPage() {
       setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], showHistory: !u[index].showHistory }; return u })
       return
     }
-    const { data } = await supabase
-      .from('electric_readings')
-      .select('*')
-      .eq('guest_id', row.guest.id)
-      .order('created_at', { ascending: false })
-
-    setCampers(prev => {
-      const u = [...prev]
-      u[index] = { ...u[index], readings: data || [], historyLoaded: true, showHistory: true }
-      return u
-    })
+    const { data } = await supabase.from('electric_readings').select('*').eq('guest_id', row.guest.id).order('created_at', { ascending: false })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: data || [], historyLoaded: true, showHistory: true }; return u })
   }
 
   async function recordPayment(index: number) {
     const row = campers[index]
     if (!row.folioId || !row.paymentAmount) return
-
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: true }; return u })
 
     const amountCents = Math.round(parseFloat(row.paymentAmount) * 100)
+    const { data: newPayment } = await supabase.from('folio_payments').insert({
+      folio_id: row.folioId, method: row.paymentMethod, amount: amountCents,
+      surcharge_amount: 0, status: 'completed', note: row.paymentNote || null,
+    }).select().single()
 
-    await supabase.from('folio_payments').insert({
-      folio_id: row.folioId,
-      method: row.paymentMethod,
-      amount: amountCents,
-      surcharge_amount: 0,
-      status: 'completed',
-      note: row.paymentNote || null,
-    })
-
-    // Recalculate balance
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
       supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed'),
@@ -210,17 +220,28 @@ export default function ElectricBillingPage() {
 
     setCampers(prev => {
       const u = [...prev]
-      u[index] = {
-        ...u[index],
-        folioBalance: newBalance,
-        folioPayments: pmts || [],
-        savingPayment: false,
-        showPayment: false,
-        paymentAmount: '',
-        paymentNote: '',
-      }
+      u[index] = { ...u[index], folioBalance: newBalance, folioPayments: pmts || [], savingPayment: false, showPayment: false, paymentAmount: '', paymentNote: '', lastPaymentRecorded: newPayment || null, showReceiptConfirm: false, receiptSent: false }
       return u
     })
+  }
+
+  async function sendReceipt(index: number) {
+    const row = campers[index]
+    if (!row.lastPaymentRecorded || !row.guest.email) return
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sendingReceipt: true }; return u })
+
+    const res = await fetch('/api/electric-payment-receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
+        paymentAmount: row.lastPaymentRecorded.amount, paymentMethod: row.lastPaymentRecorded.method,
+        paymentNote: row.lastPaymentRecorded.note, paidAt: row.lastPaymentRecorded.paid_at,
+        remainingBalance: row.folioBalance,
+      }),
+    })
+    const data = await res.json()
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sendingReceipt: false, receiptSent: data.success, showReceiptConfirm: false }; return u })
   }
 
   function updateReading(index: number, field: 'previousReading' | 'currentReading', value: string) {
@@ -257,52 +278,32 @@ export default function ElectricBillingPage() {
   async function sendBill(index: number) {
     const row = campers[index]
     if (row.skip || row.sent) return
-    if (!row.guest.email) {
-      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'No email on file' }; return u })
-      return
-    }
+    if (!row.guest.email) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'No email on file' }; return u }); return }
     const finalAmountCents = Math.round(parseFloat(row.finalAmount) * 100) || row.calculatedAmount
-    if (!finalAmountCents) {
-      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'Enter meter readings first' }; return u })
-      return
-    }
-
+    if (!finalAmountCents) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'Enter meter readings first' }; return u }); return }
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: true, error: '' }; return u })
 
     let folioId = row.folioId
     if (!folioId) {
       const { data: newFolio } = await supabase.from('folios').insert({
-        guest_id: row.guest.id,
-        guest_name: row.guest.name,
-        guest_email: row.guest.email,
-        folio_type: 'guest_account',
-        status: 'open',
-        label: 'Seasonal Account',
+        guest_id: row.guest.id, guest_name: row.guest.name, guest_email: row.guest.email,
+        folio_type: 'guest_account', status: 'open', label: 'Seasonal Account',
       }).select().single()
       if (newFolio) folioId = newFolio.id
     }
 
     const { data: lineItem } = await supabase.from('folio_line_items').insert({
-      folio_id: folioId,
-      product_id: null,
-      description: billingMonth + ' Electric',
-      quantity: 1,
-      unit_price: finalAmountCents,
-      tax_amount: 0,
-      line_total: finalAmountCents,
-      category: 'Fees',
+      folio_id: folioId, product_id: null, description: billingMonth + ' Electric',
+      quantity: 1, unit_price: finalAmountCents, tax_amount: 0, line_total: finalAmountCents, category: 'Fees',
     }).select().single()
 
     await supabase.from('electric_readings').insert({
-      guest_id: row.guest.id,
-      billing_month: billingMonth,
+      guest_id: row.guest.id, billing_month: billingMonth,
       previous_reading: parseFloat(row.previousReading) || 0,
       current_reading: parseFloat(row.currentReading) || 0,
-      kwh_used: row.kwhUsed,
-      rate_per_kwh: parseFloat(ratePerKwh) || 0.27,
+      kwh_used: row.kwhUsed, rate_per_kwh: parseFloat(ratePerKwh) || 0.27,
       minimum_charge: Math.round((parseFloat(minimumCharge) || 15) * 100),
-      calculated_amount: row.calculatedAmount,
-      final_amount: finalAmountCents,
+      calculated_amount: row.calculatedAmount, final_amount: finalAmountCents,
       folio_line_item_id: lineItem?.id || null,
     })
 
@@ -313,34 +314,11 @@ export default function ElectricBillingPage() {
     const newBalance = Math.max(0, itemsTotal - paymentsTotal)
 
     const res = await fetch('/api/electric-bill-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        guestName: row.guest.name,
-        guestEmail: row.guest.email,
-        siteNumber: row.guest.site_number,
-        billingMonth,
-        emailMessage,
-        electricAmount: finalAmountCents,
-        lineItems: allItems || [],
-        totalBalance: newBalance,
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: allItems || [], totalBalance: newBalance }),
     })
-
     const data = await res.json()
-    setCampers(prev => {
-      const u = [...prev]
-      u[index] = {
-        ...u[index],
-        sending: false,
-        sent: data.success,
-        folioId: folioId,
-        folioBalance: newBalance,
-        historyLoaded: false, // reset so history reloads fresh
-        error: data.success ? '' : (data.error || 'Failed to send'),
-      }
-      return u
-    })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: newBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
   async function sendAllBills() {
@@ -362,33 +340,25 @@ export default function ElectricBillingPage() {
         <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Generate and send monthly electric bills to seasonal campers</p>
       </div>
 
-      {/* Tab switcher */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
         {(['billing', 'history'] as const).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              padding: '10px 20px', fontSize: 14, fontWeight: 600, border: 'none',
-              background: 'none', cursor: 'pointer', borderBottom: activeTab === tab ? '2px solid #2E6B8A' : '2px solid transparent',
-              color: activeTab === tab ? '#2E6B8A' : '#6b7280', marginBottom: -1,
-            }}
-          >
+          <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 20px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === tab ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === tab ? '#2E6B8A' : '#6b7280', marginBottom: -1 }}>
             {tab === 'billing' ? 'Monthly Billing' : 'Account History'}
           </button>
         ))}
       </div>
 
-      {/* ── BILLING TAB ── */}
       {activeTab === 'billing' && (
         <>
-          {/* Settings */}
           <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 20 }}>
             <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700 }}>Billing Settings</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
               <div>
                 <label style={lbl}>Billing month</label>
-                <input style={inp} value={billingMonth} onChange={e => setBillingMonth(e.target.value)} placeholder='e.g. May 2026' />
+                <select style={inp} value={billingMonth} onChange={e => handleMonthChange(e.target.value)} disabled={autoPopulating}>
+                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                {autoPopulating && <div style={{ fontSize: 11, color: '#2E6B8A', marginTop: 4 }}>⟳ Loading previous readings...</div>}
               </div>
               <div>
                 <label style={lbl}>Rate per kWh ($)</label>
@@ -412,14 +382,12 @@ export default function ElectricBillingPage() {
             <>
               <div style={{ overflowX: 'auto', marginBottom: 20 }}>
                 <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 960 }}>
-                  {/* Header */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
                     <div>Guest</div><div>Site</div><div>Prev reading</div><div>Curr reading</div><div>kWh</div><div>Calculated</div><div>Final amount</div><div>Balance</div><div>Skip</div>
                   </div>
 
                   {campers.map((row, i) => (
                     <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
-                      {/* Main row */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', alignItems: 'center' }}>
                         <div>
                           <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>{row.guest.name}</div>
@@ -434,26 +402,21 @@ export default function ElectricBillingPage() {
                           <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
                           <input style={{ ...si, paddingLeft: 20, opacity: row.skip ? 0.4 : 1 }} type='number' step='0.01' placeholder='0.00' value={row.finalAmount} disabled={row.skip || row.sent} onChange={e => updateFinalAmount(i, e.target.value)} />
                         </div>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
-                            {row.folioBalance > 0 ? '$' + (row.folioBalance / 100).toFixed(2) : '✓ Current'}
-                          </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
+                          {row.folioBalance > 0 ? '$' + (row.folioBalance / 100).toFixed(2) : '✓ Current'}
                         </div>
                         <button onClick={() => toggleSkip(i)} disabled={row.sent} style={{ fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: row.skip ? '#d1d5db' : '#fca5a5', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', background: row.skip ? '#f3f4f6' : '#fef2f2', color: row.skip ? '#6b7280' : '#dc2626' }}>
                           {row.skip ? 'Skipped' : 'Skip'}
                         </button>
                       </div>
 
-                      {/* Action row */}
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          {/* Send bill */}
                           <button onClick={() => sendBill(i)} disabled={row.sending || row.sent || !row.finalAmount}
                             style={{ background: row.sent ? '#15803d' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: row.sent || !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
                             {row.sending ? 'Sending...' : row.sent ? '✓ Sent!' : '✉ Send Bill'}
                           </button>
 
-                          {/* Record payment */}
                           {row.folioBalance > 0 && !row.showPayment && (
                             <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (row.folioBalance / 100).toFixed(2)) }}
                               style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
@@ -461,7 +424,14 @@ export default function ElectricBillingPage() {
                             </button>
                           )}
 
-                          {/* History toggle */}
+                          {row.lastPaymentRecorded && !row.receiptSent && !row.showReceiptConfirm && (
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showReceiptConfirm: true }; return u })}
+                              style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                              🧾 Send Receipt
+                            </button>
+                          )}
+                          {row.receiptSent && <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600 }}>✓ Receipt sent!</span>}
+
                           <button onClick={() => loadHistory(i)}
                             style={{ background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
                             {row.showHistory ? 'Hide History' : '📋 View History'}
@@ -472,7 +442,25 @@ export default function ElectricBillingPage() {
                         </div>
                       )}
 
-                      {/* Payment entry */}
+                      {row.showReceiptConfirm && row.lastPaymentRecorded && (
+                        <div style={{ margin: '0 14px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>Send payment receipt to {row.guest.name}?</div>
+                          <div style={{ fontSize: 13, color: '#78350f', marginBottom: 12 }}>
+                            A receipt for <strong>${(row.lastPaymentRecorded.amount / 100).toFixed(2)}</strong> will be sent to <strong>{row.guest.email}</strong>
+                          </div>
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <button onClick={() => sendReceipt(i)} disabled={row.sendingReceipt}
+                              style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                              {row.sendingReceipt ? 'Sending...' : 'Yes, Send Receipt'}
+                            </button>
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showReceiptConfirm: false }; return u })}
+                              style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer' }}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       {row.showPayment && (
                         <div style={{ margin: '0 14px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '14px' }}>
                           <div style={{ fontSize: 13, fontWeight: 700, color: '#15803d', marginBottom: 10 }}>Record Payment — {row.guest.name}</div>
@@ -483,10 +471,12 @@ export default function ElectricBillingPage() {
                             </div>
                             <div>
                               <label style={{ ...lbl, marginTop: 0 }}>Method</label>
-                              <select style={{ ...si, width: 110 }} value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
+                              <select style={{ ...si, width: 120 }} value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
                                 <option value='cash'>Cash</option>
                                 <option value='check'>Check</option>
                                 <option value='card'>Card</option>
+                                <option value='venmo'>Venmo</option>
+                                <option value='other'>Other</option>
                               </select>
                             </div>
                             <div style={{ flex: 1, minWidth: 120 }}>
@@ -505,7 +495,6 @@ export default function ElectricBillingPage() {
                         </div>
                       )}
 
-                      {/* History panel */}
                       {row.showHistory && (
                         <div style={{ margin: '0 14px 14px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
                           <div style={{ padding: '10px 14px', fontSize: 12, fontWeight: 700, color: '#374151', background: '#f1f5f9', borderBottom: '1px solid #e5e7eb' }}>
@@ -544,8 +533,6 @@ export default function ElectricBillingPage() {
                               </tfoot>
                             </table>
                           )}
-
-                          {/* Payment history */}
                           {row.folioPayments.length > 0 && (
                             <div style={{ borderTop: '1px solid #e5e7eb' }}>
                               <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb' }}>Payments received</div>
@@ -568,7 +555,6 @@ export default function ElectricBillingPage() {
                 </div>
               </div>
 
-              {/* Send all */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
                 <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
                 <button onClick={sendAllBills} disabled={sendingAll || readyToSend === 0}
@@ -581,7 +567,6 @@ export default function ElectricBillingPage() {
         </>
       )}
 
-      {/* ── HISTORY TAB ── */}
       {activeTab === 'history' && (
         <div>
           {campers.length === 0 ? (
@@ -607,9 +592,8 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
 
   async function load() {
     if (loaded) { setOpen(!open); return }
-    const [{ data: r }, { data: p }, { data: folio }] = await Promise.all([
+    const [{ data: r }, { data: folio }] = await Promise.all([
       supabase.from('electric_readings').select('*').eq('guest_id', guest.id).order('created_at', { ascending: false }),
-      supabase.from('folios').select('id').eq('guest_id', guest.id).eq('folio_type', 'guest_account').single(),
       supabase.from('folios').select('id').eq('guest_id', guest.id).eq('folio_type', 'guest_account').single(),
     ])
     let pmts: any[] = []
@@ -643,7 +627,6 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
           <span style={{ color: '#9ca3af', fontSize: 18 }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
-
       {open && (
         <div style={{ borderTop: '1px solid #e5e7eb' }}>
           {readings.length === 0 ? (
@@ -679,7 +662,6 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
               </tfoot>
             </table>
           )}
-
           {payments.length > 0 && (
             <div style={{ borderTop: '1px solid #e5e7eb', padding: '0 0 4px' }}>
               <div style={{ padding: '10px 16px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>Payments received</div>
