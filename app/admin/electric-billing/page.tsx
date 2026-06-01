@@ -378,9 +378,19 @@ export default function ElectricBillingPage() {
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const newBalance = Math.max(0, itemsTotal - paymentsTotal)
 
+    // Find the date the previous electric bill was sent for this camper
+    const { data: prevBills } = await supabase
+      .from('electric_readings')
+      .select('created_at')
+      .eq('guest_id', row.guest.id)
+      .neq('billing_month', billingMonth)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
+
     const res = await fetch('/api/electric-bill-email', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: allItems || [], totalBalance: newBalance }),
+      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: allItems || [], totalBalance: newBalance, previousBillSentAt }),
     })
     const data = await res.json()
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: newBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
