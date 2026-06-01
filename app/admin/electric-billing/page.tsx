@@ -161,7 +161,26 @@ export default function ElectricBillingPage() {
       }
     }))
 
-    setCampers(rows)
+    // Auto-populate previous readings for the current billing month
+    const currentMonth = billingMonth
+    const selectedVal = parseMonthValue(currentMonth)
+    const populatedRows = await Promise.all(rows.map(async (row) => {
+      const { data: readings } = await supabase
+        .from('electric_readings')
+        .select('billing_month, previous_reading, current_reading, created_at')
+        .eq('guest_id', row.guest.id)
+        .order('created_at', { ascending: false })
+      if (!readings || readings.length === 0) return row
+      const thisMonthReading = readings.find(r => r.billing_month === currentMonth)
+      if (thisMonthReading) {
+        return { ...row, previousReading: String(thisMonthReading.previous_reading), currentReading: String(thisMonthReading.current_reading), sent: true }
+      }
+      const priorReadings = readings.filter(r => parseMonthValue(r.billing_month) < selectedVal)
+      if (priorReadings.length === 0) return row
+      return { ...row, previousReading: String(priorReadings[0].current_reading) }
+    }))
+
+    setCampers(populatedRows)
     setLoading(false)
   }
 
