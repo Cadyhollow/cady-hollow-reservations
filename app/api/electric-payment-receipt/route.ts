@@ -83,6 +83,14 @@ export async function POST(request: NextRequest) {
       html,
     })
 
+    // Stamp receipt_sent_at on the payment record
+    if (body.paymentId) {
+      await supabase
+        .from('folio_payments')
+        .update({ receipt_sent_at: new Date().toISOString() })
+        .eq('id', body.paymentId)
+    }
+
     return NextResponse.json({ success: true })
   } catch (error: any) {
     console.error('Payment receipt email error:', error)

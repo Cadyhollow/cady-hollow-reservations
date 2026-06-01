@@ -36,6 +36,7 @@ type FolioPayment = {
   method: string
   paid_at: string
   note: string
+  receipt_sent_at: string | null
 }
 
 type CamperRow = {
@@ -276,11 +277,32 @@ export default function ElectricBillingPage() {
         guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
         paymentAmount: row.lastPaymentRecorded.amount, paymentMethod: row.lastPaymentRecorded.method,
         paymentNote: row.lastPaymentRecorded.note, paidAt: row.lastPaymentRecorded.paid_at,
-        remainingBalance: row.folioBalance,
+        remainingBalance: row.folioBalance, paymentId: row.lastPaymentRecorded.id,
       }),
     })
     const data = await res.json()
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sendingReceipt: false, receiptSent: data.success, showReceiptConfirm: false }; return u })
+    if (data.success) {
+      // Update the payment in local state with the receipt timestamp
+      const now = new Date().toISOString()
+      setCampers(prev => {
+        const u = [...prev]
+        u[index] = {
+          ...u[index],
+          sendingReceipt: false,
+          receiptSent: true,
+          showReceiptConfirm: false,
+          lastPaymentRecorded: u[index].lastPaymentRecorded
+            ? { ...u[index].lastPaymentRecorded, receipt_sent_at: now }
+            : null,
+          folioPayments: u[index].folioPayments.map(p =>
+            p.id === u[index].lastPaymentRecorded?.id ? { ...p, receipt_sent_at: now } : p
+          ),
+        }
+        return u
+      })
+    } else {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sendingReceipt: false, showReceiptConfirm: false }; return u })
+    }
   }
 
   function updateReading(index: number, field: 'previousReading' | 'currentReading', value: string) {
@@ -576,13 +598,30 @@ export default function ElectricBillingPage() {
                             <div style={{ borderTop: '1px solid #e5e7eb' }}>
                               <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb' }}>Payments received</div>
                               {row.folioPayments.map((p, pi) => (
-                                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 14px', borderBottom: pi < row.folioPayments.length - 1 ? '1px solid #f3f4f6' : 'none', fontSize: 12 }}>
-                                  <div>
-                                    <span style={{ fontWeight: 600, color: '#374151', textTransform: 'capitalize' }}>{p.method}</span>
-                                    {p.note && <span style={{ color: '#9ca3af', marginLeft: 8 }}>{p.note}</span>}
-                                    <span style={{ color: '#9ca3af', marginLeft: 8 }}>{new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                <div key={p.id} style={{ borderBottom: pi < row.folioPayments.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 14px', fontSize: 12, alignItems: 'center' }}>
+                                    <div>
+                                      <span style={{ fontWeight: 600, color: '#374151', textTransform: 'capitalize' }}>{p.method}</span>
+                                      {p.note && <span style={{ color: '#9ca3af', marginLeft: 8 }}>{p.note}</span>}
+                                      <span style={{ color: '#9ca3af', marginLeft: 8 }}>{new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                      {p.receipt_sent_at
+                                        ? <span style={{ marginLeft: 10, fontSize: 11, color: '#15803d' }}>🧾 Receipt sent {new Date(p.receipt_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                        : <span style={{ marginLeft: 10, fontSize: 11, color: '#9ca3af' }}>No receipt sent</span>
+                                      }
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                      <span style={{ fontWeight: 700, color: '#15803d' }}>-${((p.amount - (p.surcharge_amount || 0)) / 100).toFixed(2)}</span>
+                                      <button
+                                        onClick={() => setCampers(prev => {
+                                          const u = [...prev]
+                                          u[i] = { ...u[i], lastPaymentRecorded: p, showReceiptConfirm: true, receiptSent: false }
+                                          return u
+                                        })}
+                                        style={{ fontSize: 11, background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontWeight: 600 }}>
+                                        {p.receipt_sent_at ? '↩ Re-send' : '🧾 Send'}
+                                      </button>
+                                    </div>
                                   </div>
-                                  <span style={{ fontWeight: 700, color: '#15803d' }}>-${((p.amount - (p.surcharge_amount || 0)) / 100).toFixed(2)}</span>
                                 </div>
                               ))}
                             </div>
