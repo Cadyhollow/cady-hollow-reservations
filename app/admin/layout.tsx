@@ -62,6 +62,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'Guest Folios', href: '/admin/folios', icon: '🗂️', minPlan: 'summit' as const },
       { name: 'Guest Directory', href: '/admin/guests', icon: '📇' },
+      { name: 'Send Email', href: '/admin/send-email', icon: '📣', minPlan: 'ridgeline' as const },
     ],
   },
   {
@@ -70,7 +71,6 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'Taxes & Fees', href: '/admin/fees', icon: '🧾' },
       { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
-      { name: 'Send Email', href: '/admin/send-email', icon: '📣', minPlan: 'ridgeline' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
       { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
       { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
