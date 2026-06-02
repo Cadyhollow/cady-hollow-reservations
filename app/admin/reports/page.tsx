@@ -751,7 +751,7 @@ export default function ReportsPage() {
                       {cancelledReservations.map(r=>{
                         const nights=Math.round((new Date(r.departure_date).getTime()-new Date(r.arrival_date).getTime())/86400000)
                         return (
-                          <tr key={r.id} className="border-b border-gray-50 hover:bg-amber-50 cursor-pointer" onClick={()=>router.push(`/admin/reservations/${r.id}`)}>
+                          <tr key={r.id} className="border-b border-gray-50 hover:bg-amber-50 cursor-pointer" onClick={()=>router.push(`/admin/reservations?search=${encodeURIComponent(r.guest_name||'')}`)}>
                             <td className="py-2.5 font-medium text-gray-700">{r.guest_name||'—'}</td>
                             <td className="py-2.5 text-gray-500">{(r.sites as any)?.site_number||'—'}</td>
                             <td className="py-2.5 text-gray-500">{r.arrival_date}</td>
