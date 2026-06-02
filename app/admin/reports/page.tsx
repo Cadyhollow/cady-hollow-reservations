@@ -84,6 +84,9 @@ export default function ReportsPage() {
   const [futureCount, setFutureCount] = useState(0)
   const [monthlyOccupancy, setMonthlyOccupancy] = useState<{label:string;sites:number;cabins:number}[]>([])
 
+  // Occupancy detail panel
+  const [showOccupancyDetail, setShowOccupancyDetail] = useState(false)
+
   // Transaction slide-out
   const [selectedTx, setSelectedTx] = useState<PaymentRow|null>(null)
   const [txFolioItems, setTxFolioItems] = useState<LineItemRow[]>([])
@@ -223,15 +226,23 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Store line items — fetch by charged_at not payment date to catch all POS sales
-    const { data: storeLiData } = await supabase
-      .from('folio_line_items')
-      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
-      .gte('charged_at', startISO)
-      .lte('charged_at', endISO)
-    // Only keep line items from non-guest-account folios for store reporting
-    const nonGaFolioIds = pmtData.filter((p:any)=>p.folios?.folio_type!=='guest_account').map((p:any)=>p.folio_id)
-    const storeItems = (storeLiData||[]).filter((li:any)=>nonGaFolioIds.includes(li.folio_id))
+    // Store line items — get all walkin and reservation folio IDs, then fetch their line items
+    const { data: storeFolios } = await supabase
+      .from('folios')
+      .select('id')
+      .in('folio_type', ['walkin', 'reservation', 'walkup'])
+    const storeFolioIds = (storeFolios || []).map((f: any) => f.id)
+    let storeItems: any[] = []
+    if (storeFolioIds.length > 0) {
+      const { data: storeLiData } = await supabase
+        .from('folio_line_items')
+        .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
+        .in('folio_id', storeFolioIds)
+        .gte('charged_at', startISO)
+        .lte('charged_at', endISO)
+        .neq('voided', true)
+      storeItems = storeLiData || []
+    }
     setLineItems(storeItems as any)
 
     // Seasonal campers
@@ -563,7 +574,7 @@ export default function ReportsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600"/>
               <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'based on stay dates'}/>
-              <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'}/>
+              <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'} onClick={()=>setShowOccupancyDetail(true)}/>
               <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
             </div>
 
@@ -909,6 +920,81 @@ export default function ReportsPage() {
           </div>
         )}
 
+        </>
+      )}
+
+      {/* ── OCCUPANCY DETAIL PANEL ── */}
+      {showOccupancyDetail&&(
+        <>
+          <div className="fixed inset-0 bg-black/40 z-40" onClick={()=>setShowOccupancyDetail(false)}/>
+          <div className="fixed right-0 top-0 h-full w-full max-w-2xl bg-white z-50 shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Occupancy Detail</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Monthly breakdown — sites & cabins</p>
+              </div>
+              <button onClick={()=>setShowOccupancyDetail(false)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 font-bold text-lg">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Tonight summary */}
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="bg-blue-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-blue-600 font-semibold uppercase tracking-wide mb-1">Tonight — Sites</p>
+                  <p className="text-2xl font-bold text-blue-700">{Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))}%</p>
+                  <p className="text-xs text-blue-500 mt-1">{tonightCount+seasonalCount} of {totalSites}</p>
+                  <p className="text-xs text-blue-400">{seasonalCount} seasonal · {tonightCount} transient</p>
+                </div>
+                <div className="bg-amber-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-amber-600 font-semibold uppercase tracking-wide mb-1">Tonight — Cabins</p>
+                  <p className="text-2xl font-bold text-amber-700">{totalCabins>0?Math.round((tonightCabins/totalCabins)*100):0}%</p>
+                  <p className="text-xs text-amber-500 mt-1">{tonightCabins} of {totalCabins}</p>
+                </div>
+                <div className="bg-emerald-50 rounded-xl p-4 text-center">
+                  <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide mb-1">Combined</p>
+                  <p className="text-2xl font-bold text-emerald-700">{Math.round(((tonightCount+seasonalCount+tonightCabins)/(totalSites+totalCabins))*100)}%</p>
+                  <p className="text-xs text-emerald-500 mt-1">{tonightCount+seasonalCount+tonightCabins} of {totalSites+totalCabins}</p>
+                </div>
+              </div>
+
+              {/* Monthly breakdown table */}
+              <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Monthly Breakdown ({new Date().getFullYear()})</h3>
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-6">
+                <div className="grid grid-cols-5 gap-2 px-4 py-2 bg-gray-50 border-b border-gray-100 text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  <div>Month</div>
+                  <div className="text-right">Site Occ%</div>
+                  <div className="text-right">Cabin Occ%</div>
+                  <div className="text-right">Seasonal</div>
+                  <div className="text-right">Combined</div>
+                </div>
+                {monthlyOccupancy.map((m,i)=>{
+                  const combined = Math.round(((m.sites/100*totalSites + m.cabins/100*totalCabins)/(totalSites+totalCabins))*100)
+                  const isFuture = i > new Date().getMonth()
+                  return (
+                    <div key={i} className={`grid grid-cols-5 gap-2 px-4 py-3 border-b border-gray-50 ${isFuture?'bg-blue-50/30':''}`}>
+                      <div className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                        {m.label}
+                        {isFuture&&<span className="text-xs text-blue-400 font-normal">future</span>}
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-sm font-bold ${m.sites>80?'text-emerald-600':m.sites>50?'text-amber-600':'text-gray-700'}`}>{m.sites}%</span>
+                        <div className="h-1.5 bg-gray-100 rounded-full mt-1 overflow-hidden"><div className="h-full bg-blue-400 rounded-full" style={{width:m.sites+'%'}}/></div>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-sm font-bold ${m.cabins>80?'text-emerald-600':m.cabins>50?'text-amber-600':'text-gray-700'}`}>{m.cabins}%</span>
+                        <div className="h-1.5 bg-gray-100 rounded-full mt-1 overflow-hidden"><div className="h-full bg-amber-400 rounded-full" style={{width:m.cabins+'%'}}/></div>
+                      </div>
+                      <div className="text-right text-sm text-gray-500">{i>=4&&i<=9?seasonalCount:0}</div>
+                      <div className="text-right">
+                        <span className={`text-sm font-bold ${combined>80?'text-emerald-600':combined>50?'text-amber-600':'text-gray-700'}`}>{combined}%</span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <p className="text-xs text-gray-400 text-center">Future months show projected occupancy based on confirmed bookings already in the system.</p>
+            </div>
+          </div>
         </>
       )}
 
