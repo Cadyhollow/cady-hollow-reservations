@@ -226,6 +226,11 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
+    // Debug: log folio types in pmtData
+    const folioTypes = pmtData.map((p: any) => Array.isArray(p.folios) ? p.folios[0]?.folio_type : p.folios?.folio_type)
+    console.log('All folio types in pmtData:', [...new Set(folioTypes)])
+    console.log('Sample pmtData[0].folios:', JSON.stringify(pmtData[0]?.folios))
+
     // Store line items — use folio IDs from POS payments, fetch all line items with no date filter
     const posFolioIds = [...new Set(pmtData
       .filter((p: any) => {
