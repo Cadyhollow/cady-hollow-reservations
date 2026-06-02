@@ -549,15 +549,6 @@ export default function ReportsPage() {
     setDeleting(true)
     await supabase.from('reservations').delete().eq('id', id)
     setCancelledReservations(prev => prev.filter(r => r.id !== id))
-    setSelectedCancelled(null)
-    setConfirmDelete(false)
-    setDeleting(false)
-  }
-
-  async function deleteCancelledReservation(id: string) {
-    setDeleting(true)
-    await supabase.from('reservations').delete().eq('id', id)
-    setCancelledReservations(prev => prev.filter(r => r.id !== id))
     setCancelledCount(prev => prev - 1)
     setSelectedCancelled(null)
     setConfirmDelete(false)
