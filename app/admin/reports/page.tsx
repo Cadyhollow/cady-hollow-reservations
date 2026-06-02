@@ -1089,6 +1089,23 @@ export default function ReportsPage() {
                     </div>
                   </div>
 
+                  {/* Balance summary */}
+                  {(() => {
+                    const chargesTotal = txFolioItems.reduce((s,i)=>s+i.line_total,0)
+                    const paymentsTotal = txFolioPayments.filter((p:any)=>p.status==='completed').reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
+                    const balance = chargesTotal - paymentsTotal
+                    return (
+                      <div className={`rounded-xl p-4 flex items-center justify-between ${balance>0?'bg-red-50 border border-red-200':'bg-emerald-50 border border-emerald-200'}`}>
+                        <span className={`font-bold text-sm ${balance>0?'text-red-700':'text-emerald-700'}`}>
+                          {balance>0?'Balance Due':'✓ Paid in Full'}
+                        </span>
+                        <span className={`font-bold text-lg ${balance>0?'text-red-700':'text-emerald-700'}`}>
+                          {balance>0?'$'+(balance/100).toFixed(2):'$0.00'}
+                        </span>
+                      </div>
+                    )
+                  })()}
+
                   {/* Refund panel */}
                   {showRefund&&refundPayment&&(
                     <div className="bg-red-50 border border-red-200 rounded-xl p-5">
