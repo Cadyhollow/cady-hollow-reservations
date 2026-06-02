@@ -226,23 +226,20 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Store line items — fetch ALL line items in date range, filter client-side by folio type
-    const posFolioIdSet = new Set(pmtData
-      .filter((p: any) => {
-        const ft = Array.isArray(p.folios) ? p.folios[0]?.folio_type : p.folios?.folio_type
-        return ft === 'walkin' || ft === 'walkup'
-      })
-      .map((p: any) => p.folio_id)
-    )
-    // Fetch line items directly — no folio_id filter, filter client-side
+    // Store line items — fetch ALL line items in date range, exclude guest_account folios
+    const guestAccountFolioIdSet = new Set(allGaFolioIds)
     const { data: allLiData } = await supabase
       .from('folio_line_items')
       .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at')
       .gte('charged_at', start + 'T00:00:00')
       .lte('charged_at', end + 'T23:59:59')
-    const storeItems = (allLiData || []).filter((li: any) =>
-      posFolioIdSet.has(li.folio_id)
-    )
+    // Exclude electric billing and seasonal account charges — keep all real store/POS items
+    const storeItems = (allLiData || []).filter((li: any) => {
+      if (guestAccountFolioIdSet.has(li.folio_id)) return false
+      // Exclude electric billing line items
+      if (li.description && li.description.toLowerCase().includes('electric')) return false
+      return true
+    })
     setLineItems(storeItems as any)
 
     // Seasonal campers
