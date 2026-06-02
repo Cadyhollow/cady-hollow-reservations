@@ -146,8 +146,8 @@ export default function ReportsPage() {
   async function fetchAll() {
     setLoading(true)
     const { start, end } = getDateBounds(dateRange, customStart, customEnd)
-    const startISO = start + 'T00:00:00'
-    const endISO = end + 'T23:59:59'
+    const startISO = start + 'T00:00:00.000Z'
+    const endISO = end + 'T23:59:59.999Z'
     const stayEnd = getStayDateEnd(dateRange, customEnd)
     const today = new Date().toISOString().split('T')[0]
 
