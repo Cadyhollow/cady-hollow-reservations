@@ -76,9 +76,13 @@ export default function ReportsPage() {
   const [guestAccountPayments, setGuestAccountPayments] = useState<PaymentRow[]>([])
   const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
-  const [totalSites, setTotalSites] = useState(0)
+  const [totalSites, setTotalSites] = useState(84)
+  const [totalCabins, setTotalCabins] = useState(3)
   const [tonightCount, setTonightCount] = useState(0)
+  const [tonightCabins, setTonightCabins] = useState(0)
+  const [seasonalCount, setSeasonalCount] = useState(0)
   const [futureCount, setFutureCount] = useState(0)
+  const [monthlyOccupancy, setMonthlyOccupancy] = useState<{label:string;sites:number;cabins:number}[]>([])
 
   // Transaction slide-out
   const [selectedTx, setSelectedTx] = useState<PaymentRow|null>(null)
@@ -144,17 +148,62 @@ export default function ReportsPage() {
     const stayEnd = getStayDateEnd(dateRange, customEnd)
     const today = new Date().toISOString().split('T')[0]
 
-    // Sites total
-    const { count: siteCount } = await supabase.from('sites').select('id', { count: 'exact', head: true }).eq('active', true)
-    setTotalSites(siteCount || 0)
+    // Load settings for total_sites and total_cabins
+    const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins').single()
+    const configuredSites = settingsData?.total_sites || 84
+    const configuredCabins = settingsData?.total_cabins || 3
+    setTotalSites(configuredSites)
+    setTotalCabins(configuredCabins)
 
-    // Tonight occupancy
-    const { count: tonightRes } = await supabase.from('reservations').select('id', { count: 'exact', head: true }).neq('status','cancelled').lte('arrival_date', today).gte('departure_date', today)
-    setTonightCount(tonightRes || 0)
+    // Seasonal count (live)
+    const { count: seasonalCount } = await supabase.from('guests').select('id', { count: 'exact', head: true }).eq('is_seasonal', true)
+    setSeasonalCount(seasonalCount || 0)
+
+    // Tonight occupancy — split cabins vs sites
+    const { data: tonightRes } = await supabase.from('reservations').select('id, sites(site_type)').neq('status','cancelled').lte('arrival_date', today).gte('departure_date', today)
+    const tonightCabinCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type==='cabin').length
+    const tonightSiteCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type!=='cabin').length
+    setTonightCount(tonightSiteCount)
+    setTonightCabins(tonightCabinCount)
 
     // Future bookings
     const { count: futureRes } = await supabase.from('reservations').select('id', { count: 'exact', head: true }).neq('status','cancelled').gt('arrival_date', today)
     setFutureCount(futureRes || 0)
+
+    // Monthly occupancy trend
+    const { data: allRes } = await supabase.from('reservations').select('arrival_date, departure_date, sites(site_type)').neq('status','cancelled').gte('arrival_date', new Date(new Date().getFullYear(),0,1).toISOString().split('T')[0]).lte('arrival_date', new Date(new Date().getFullYear(),11,31).toISOString().split('T')[0])
+    const monthOcc: {[key:string]:{label:string;sites:number;cabins:number;days:number}} = {}
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    for (let m=0; m<12; m++) {
+      const key = String(m).padStart(2,'0')
+      monthOcc[key] = { label: months[m], sites: 0, cabins: 0, days: new Date(new Date().getFullYear(), m+1, 0).getDate() }
+    }
+    ;(allRes||[]).forEach((r:any) => {
+      const arrival = new Date(r.arrival_date+'T12:00:00')
+      const departure = new Date(r.departure_date+'T12:00:00')
+      const isCabin = r.sites?.site_type === 'cabin'
+      let d = new Date(arrival)
+      while (d < departure) {
+        const mKey = String(d.getMonth()).padStart(2,'0')
+        if (monthOcc[mKey]) {
+          if (isCabin) monthOcc[mKey].cabins++
+          else monthOcc[mKey].sites++
+        }
+        d.setDate(d.getDate()+1)
+      }
+    })
+    // Add seasonal to each month (they occupy sites all season May-Oct)
+    const sc = seasonalCount || 0
+    for (let m=4; m<=9; m++) {
+      const mKey = String(m).padStart(2,'0')
+      if (monthOcc[mKey]) monthOcc[mKey].sites += sc * monthOcc[mKey].days
+    }
+    const occData = Object.entries(monthOcc).map(([,v]) => ({
+      label: v.label,
+      sites: v.days > 0 ? Math.min(100, Math.round((v.sites / v.days / configuredSites) * 100)) : 0,
+      cabins: v.days > 0 ? Math.min(100, Math.round((v.cabins / v.days / configuredCabins) * 100)) : 0,
+    }))
+    setMonthlyOccupancy(occData)
 
     // Reservations
     const { data: resData } = await supabase.from('reservations').select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, sites(site_number, site_type)').neq('status','cancelled').gte('arrival_date', start).lte('arrival_date', stayEnd).order('arrival_date')
@@ -164,21 +213,26 @@ export default function ReportsPage() {
     const { data: allGaFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account')
     const allGaFolioIds = (allGaFolios||[]).map((f:any)=>f.id)
 
-    let pmtData: any[] = []
-    const pmtQuery = supabase.from('folio_payments').select('id, paid_at, method, amount, surcharge_amount, status, folio_id, square_payment_id, note, folios(id, guest_name, folio_type, reservation_id, guest_email)').eq('status','completed').gte('paid_at', startISO).lte('paid_at', endISO).order('paid_at', { ascending: false })
-    if (allGaFolioIds.length > 0) {
-      const { data: pmts } = await pmtQuery.not('folio_id','in',`(${allGaFolioIds.join(',')})`)
-      pmtData = pmts || []
-    } else {
-      const { data: pmts } = await pmtQuery
-      pmtData = pmts || []
-    }
+    // Fetch ALL payments (including guest_account) for complete picture
+    const { data: allPmtData } = await supabase
+      .from('folio_payments')
+      .select('id, paid_at, method, amount, surcharge_amount, status, folio_id, square_payment_id, note, folios(id, guest_name, folio_type, reservation_id, guest_email)')
+      .eq('status','completed')
+      .gte('paid_at', startISO)
+      .lte('paid_at', endISO)
+      .order('paid_at', { ascending: false })
+    const pmtData = allPmtData || []
 
-    if (pmtData.length > 0) {
-      const folioIds = [...new Set(pmtData.map((t:any)=>t.folio_id))]
-      const { data: liData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided').in('folio_id', folioIds)
-      setLineItems(liData as any || [])
-    } else { setLineItems([]) }
+    // Store line items — fetch by charged_at not payment date to catch all POS sales
+    const { data: storeLiData } = await supabase
+      .from('folio_line_items')
+      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
+      .gte('charged_at', startISO)
+      .lte('charged_at', endISO)
+    // Only keep line items from non-guest-account folios for store reporting
+    const nonGaFolioIds = pmtData.filter((p:any)=>p.folios?.folio_type!=='guest_account').map((p:any)=>p.folio_id)
+    const storeItems = (storeLiData||[]).filter((li:any)=>nonGaFolioIds.includes(li.folio_id))
+    setLineItems(storeItems as any)
 
     // Seasonal campers
     const { data: seasonalGuests } = await supabase.from('guests').select('id, name, email, site_number').eq('is_seasonal', true)
@@ -216,11 +270,10 @@ export default function ReportsPage() {
 
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelCount || 0)
-    if (pmtData) {
-      setResPayments(pmtData.filter((p:any)=>p.folios?.reservation_id!==null))
-      setTransactions(pmtData)
-    }
-    setGuestAccountPayments(gaPmtData)
+    // Split payments by type
+    setResPayments(pmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
+    setTransactions(pmtData)
+    setGuestAccountPayments(pmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
     setLoading(false)
   }
 
@@ -465,7 +518,7 @@ export default function ReportsPage() {
     </div>
   )
 
-  const occupancyPct = totalSites>0?Math.round((tonightCount/totalSites)*100):0
+  const occupancyPct = totalSites>0?Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100)):0
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
@@ -509,7 +562,7 @@ export default function ReportsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600"/>
               <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'based on stay dates'}/>
-              <KPICard label="Tonight's Occupancy" value={occupancyPct+'%'} sub={tonightCount+' of '+(totalSites||'?')+' sites occupied'} color={occupancyPct>80?'text-emerald-600':occupancyPct>50?'text-amber-600':'text-gray-900'}/>
+              <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'}/>
               <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
             </div>
 
@@ -530,6 +583,34 @@ export default function ReportsPage() {
                 </div>
               </div>
               <BarChart data={monthlyData}/>
+            </div>
+
+            {/* Occupancy trend */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">Occupancy Trend</h2>
+              <p className="text-xs text-gray-400 mb-4">Monthly average occupancy % · Sites vs Cabins</p>
+              <div style={{width:'100%',overflowX:'auto'}}>
+                <svg width={Math.max(600, monthlyOccupancy.length*60+60)} height={200} style={{display:'block'}}>
+                  {[0,50,100].map((pct,i)=>{
+                    const y=10+(1-pct/100)*150
+                    return <g key={i}><line x1={40} y1={y} x2={monthlyOccupancy.length*60+40} y2={y} stroke="#e5e7eb" strokeWidth={1}/><text x={36} y={y+4} textAnchor="end" fontSize={10} fill="#9CA3AF">{pct}%</text></g>
+                  })}
+                  {monthlyOccupancy.map((m,i)=>{
+                    const x=50+i*60
+                    const siteH=Math.max(2,(m.sites/100)*150)
+                    const cabinH=Math.max(2,(m.cabins/100)*150)
+                    return <g key={i}>
+                      <rect x={x-14} y={10+(1-m.sites/100)*150} width={12} height={siteH} fill="#2E6B8A" rx={3}/>
+                      <rect x={x+2} y={10+(1-m.cabins/100)*150} width={12} height={cabinH} fill="#C4873C" rx={3}/>
+                      <text x={x} y={175} textAnchor="middle" fontSize={10} fill="#6B7280">{m.label}</text>
+                    </g>
+                  })}
+                </svg>
+                <div className="flex items-center gap-6 mt-2 justify-center">
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#2E6B8A'}}/><span className="text-xs text-gray-500">Sites ({totalSites})</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#C4873C'}}/><span className="text-xs text-gray-500">Cabins ({totalCabins})</span></div>
+                </div>
+              </div>
             </div>
 
             {/* Payment methods + seasonal snapshot */}

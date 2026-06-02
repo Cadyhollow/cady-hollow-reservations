@@ -23,6 +23,8 @@ const defaultSettings = {
   extra_child_fee: '',
   base_occupancy_adults: 2,
   base_occupancy_children: 2,
+  total_sites: 84,
+  total_cabins: 3,
   cancellation_policy: '',
   early_checkin_enabled: false,
   early_checkin_price: 0,
@@ -83,6 +85,8 @@ export default function SettingsPage() {
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
         base_occupancy_children: data.base_occupancy_children || 2,
+        total_sites: data.total_sites || 84,
+        total_cabins: data.total_cabins || 3,
         cancellation_policy: data.cancellation_policy || '',
         early_checkin_enabled: data.early_checkin_enabled || false,
         early_checkin_price: data.early_checkin_price || 0,
@@ -150,6 +154,8 @@ export default function SettingsPage() {
       extra_child_fee: Math.round(parseFloat(form.extra_child_fee) * 100),
       base_occupancy_adults: form.base_occupancy_adults,
       base_occupancy_children: form.base_occupancy_children,
+      total_sites: form.total_sites,
+      total_cabins: form.total_cabins,
       cancellation_policy: form.cancellation_policy,
       early_checkin_enabled: form.early_checkin_enabled,
       early_checkin_price: form.early_checkin_price,
@@ -315,6 +321,8 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Adults</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_adults} onChange={e => setForm({ ...form, base_occupancy_adults: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Children</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_children} onChange={e => setForm({ ...form, base_occupancy_children: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Adult Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_adult_fee} onChange={e => setForm({ ...form, extra_adult_fee: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Total Campsites</label><p className="text-xs text-gray-400 mb-1">Non-cabin sites at your campground (used for occupancy reporting)</p><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.total_sites} onChange={e => setForm({ ...form, total_sites: parseInt(e.target.value) || 0 })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Total Cabins</label><p className="text-xs text-gray-400 mb-1">Cabin units tracked separately in occupancy reporting</p><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.total_cabins} onChange={e => setForm({ ...form, total_cabins: parseInt(e.target.value) || 0 })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Child Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_child_fee} onChange={e => setForm({ ...form, extra_child_fee: e.target.value })} /></div>
           </div>
         </div>
