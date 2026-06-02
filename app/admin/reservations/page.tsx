@@ -68,7 +68,7 @@ function ReservationsPageInner() {
   const [bookedSiteIds, setBookedSiteIds] = useState<Set<string>>(new Set())
   const [availableAddons, setAvailableAddons] = useState<AvailableAddon[]>([])
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState(searchParams.get('search') || '')
+  const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [selected, setSelected] = useState<Reservation | null>(null)
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([])
