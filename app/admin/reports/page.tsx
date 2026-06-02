@@ -235,18 +235,22 @@ export default function ReportsPage() {
     let storeItems: any[] = []
     if (posFolioIds.length > 0) {
       // Fetch in batches of 100 to avoid URL length limits
+      // Fetch all line items for POS folios, filter by date client-side to avoid URL length issues
       const batches = []
-      for (let i = 0; i < posFolioIds.length; i += 100) {
-        batches.push(posFolioIds.slice(i, i + 100))
+      for (let i = 0; i < posFolioIds.length; i += 50) {
+        batches.push(posFolioIds.slice(i, i + 50))
       }
       for (const batch of batches) {
         const { data: batchData } = await supabase
           .from('folio_line_items')
           .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
           .in('folio_id', batch)
-          .gte('charged_at', startISO)
-          .lte('charged_at', endISO)
-        storeItems = [...storeItems, ...(batchData || []).filter((li: any) => !li.voided)]
+        const filtered = (batchData || []).filter((li: any) => {
+          if (li.voided) return false
+          if (!li.charged_at) return true
+          return li.charged_at >= startISO && li.charged_at <= endISO
+        })
+        storeItems = [...storeItems, ...filtered]
       }
     }
     console.log('POS folio count:', posFolioIds.length)
