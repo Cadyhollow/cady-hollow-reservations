@@ -249,6 +249,9 @@ export default function ReportsPage() {
         storeItems = [...storeItems, ...(batchData || []).filter((li: any) => !li.voided)]
       }
     }
+    console.log('POS folio count:', posFolioIds.length)
+    console.log('Store line items found:', storeItems.length)
+    if (storeItems.length > 0) console.log('Sample item:', storeItems[0])
     setLineItems(storeItems as any)
 
     // Seasonal campers
