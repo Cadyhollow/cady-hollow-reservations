@@ -271,9 +271,10 @@ export default function ReportsPage() {
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelCount || 0)
     // Split payments by type
-    setResPayments(pmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
-    setTransactions(pmtData)
-    setGuestAccountPayments(pmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
+    const typedPmtData = pmtData as any[]
+    setResPayments(typedPmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
+    setTransactions(typedPmtData)
+    setGuestAccountPayments(typedPmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
     setLoading(false)
   }
 
