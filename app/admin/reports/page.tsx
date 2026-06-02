@@ -226,22 +226,18 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Store line items — get all walkin and reservation folio IDs, then fetch their line items
-    const { data: storeFolios } = await supabase
-      .from('folios')
-      .select('id')
-      .in('folio_type', ['walkin', 'walkup'])
-    const storeFolioIds = (storeFolios || []).map((f: any) => f.id)
+    // Store line items — get from walkin/walkup payment folio IDs in this period
+    const storeFolioIds = pmtData
+      .filter((p: any) => p.folios?.folio_type === 'walkin' || p.folios?.folio_type === 'walkup')
+      .map((p: any) => p.folio_id)
+    const uniqueStoreFolioIds = [...new Set(storeFolioIds)] as string[]
     let storeItems: any[] = []
-    if (storeFolioIds.length > 0) {
+    if (uniqueStoreFolioIds.length > 0) {
       const { data: storeLiData } = await supabase
         .from('folio_line_items')
         .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
-        .in('folio_id', storeFolioIds)
-        .gte('charged_at', startISO)
-        .lte('charged_at', endISO)
-        .neq('voided', true)
-      storeItems = storeLiData || []
+        .in('folio_id', uniqueStoreFolioIds)
+      storeItems = (storeLiData || []).filter((li: any) => !li.voided)
     }
     setLineItems(storeItems as any)
 
