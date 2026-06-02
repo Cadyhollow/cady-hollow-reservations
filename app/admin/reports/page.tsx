@@ -226,12 +226,7 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Debug: log folio types in pmtData
-    const folioTypes = pmtData.map((p: any) => Array.isArray(p.folios) ? p.folios[0]?.folio_type : p.folios?.folio_type)
-    console.log('All folio types in pmtData:', [...new Set(folioTypes)])
-    console.log('Sample pmtData[0].folios:', JSON.stringify(pmtData[0]?.folios))
-
-    // Store line items — use folio IDs from POS payments, fetch all line items with no date filter
+    // Store line items — batch by 20 IDs to avoid URL length limit
     const posFolioIds = [...new Set(pmtData
       .filter((p: any) => {
         const ft = Array.isArray(p.folios) ? p.folios[0]?.folio_type : p.folios?.folio_type
@@ -240,12 +235,13 @@ export default function ReportsPage() {
       .map((p: any) => p.folio_id)
     )] as string[]
     let storeItems: any[] = []
-    if (posFolioIds.length > 0) {
+    for (let i = 0; i < posFolioIds.length; i += 20) {
+      const batch = posFolioIds.slice(i, i + 20)
       const { data: liData } = await supabase
         .from('folio_line_items')
         .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
-        .in('folio_id', posFolioIds)
-      storeItems = (liData || []).filter((li: any) => !li.voided)
+        .in('folio_id', batch)
+      storeItems = [...storeItems, ...(liData || []).filter((li: any) => !li.voided)]
     }
     setLineItems(storeItems as any)
 
