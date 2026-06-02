@@ -230,7 +230,7 @@ export default function ReportsPage() {
     const { data: storeFolios } = await supabase
       .from('folios')
       .select('id')
-      .in('folio_type', ['walkin', 'reservation', 'walkup'])
+      .in('folio_type', ['walkin', 'walkup'])
     const storeFolioIds = (storeFolios || []).map((f: any) => f.id)
     let storeItems: any[] = []
     if (storeFolioIds.length > 0) {
@@ -333,16 +333,22 @@ export default function ReportsPage() {
 
   // ── Computed values ────────────────────────────────────────────────────────
   const stayDateRevenue = reservations.reduce((s,r)=>s+(r.total_price||0),0)/100
+  // reservation payments only (non-guest-account, non-walkup)
   const paymentDateResRevenue = resPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
   const resRevenue = reportBy==='payment_date' ? paymentDateResRevenue : stayDateRevenue
-  const posPayments = transactions.filter(t=>(t.folios as any)?.reservation_id===null)
+  // POS = walkin + walkup folios only
+  const posPayments = transactions.filter(t=>{const ft=(t.folios as any)?.folio_type; return ft==='walkin'||ft==='walkup'})
   const posRevenue = posPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
+  // Seasonal = guest_account folios
   const electricLineItems = guestAccountLineItems.filter(li=>li.description.toLowerCase().includes('electric'))
   const otherGuestLineItems = guestAccountLineItems.filter(li=>!li.description.toLowerCase().includes('electric'))
   const electricRevenue = electricLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
   const otherGuestRevenue = otherGuestLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
-  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
-  const allPayments = [...transactions, ...guestAccountPayments]
+  const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
+  // Total = res + pos + seasonal (no double counting)
+  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + seasonalPaymentsRevenue
+  // All payments for method breakdown
+  const allPayments = [...transactions]
   const totalCash = allPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100
   const totalCard = allPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100
   const totalCheck = allPayments.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100
