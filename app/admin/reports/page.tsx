@@ -294,7 +294,7 @@ export default function ReportsPage() {
     setTxFolioLoading(true)
     setShowRefund(false)
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      supabase.from('folio_line_items').select('*').eq('folio_id', tx.folio_id).order('charged_at'),
+      supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at').eq('folio_id', tx.folio_id).order('charged_at'),
       supabase.from('folio_payments').select('*').eq('folio_id', tx.folio_id).order('paid_at'),
     ])
     setTxFolioItems(items as any || [])
