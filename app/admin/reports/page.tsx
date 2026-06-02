@@ -70,6 +70,7 @@ export default function ReportsPage() {
   // Data
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [cancelledCount, setCancelledCount] = useState(0)
+  const [cancelledReservations, setCancelledReservations] = useState<Reservation[]>([])
   const [resPayments, setResPayments] = useState<PaymentRow[]>([])
   const [transactions, setTransactions] = useState<PaymentRow[]>([])
   const [lineItems, setLineItems] = useState<LineItemRow[]>([])
@@ -210,7 +211,13 @@ export default function ReportsPage() {
 
     // Reservations
     const { data: resData } = await supabase.from('reservations').select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, sites(site_number, site_type)').neq('status','cancelled').gte('arrival_date', start).lte('arrival_date', stayEnd).order('arrival_date')
-    const { count: cancelCount } = await supabase.from('reservations').select('id', { count: 'exact', head: true }).eq('status','cancelled').gte('arrival_date', start).lte('arrival_date', stayEnd)
+    const { data: cancelledData, count: cancelCount } = await supabase
+      .from('reservations')
+      .select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, sites(site_number, site_type)')
+      .eq('status','cancelled')
+      .gte('arrival_date', start)
+      .lte('arrival_date', stayEnd)
+      .order('arrival_date')
 
     // Exclude guest_account folios
     const { data: allGaFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account')
@@ -277,7 +284,8 @@ export default function ReportsPage() {
     } else { setGuestAccountLineItems([]) }
 
     if (resData) setReservations(resData as any)
-    setCancelledCount(cancelCount || 0)
+    setCancelledCount(cancelledData?.length || 0)
+    setCancelledReservations(cancelledData as any || [])
     // Split payments by type
     const typedPmtData = pmtData as any[]
     setResPayments(typedPmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
@@ -717,6 +725,47 @@ export default function ReportsPage() {
                 )}
               </div>
             </div>
+
+            {cancelledReservations.length > 0 && (
+              <div className="bg-white rounded-2xl border border-amber-200 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">Cancellations</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">Cancelled reservations in this period · not included in revenue</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-amber-600">{cancelledReservations.length} cancelled</p>
+                    <p className="text-xs text-gray-400">${(cancelledReservations.reduce((s,r)=>s+(r.total_price||0),0)/100).toFixed(2)} total value</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm" style={{minWidth:'520px'}}>
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        {['Guest','Site','Arrival','Departure','Nights','Value'].map(h=>(
+                          <th key={h} className={`py-2 text-gray-500 font-semibold text-xs uppercase tracking-wide ${h==='Value'?'text-right':'text-left'}`}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cancelledReservations.map(r=>{
+                        const nights=Math.round((new Date(r.departure_date).getTime()-new Date(r.arrival_date).getTime())/86400000)
+                        return (
+                          <tr key={r.id} className="border-b border-gray-50 hover:bg-amber-50 cursor-pointer" onClick={()=>router.push(`/admin/reservations/${r.id}`)}>
+                            <td className="py-2.5 font-medium text-gray-700">{r.guest_name||'—'}</td>
+                            <td className="py-2.5 text-gray-500">{(r.sites as any)?.site_number||'—'}</td>
+                            <td className="py-2.5 text-gray-500">{r.arrival_date}</td>
+                            <td className="py-2.5 text-gray-500">{r.departure_date}</td>
+                            <td className="py-2.5 text-gray-500">{nights}</td>
+                            <td className="py-2.5 text-right font-semibold text-amber-600">${((r.total_price||0)/100).toFixed(2)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <div className="bg-white rounded-2xl border border-gray-200 p-5">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Reservations</h2>
