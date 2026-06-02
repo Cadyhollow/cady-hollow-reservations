@@ -226,36 +226,22 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Store line items — fetch directly from all walkin/walkup folios (bypasses join issues)
-    const { data: posfolioData } = await supabase
-      .from('folios')
-      .select('id')
-      .in('folio_type', ['walkin', 'walkup'])
-    const posFolioIds = (posfolioData || []).map((f: any) => f.id)
+    // Store line items — use folio IDs from POS payments, fetch all line items with no date filter
+    const posFolioIds = [...new Set(pmtData
+      .filter((p: any) => {
+        const ft = Array.isArray(p.folios) ? p.folios[0]?.folio_type : p.folios?.folio_type
+        return ft === 'walkin' || ft === 'walkup'
+      })
+      .map((p: any) => p.folio_id)
+    )] as string[]
     let storeItems: any[] = []
     if (posFolioIds.length > 0) {
-      // Fetch in batches of 100 to avoid URL length limits
-      // Fetch all line items for POS folios, filter by date client-side to avoid URL length issues
-      const batches = []
-      for (let i = 0; i < posFolioIds.length; i += 50) {
-        batches.push(posFolioIds.slice(i, i + 50))
-      }
-      for (const batch of batches) {
-        const { data: batchData } = await supabase
-          .from('folio_line_items')
-          .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
-          .in('folio_id', batch)
-        const filtered = (batchData || []).filter((li: any) => {
-          if (li.voided) return false
-          if (!li.charged_at) return true
-          return li.charged_at >= startISO && li.charged_at <= endISO
-        })
-        storeItems = [...storeItems, ...filtered]
-      }
+      const { data: liData } = await supabase
+        .from('folio_line_items')
+        .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided')
+        .in('folio_id', posFolioIds)
+      storeItems = (liData || []).filter((li: any) => !li.voided)
     }
-    console.log('POS folio count:', posFolioIds.length)
-    console.log('Store line items found:', storeItems.length)
-    if (storeItems.length > 0) console.log('Sample item:', storeItems[0])
     setLineItems(storeItems as any)
 
     // Seasonal campers
