@@ -433,7 +433,7 @@ export default function GuestAccountPage() {
                       {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
                     </span>
                     <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      $' + '{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                      <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
                     </span>
                   </div>
                 )}
