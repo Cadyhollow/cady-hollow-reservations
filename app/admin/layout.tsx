@@ -115,6 +115,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [openGroup, setOpenGroup] = useState<string | null>(null)
 
   const [plan, setPlan] = useState<string>('summit') // default to summit for Cady Hollow
+  const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
+
+  useEffect(() => {
+    const stored = localStorage.getItem('resonation_dashboard_view')
+    if (stored === 'owner' || stored === 'staff') setDashboardView(stored as 'owner'|'staff')
+  }, [])
+
+  function toggleDashboardView(view: 'owner'|'staff') {
+    setDashboardView(view)
+    localStorage.setItem('resonation_dashboard_view', view)
+    window.dispatchEvent(new Event('dashboardViewChanged'))
+  }
 
   useEffect(() => {
     supabase
@@ -272,6 +284,26 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Footer */}
       <div className="px-3 py-4 space-y-1" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+
+        {/* Dashboard view toggle */}
+        <div className="mb-3 px-1">
+          <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'rgba(255,255,255,0.3)'}}>Dashboard View</p>
+          <div className="flex rounded-lg overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.1)'}}>
+            <button
+              onClick={()=>toggleDashboardView('staff')}
+              className="flex-1 py-1.5 text-xs font-semibold transition-all"
+              style={{background:dashboardView==='staff'?'rgba(255,255,255,0.15)':'transparent',color:dashboardView==='staff'?'#fff':'rgba(255,255,255,0.4)'}}>
+              Staff
+            </button>
+            <button
+              onClick={()=>toggleDashboardView('owner')}
+              className="flex-1 py-1.5 text-xs font-semibold transition-all"
+              style={{background:dashboardView==='owner'?'rgba(255,255,255,0.15)':'transparent',color:dashboardView==='owner'?'#fff':'rgba(255,255,255,0.4)'}}>
+              Owner
+            </button>
+          </div>
+        </div>
+
         <Link
           href="/"
           className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all duration-150"

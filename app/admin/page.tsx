@@ -32,6 +32,21 @@ export default function AdminDashboard() {
   const [plan, setPlan] = useState<string>('summit')
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
   const [loading, setLoading] = useState(true)
+  const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
+  const [slideOut, setSlideOut] = useState<'arrivals'|'departures'|null>(null)
+  const [walkinCountToday, setWalkinCountToday] = useState(0)
+  const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
+
+  useEffect(() => {
+    const stored = localStorage.getItem('resonation_dashboard_view')
+    if (stored === 'owner' || stored === 'staff') setDashboardView(stored as 'owner'|'staff')
+    const handler = () => {
+      const v = localStorage.getItem('resonation_dashboard_view')
+      if (v === 'owner' || v === 'staff') setDashboardView(v as 'owner'|'staff')
+    }
+    window.addEventListener('dashboardViewChanged', handler)
+    return () => window.removeEventListener('dashboardViewChanged', handler)
+  }, [])
 
   useEffect(() => { fetchAll() }, [])
 
@@ -126,6 +141,28 @@ export default function AdminDashboard() {
       })))
     }
 
+    // Walk-in sales count today
+    const { count: walkinCount } = await supabase
+      .from('folio_payments')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'completed')
+      .gte('paid_at', today + 'T00:00:00')
+      .lte('paid_at', today + 'T23:59:59')
+    setWalkinCountToday(walkinCount || 0)
+
+    // Sites available tonight
+    const { count: totalSitesCount } = await supabase
+      .from('sites')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_available', true)
+    const { count: occupiedCount } = await supabase
+      .from('reservations')
+      .select('id', { count: 'exact', head: true })
+      .neq('status', 'cancelled')
+      .lte('arrival_date', today)
+      .gte('departure_date', today)
+    setSitesAvailableTonight(Math.max(0, (totalSitesCount || 0) - (occupiedCount || 0)))
+
     setLoading(false)
   }
 
@@ -182,22 +219,46 @@ export default function AdminDashboard() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Arrivals Today</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.arrivalsToday}</p>
+        {/* Arrivals — always shown, clickable */}
+        <div onClick={()=>setSlideOut('arrivals')}
+          className="rounded-xl border p-4 shadow-sm cursor-pointer hover:shadow-md transition-all"
+          style={{background:'#f0fdfa',borderColor:'#99f6e4'}}>
+          <p className="text-xs font-semibold mb-1" style={{color:'#0f766e'}}>Arrivals Today</p>
+          <p className="text-3xl font-bold" style={{color:'#0f766e'}}>{stats.arrivalsToday}</p>
+          <p className="text-xs mt-1" style={{color:'#5eead4'}}>Tap to view list →</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Departures Today</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.departuresToday}</p>
+        {/* Departures — always shown, clickable */}
+        <div onClick={()=>setSlideOut('departures')}
+          className="rounded-xl border p-4 shadow-sm cursor-pointer hover:shadow-md transition-all"
+          style={{background:'#fffbeb',borderColor:'#fde68a'}}>
+          <p className="text-xs font-semibold mb-1" style={{color:'#92400e'}}>Departures Today</p>
+          <p className="text-3xl font-bold" style={{color:'#92400e'}}>{stats.departuresToday}</p>
+          <p className="text-xs mt-1" style={{color:'#fbbf24'}}>Tap to view list →</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Reservations This Month</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.totalThisMonth}</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Revenue This Month</p>
-          <p className="text-3xl font-bold text-gray-900">${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
-        </div>
+        {/* Card 3 — owner vs staff */}
+        {dashboardView === 'owner' ? (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#eef2ff',borderColor:'#c7d2fe'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#3730a3'}}>Reservations This Month</p>
+            <p className="text-3xl font-bold" style={{color:'#3730a3'}}>{stats.totalThisMonth}</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#eff6ff',borderColor:'#bfdbfe'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#1e40af'}}>Sites Available Tonight</p>
+            <p className="text-3xl font-bold" style={{color:'#1e40af'}}>{sitesAvailableTonight}</p>
+          </div>
+        )}
+        {/* Card 4 — owner vs staff */}
+        {dashboardView === 'owner' ? (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#f0fdf4',borderColor:'#bbf7d0'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#14532d'}}>Revenue This Month</p>
+            <p className="text-3xl font-bold" style={{color:'#14532d'}}>${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#faf5ff',borderColor:'#e9d5ff'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#581c87'}}>Walk-In Sales Today</p>
+            <p className="text-3xl font-bold" style={{color:'#581c87'}}>{walkinCountToday}</p>
+          </div>
+        )}
       </div>
 
       {/* Quick links */}
@@ -405,6 +466,58 @@ export default function AdminDashboard() {
 
       </div>
 
+      {/* Arrivals/Departures slide-out */}
+      {slideOut && (
+        <>
+          <div className="fixed inset-0 bg-black/40 z-40" onClick={()=>setSlideOut(null)}/>
+          <div className="fixed right-0 top-0 h-full w-full max-w-md bg-white z-50 shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">{slideOut==='arrivals'?'Arrivals Today':'Departures Today'}</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</p>
+              </div>
+              <button onClick={()=>setSlideOut(null)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 font-bold text-lg">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {slideOut==='arrivals' && (
+                arrivalsToday.length===0 ? (
+                  <p className="text-gray-400 text-sm text-center py-12">No arrivals today</p>
+                ) : arrivalsToday.map(guest=>{
+                  const balance = guest.total_price - guest.amount_paid
+                  return (
+                    <div key={guest.id} className={`px-6 py-4 border-b border-gray-50 ${guest.checkedIn?'bg-green-50':''}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-gray-900">{guest.guest_name}</span>
+                        <span className="text-sm text-gray-500">{siteTypeLabel(guest.site_type)} {guest.site_number}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">{guest.num_adults} adult{guest.num_adults!==1?'s':''}{guest.num_children>0?`, ${guest.num_children} child${guest.num_children!==1?'ren':''}`:''}</span>
+                        {balance<=0
+                          ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">Paid in full</span>
+                          : <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-semibold">Due: ${(balance/100).toFixed(2)}</span>
+                        }
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+              {slideOut==='departures' && (
+                recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).length===0 ? (
+                  <p className="text-gray-400 text-sm text-center py-12">No departures today</p>
+                ) : recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).map((r:any)=>(
+                  <div key={r.id} className="px-6 py-4 border-b border-gray-50">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-semibold text-gray-900">{r.guest_name}</span>
+                      <span className="text-sm text-gray-500">{siteTypeLabel(r.sites?.site_type||'')} {r.sites?.site_number}</span>
+                    </div>
+                    <span className="text-xs text-gray-400">Checking out today</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
