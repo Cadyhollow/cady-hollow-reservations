@@ -122,7 +122,7 @@ export default function FolioPage() {
     setLoading(true)
     const [{ data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
+      (supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, pos_enabled').single()) as any,
       supabase.from('product_categories').select('name').order('display_order'),
     ])
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
