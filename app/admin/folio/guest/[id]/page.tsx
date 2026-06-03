@@ -80,6 +80,7 @@ export default function GuestAccountPage() {
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [paymentAmount, setPaymentAmount] = useState('')
   const [cashTendered, setCashTendered] = useState('')
+  const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [waiveFee, setWaiveFee] = useState(false)
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
