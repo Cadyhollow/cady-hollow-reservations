@@ -101,6 +101,7 @@ export default function GuestAccountPage() {
     if (guestData) setGuest(guestData)
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
+    if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
     // Find or create a standing folio for this guest using guest_id
@@ -428,14 +429,38 @@ export default function GuestAccountPage() {
                   <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56 }} type='number' step='0.01' value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder='0.00' autoFocus />
                 </div>
                 {parseFloat(cashTendered) > 0 && (
-                  <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 600, fontSize: 14, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
-                    </span>
-                    <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
-                    </span>
-                  </div>
+                  <>
+                    <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: 14, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
+                        {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
+                      </span>
+                      <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
+                        <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                      </span>
+                    </div>
+                    {maxCreditAmount > 0 && parseFloat(cashTendered) > parseFloat(paymentAmount) && (
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                        <button
+                          type='button'
+                          onClick={() => {
+                            const change = parseFloat(cashTendered) - parseFloat(paymentAmount)
+                            setCashTendered('')
+                            setPaymentAmount(parseFloat(paymentAmount).toFixed(2))
+                          }}
+                          style={{ flex: 1, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>
+                          Give ${(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)} Change
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setPaymentAmount(cashTendered)
+                          }}
+                          style={{ flex: 1, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: '#15803d', cursor: 'pointer' }}>
+                          Apply ${(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)} as Credit
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
