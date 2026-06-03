@@ -92,6 +92,7 @@ export default function FolioPage() {
   const [savingPayment, setSavingPayment] = useState(false)
   const [walkUpName, setWalkUpName] = useState('')
   const [showCustomItem, setShowCustomItem] = useState(false)
+  const [lastAdded, setLastAdded] = useState<string|null>(null)
   const [cashTendered, setCashTendered] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
   const [feeAlreadyIncluded, setFeeAlreadyIncluded] = useState(false)
@@ -269,6 +270,8 @@ export default function FolioPage() {
     await loadFolioData(folio.id)
     setActiveTab('tab')
     setActiveCategory('')
+    setLastAdded(product.name)
+    setTimeout(() => setLastAdded(null), 2000)
   }
 
   async function addCustomItem() {
@@ -286,6 +289,7 @@ export default function FolioPage() {
       line_total: lineTotal,
       category: 'General',
     })
+    const addedDesc = customDesc.trim()
     setCustomDesc('')
     setCustomPrice('')
     setCustomQty('1')
@@ -293,6 +297,8 @@ export default function FolioPage() {
     await loadFolioData(folio.id)
     setActiveTab('tab')
     setActiveCategory('')
+    setLastAdded(addedDesc)
+    setTimeout(() => setLastAdded(null), 2000)
   }
 
   async function removeLineItem(id: string) {
@@ -587,6 +593,13 @@ export default function FolioPage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Added confirmation toast */}
+          {lastAdded && (
+            <div style={{ position: 'fixed', bottom: 100, left: '50%', transform: 'translateX(-50%)', background: '#15803d', color: '#fff', borderRadius: 12, padding: '12px 24px', fontSize: 15, fontWeight: 600, zIndex: 60, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', whiteSpace: 'nowrap' }}>
+              <span>✓</span> {lastAdded} added to tab
             </div>
           )}
 
