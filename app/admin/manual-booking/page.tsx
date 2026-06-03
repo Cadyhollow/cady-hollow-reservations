@@ -38,6 +38,7 @@ function ManualBookingInner() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<Fee[]>([])
+  const [pricingRules, setPricingRules] = useState<any[]>([])
   const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
   const [balanceDue, setBalanceDue] = useState('')
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
@@ -62,7 +63,7 @@ function ManualBookingInner() {
     notes: '',
   })
 
-  useEffect(() => { fetchSites(); fetchAddons(); fetchFees() }, [])
+  useEffect(() => { fetchSites(); fetchAddons(); fetchFees(); fetchPricingRules() }, [])
   const searchParams = useSearchParams()
   useEffect(() => {
     const siteIdFromUrl = searchParams.get('site_id')
@@ -78,9 +79,27 @@ function ManualBookingInner() {
     }
   }, [form.payment_method])
 
-  async function fetchSites() {
-    const { data } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
-    setSites(data || [])
+  async function fetchPricingRules() {
+    const { data } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
+    setPricingRules(data || [])
+  }
+
+  async function fetchSites(arrivalDate?: string, departureDate?: string) {
+    const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    if (!arrivalDate || !departureDate || !allSites) {
+      setSites(allSites || [])
+      setLoading(false)
+      return
+    }
+    // Filter out sites with conflicting reservations
+    const { data: conflicts } = await supabase
+      .from('reservations')
+      .select('site_id')
+      .neq('status', 'cancelled')
+      .lt('arrival_date', departureDate)
+      .gt('departure_date', arrivalDate)
+    const conflictIds = new Set((conflicts || []).map((r: any) => r.site_id))
+    setSites(allSites.filter(s => !conflictIds.has(s.id)))
     setLoading(false)
   }
 
@@ -137,7 +156,17 @@ function ManualBookingInner() {
     ? Math.round((new Date(form.departure_date).getTime() - new Date(form.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
 
-  const baseTotal = selectedSite ? selectedSite.base_rate * nights : 0
+  const applicablePricingRules = selectedSite && form.arrival_date && form.departure_date ? pricingRules.filter(rule => {
+    const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+    if (!withinDates) return false
+    if (rule.site_ids) return rule.site_ids.split(',').includes(selectedSite.id)
+    if (rule.site_id) return rule.site_id === selectedSite.id
+    if (rule.site_type) return rule.site_type === selectedSite.site_type
+    return false
+  }) : []
+  const bestPricingRule = applicablePricingRules.sort((a: any, b: any) => b.priority - a.priority)[0]
+  const nightlyRate = selectedSite ? (bestPricingRule ? bestPricingRule.nightly_rate : selectedSite.base_rate) : 0
+  const baseTotal = selectedSite ? nightlyRate * nights : 0
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
@@ -362,26 +391,23 @@ function ManualBookingInner() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Site & Dates</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Site *</label>
-                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
-                  <option value="">Select a site...</option>
-                  {sites.map(site => (
-                    <option key={site.id} value={site.id}>
-                      {siteTypeLabel(site.site_type)} {site.site_number} — ${(site.base_rate / 100).toFixed(2)}/night
-                      {site.site_type === 'rv_site' ? ` · ${ampLabel(site.amp_service)} · ${hookupLabel(site.hookups)}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date *</label>
-                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => setForm({ ...form, arrival_date: e.target.value })} />
+                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => {
+                  const newArrival = e.target.value
+                  setForm(prev => ({ ...prev, arrival_date: newArrival, site_id: '' }))
+                  if (newArrival && form.departure_date) fetchSites(newArrival, form.departure_date)
+                }} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date *</label>
                 <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.departure_date}
-                  onChange={e => { if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return } setForm({ ...form, departure_date: e.target.value }) }} />
+                  onChange={e => {
+                    if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return }
+                    const newDep = e.target.value
+                    setForm(prev => ({ ...prev, departure_date: newDep, site_id: '' }))
+                    if (form.arrival_date && newDep) fetchSites(form.arrival_date, newDep)
+                  }} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Adults</label>
@@ -390,6 +416,37 @@ function ManualBookingInner() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Children</label>
                 <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.num_children} onChange={e => setForm({ ...form, num_children: parseInt(e.target.value) })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Site *</label>
+                {!form.arrival_date || !form.departure_date ? (
+                  <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50">Enter dates above to see available sites</div>
+                ) : sites.length === 0 ? (
+                  <div className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm text-red-500 bg-red-50">No sites available for these dates</div>
+                ) : (
+                  <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
+                    <option value="">Select a site...</option>
+                    {sites.map(site => {
+                      const applicable = pricingRules.filter(rule => {
+                        const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+                        if (!withinDates) return false
+                        if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+                        if (rule.site_id) return rule.site_id === site.id
+                        if (rule.site_type) return rule.site_type === site.site_type
+                        return false
+                      })
+                      const bestRule = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+                      const rate = bestRule ? bestRule.nightly_rate : site.base_rate
+                      return (
+                        <option key={site.id} value={site.id}>
+                          {siteTypeLabel(site.site_type)} {site.site_number} — ${(rate / 100).toFixed(2)}/night
+                          {bestRule ? ' ★' : ''}
+                          {site.site_type === 'rv_site' ? ` · ${ampLabel(site.amp_service)} · ${hookupLabel(site.hookups)}` : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                )}
               </div>
             </div>
           </div>
