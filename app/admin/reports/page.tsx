@@ -364,8 +364,10 @@ export default function ReportsPage() {
   const totalCard = allPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100
   const totalCheck = allPayments.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100
   const totalSurcharge = allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0)/100
-  const outstandingBalance = seasonalCampers.reduce((s,c)=>s+c.balance,0)/100
+  const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
+  const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
   const overdueCampers = seasonalCampers.filter(c=>c.balance>0)
+  const creditCampers = seasonalCampers.filter(c=>c.balance<0)
 
   // Today's revenue
   const todayStr = new Date().toISOString().split('T')[0]
@@ -693,8 +695,8 @@ export default function ReportsPage() {
                           <span className="text-sm font-medium text-gray-900">{c.name}</span>
                           <span className="text-xs text-gray-400 ml-2">Site {c.site_number}</span>
                         </div>
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):'✓ Current'}
+                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
+                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
                         </span>
                       </div>
                     ))}
@@ -854,8 +856,8 @@ export default function ReportsPage() {
                       <div className="col-span-2 text-gray-600 text-sm">{c.site_number}</div>
                       <div className="col-span-3 text-gray-400 text-xs truncate">{c.email}</div>
                       <div className="col-span-2 text-right">
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):'✓ Current'}
+                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
+                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
                         </span>
                       </div>
                     </div>
@@ -1222,7 +1224,7 @@ export default function ReportsPage() {
                           {balance>0?'Balance Due':'✓ Paid in Full'}
                         </span>
                         <span className={`font-bold text-lg ${balance>0?'text-red-700':'text-emerald-700'}`}>
-                          {balance>0?'$'+(balance/100).toFixed(2):'$0.00'}
+                          {balance>0?'$'+(balance/100).toFixed(2):balance<0?'Credit: $'+(Math.abs(balance)/100).toFixed(2):'$0.00'}
                         </span>
                       </div>
                     )

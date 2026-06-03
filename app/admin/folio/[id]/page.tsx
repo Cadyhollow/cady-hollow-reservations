@@ -83,6 +83,7 @@ export default function FolioPage() {
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
   const [posEnabled, setPosEnabled] = useState(false)
+  const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [activeCategory, setActiveCategory] = useState('')
   const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
@@ -122,7 +123,7 @@ export default function FolioPage() {
     setLoading(true)
     const [{ data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      (supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, pos_enabled').single()) as any,
+      (supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, pos_enabled, max_credit_amount').single()) as any,
       supabase.from('product_categories').select('name').order('display_order'),
     ])
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
@@ -130,6 +131,7 @@ export default function FolioPage() {
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (settings?.pos_enabled) setPosEnabled(true)
+    if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
 
     if (isNew) { setLoading(false); return }
 
@@ -355,6 +357,20 @@ export default function FolioPage() {
   }
 
   async function collectPayment() {
+    // Credit cap check for guest account folios
+    if (folio?.folio_type === 'guest_account') {
+      const paymentAmt = Math.round(parseFloat(paymentAmount || '0') * 100)
+      const currentBalance = grandTotal - totalPaid
+      const resultingBalance = currentBalance - paymentAmt
+      if (resultingBalance < 0) {
+        const creditAmount = Math.abs(resultingBalance)
+        if (maxCreditAmount === 0) {
+          if (!confirm(`Warning: This payment of $${(paymentAmt/100).toFixed(2)} exceeds the balance due of $${(currentBalance/100).toFixed(2)} by $${(creditAmount/100).toFixed(2)}. Credits are not enabled for this account. Did you intend to give $${(creditAmount/100).toFixed(2)} change? Click OK to proceed anyway.`)) return
+        } else if (creditAmount > maxCreditAmount) {
+          if (!confirm(`Warning: This payment would create a credit of $${(creditAmount/100).toFixed(2)}, which exceeds the maximum allowed credit of $${(maxCreditAmount/100).toFixed(2)}. Click OK to proceed anyway.`)) return
+        }
+      }
+    }
     if (!folio) return
     const baseAmount = paymentMethod === 'cash' && cashTendered !== '' ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100)) : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
@@ -487,11 +503,11 @@ export default function FolioPage() {
           {folio?.folio_type === 'walkin' && <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Walk-up sale</p>}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? '#6b7280' : totalDue > 0 ? '#dc2626' : '#15803d' }}>
-            {overpaid > 0 ? `Change: $${(overpaid/100).toFixed(2)}` : `$${(totalDue/100).toFixed(2)}`}
+          <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? (folio?.folio_type === 'guest_account' ? '#15803d' : '#6b7280') : totalDue > 0 ? '#dc2626' : '#15803d' }}>
+            {overpaid > 0 ? (folio?.folio_type === 'guest_account' ? `Credit: $${(overpaid/100).toFixed(2)}` : `Change: $${(overpaid/100).toFixed(2)}`) : `$${(totalDue/100).toFixed(2)}`}
           </div>
           <div style={{ fontSize: 11, color: '#6b7280' }}>
-            {overpaid > 0 ? 'give change' : totalDue > 0 ? 'balance due' : '✓ paid in full'}
+            {overpaid > 0 ? (folio?.folio_type === 'guest_account' ? 'credit on account' : 'give change') : totalDue > 0 ? 'balance due' : '✓ paid in full'}
           </div>
         </div>
       </div>
@@ -627,8 +643,17 @@ export default function FolioPage() {
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Give change: ${(overpaid/100).toFixed(2)}</div>
-              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Folio complete</div>
+              {folio?.folio_type === 'guest_account' ? (
+                <>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Credit on account: ${(overpaid/100).toFixed(2)}</div>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>This camper has a credit balance</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Give change: ${(overpaid/100).toFixed(2)}</div>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Folio complete</div>
+                </>
+              )}
             </div>
           )}
 
