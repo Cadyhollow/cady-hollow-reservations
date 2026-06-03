@@ -68,6 +68,7 @@ export default function WalkInBookingPage() {
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [cardOnlyFeeTotal, setCardOnlyFeeTotal] = useState(0)
   const [allFees, setAllFees] = useState<any[]>([])
+  const [pricingRules, setPricingRules] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
   const [reservationId, setReservationId] = useState('')
   const [folioId, setFolioId] = useState('')
@@ -117,31 +118,52 @@ export default function WalkInBookingPage() {
   useEffect(() => { fetchData() }, [])
 
   async function fetchData() {
-    const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }] = await Promise.all([
+    const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
       supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
       supabase.from('product_categories').select('name').order('display_order'),
       supabase.from('fees').select('*').eq('is_active', true),
+      supabase.from('pricing_rules').select('*').eq('is_active', true),
     ])
     setSites(siteData || [])
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
-    if (feesData) {
-      const site = siteData?.[0]
-      // Will be recalculated when site is selected — store raw fees for now
-      setAllFees(feesData)
-    }
+    if (feesData) setAllFees(feesData)
+    if (rulesData) setPricingRules(rulesData)
+  }
+
+  async function refetchSites(arrivalDate: string, departureDate: string) {
+    const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    if (!arrivalDate || !departureDate || !allSites) { setSites(allSites || []); return }
+    const { data: conflicts } = await supabase
+      .from('reservations')
+      .select('site_id')
+      .neq('status', 'cancelled')
+      .lt('arrival_date', departureDate)
+      .gt('departure_date', arrivalDate)
+    const conflictIds = new Set((conflicts || []).map((r: any) => r.site_id))
+    setSites(allSites.filter((s: any) => !conflictIds.has(s.id)))
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
   const isRvSite = selectedSite?.site_type === 'rv_site'
+  const applicablePricingRules = selectedSite && form.arrival_date && form.departure_date ? pricingRules.filter(rule => {
+    const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+    if (!withinDates) return false
+    if (rule.site_ids) return rule.site_ids.split(',').includes(selectedSite.id)
+    if (rule.site_id) return rule.site_id === selectedSite.id
+    if (rule.site_type) return rule.site_type === selectedSite.site_type
+    return false
+  }) : []
+  const bestPricingRule = applicablePricingRules.sort((a: any, b: any) => b.priority - a.priority)[0]
+  const nightlyRate = selectedSite ? (bestPricingRule ? bestPricingRule.nightly_rate : selectedSite.base_rate) : 0
   const nights = form.arrival_date && form.departure_date
     ? Math.round((new Date(form.departure_date).getTime() - new Date(form.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
-  const calculatedTotal = selectedSite ? selectedSite.base_rate * nights : 0
+  const calculatedTotal = selectedSite ? nightlyRate * nights : 0
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
 
   // Card-only fee calculation for cash/card split
@@ -442,22 +464,46 @@ export default function WalkInBookingPage() {
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
         <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700, color: '#374151' }}>Stay Details</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div style={{ gridColumn: '1/-1' }}>
-            <label style={lbl}>Site *</label>
-            <select style={inp} value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
-              <option value=''>Select a site...</option>
-              {sites.map(s => (
-                <option key={s.id} value={s.id}>{siteTypeLabel(s.site_type)} {s.site_number} — ${(s.base_rate/100).toFixed(2)}/night</option>
-              ))}
-            </select>
-          </div>
           <div>
             <label style={lbl}>Arrival date *</label>
-            <input style={inp} type='date' value={form.arrival_date} onChange={e => setForm({ ...form, arrival_date: e.target.value })} />
+            <input style={inp} type='date' value={form.arrival_date} onChange={e => {
+              const newArrival = e.target.value
+              setForm(prev => ({ ...prev, arrival_date: newArrival, site_id: '' }))
+              if (newArrival && form.departure_date) refetchSites(newArrival, form.departure_date)
+            }} />
           </div>
           <div>
             <label style={lbl}>Departure date *</label>
-            <input style={inp} type='date' value={form.departure_date} onChange={e => setForm({ ...form, departure_date: e.target.value })} />
+            <input style={inp} type='date' value={form.departure_date} onChange={e => {
+              const newDep = e.target.value
+              setForm(prev => ({ ...prev, departure_date: newDep, site_id: '' }))
+              if (form.arrival_date && newDep) refetchSites(form.arrival_date, newDep)
+            }} />
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={lbl}>Site *</label>
+            {!form.arrival_date || !form.departure_date ? (
+              <div style={{...inp, color:'#9ca3af', background:'#f9fafb'}}>Enter dates above to see available sites</div>
+            ) : sites.length === 0 ? (
+              <div style={{...inp, color:'#dc2626', background:'#fef2f2'}}>No sites available for these dates</div>
+            ) : (
+              <select style={inp} value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
+                <option value=''>Select a site...</option>
+                {sites.map(s => {
+                  const applicable = pricingRules.filter(rule => {
+                    const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+                    if (!withinDates) return false
+                    if (rule.site_ids) return rule.site_ids.split(',').includes(s.id)
+                    if (rule.site_id) return rule.site_id === s.id
+                    if (rule.site_type) return rule.site_type === s.site_type
+                    return false
+                  })
+                  const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+                  const rate = best ? best.nightly_rate : s.base_rate
+                  return <option key={s.id} value={s.id}>{siteTypeLabel(s.site_type)} {s.site_number} — ${(rate/100).toFixed(2)}/night{best?' ★':''}</option>
+                })}
+              </select>
+            )}
           </div>
           <div>
             <label style={lbl}>Adults</label>
@@ -504,7 +550,7 @@ export default function WalkInBookingPage() {
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
           <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700, color: '#374151' }}>Pricing</h3>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, color: '#6b7280' }}>{nights} night{nights !== 1 ? 's' : ''} × ${(selectedSite.base_rate/100).toFixed(2)}</span>
+            <span style={{ fontSize: 14, color: '#6b7280' }}>{nights} night{nights !== 1 ? 's' : ''} × ${(nightlyRate/100).toFixed(2)}{bestPricingRule ? ' ★' : ''}</span>
             <span style={{ fontWeight: 700, fontSize: 16 }}>${(calculatedTotal/100).toFixed(2)}</span>
           </div>
           <div>
