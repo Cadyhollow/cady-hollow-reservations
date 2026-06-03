@@ -95,7 +95,7 @@ export default function GuestAccountPage() {
     const [{ data: guestData }, { data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('guests').select('*').eq('id', guestId).single(),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent').single(),
+      (supabase.from('settings').select('card_surcharge_percent, max_credit_amount').single()) as any,
       supabase.from('product_categories').select('name').order('display_order'),
     ])
     if (guestData) setGuest(guestData)
@@ -438,28 +438,33 @@ export default function GuestAccountPage() {
                         <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
                       </span>
                     </div>
-                    {maxCreditAmount > 0 && parseFloat(cashTendered) > parseFloat(paymentAmount) && (
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                        <button
-                          type='button'
-                          onClick={() => {
-                            const change = parseFloat(cashTendered) - parseFloat(paymentAmount)
-                            setCashTendered('')
-                            setPaymentAmount(parseFloat(paymentAmount).toFixed(2))
-                          }}
-                          style={{ flex: 1, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>
-                          Give ${(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)} Change
-                        </button>
-                        <button
-                          type='button'
-                          onClick={() => {
-                            setPaymentAmount(cashTendered)
-                          }}
-                          style={{ flex: 1, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: '#15803d', cursor: 'pointer' }}>
-                          Apply ${(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)} as Credit
-                        </button>
-                      </div>
-                    )}
+                    {maxCreditAmount > 0 && parseFloat(cashTendered) > parseFloat(paymentAmount) && (() => {
+                      const overpayment = Math.round((parseFloat(cashTendered) - parseFloat(paymentAmount)) * 100)
+                      const exceedsCap = overpayment > maxCreditAmount
+                      return (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ display: 'flex', gap: 8, marginBottom: exceedsCap ? 6 : 0 }}>
+                            <button
+                              type='button'
+                              onClick={() => setCashTendered('')}
+                              style={{ flex: 1, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>
+                              Give <span>$</span>{(overpayment/100).toFixed(2)} Change
+                            </button>
+                            <button
+                              type='button'
+                              onClick={() => !exceedsCap && setPaymentAmount(cashTendered)}
+                              style={{ flex: 1, background: exceedsCap ? '#f9fafb' : '#f0fdf4', border: '1px solid', borderColor: exceedsCap ? '#e5e7eb' : '#bbf7d0', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, color: exceedsCap ? '#9ca3af' : '#15803d', cursor: exceedsCap ? 'not-allowed' : 'pointer', opacity: exceedsCap ? 0.7 : 1 }}>
+                              Apply <span>$</span>{(overpayment/100).toFixed(2)} as Credit
+                            </button>
+                          </div>
+                          {exceedsCap && (
+                            <div style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px', fontSize: 12, color: '#92400e' }}>
+                              Overpayment of <span>$</span>{(overpayment/100).toFixed(2)} exceeds the <span>$</span>{(maxCreditAmount/100).toFixed(2)} credit limit — please give change instead.
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </>
                 )}
               </>
