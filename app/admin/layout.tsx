@@ -70,7 +70,7 @@ const navGroups: NavGroup[] = [
     icon: '💰',
     items: [
       { name: 'Taxes & Fees', href: '/admin/fees', icon: '🧾' },
-      ...(seasonalEnabled ? [{ name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const }] : []),
+      { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
       { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
       { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
@@ -170,7 +170,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     'rounded-none'
 
-  const visibleGroups = navGroups.filter(g => (!g.posOnly || posEnabled) && (!g.minPlan || planAtLeast(plan, g.minPlan)))
+  const visibleGroups = navGroups
+    .filter(g => (!g.posOnly || posEnabled) && (!g.minPlan || planAtLeast(plan, g.minPlan)))
+    .map(g => ({
+      ...g,
+      items: g.items.filter(item => {
+        if (item.href === '/admin/electric-billing') return seasonalEnabled && planAtLeast(plan, 'summit')
+        return true
+      })
+    }))
+    .filter(g => g.items.length > 0)
 
   function toggleGroup(label: string) {
     setOpenGroup(prev => prev === label ? null : label)
