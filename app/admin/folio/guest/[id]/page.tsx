@@ -256,10 +256,10 @@ export default function GuestAccountPage() {
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? '#6b7280' : totalDue > 0 ? '#dc2626' : '#15803d' }}>
-            {overpaid > 0 ? 'Change: $' + (overpaid/100).toFixed(2) : '$' + (totalDue/100).toFixed(2)}
+            {overpaid > 0 ? 'Credit: $' + (overpaid/100).toFixed(2) : '$' + (totalDue/100).toFixed(2)}
           </div>
           <div style={{ fontSize: 11, color: '#6b7280' }}>
-            {overpaid > 0 ? 'give change' : totalDue > 0 ? 'balance due' : '✓ paid in full'}
+            {overpaid > 0 ? 'credit on account' : totalDue > 0 ? 'balance due' : '✓ paid in full'}
           </div>
         </div>
       </div>
@@ -325,7 +325,7 @@ export default function GuestAccountPage() {
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Give change: ${(overpaid/100).toFixed(2)}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Credit on account: ${(overpaid/100).toFixed(2)}</div>
             </div>
           )}
 
