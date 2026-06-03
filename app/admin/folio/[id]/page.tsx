@@ -360,7 +360,8 @@ export default function FolioPage() {
     // Credit cap check for guest account folios
     if (folio?.folio_type === 'guest_account') {
       const paymentAmt = Math.round(parseFloat(paymentAmount || '0') * 100)
-      const currentBalance = grandTotal - totalPaid
+      const currentPaid = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
+      const currentBalance = grandTotal - currentPaid
       const resultingBalance = currentBalance - paymentAmt
       if (resultingBalance < 0) {
         const creditAmount = Math.abs(resultingBalance)
