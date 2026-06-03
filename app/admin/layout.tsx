@@ -97,6 +97,7 @@ const navGroups: NavGroup[] = [
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settings, setSettings] = useState<any>(null)
   const [posEnabled, setPosEnabled] = useState(false)
 
@@ -120,7 +121,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     const stored = localStorage.getItem('resonation_dashboard_view')
     if (stored === 'owner' || stored === 'staff') setDashboardView(stored as 'owner'|'staff')
+    const collapsed = localStorage.getItem('resonation_sidebar_collapsed')
+    if (collapsed === 'true') setSidebarCollapsed(true)
   }, [])
+
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed(prev => {
+      const next = !prev
+      localStorage.setItem('resonation_sidebar_collapsed', String(next))
+      return next
+    })
+  }
 
   function toggleDashboardView(view: 'owner'|'staff') {
     setDashboardView(view)
@@ -177,13 +188,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {settings?.logo_url && (
           <div className={`w-16 h-16 overflow-hidden flex items-center justify-center mb-3 ${logoShapeClass}`}
             style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
-            <Image
-              src={settings.logo_url}
-              alt={settings?.park_name || 'Campground'}
-              width={64}
-              height={64}
-              className="object-contain w-full h-full"
-            />
+            <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={64} height={64} className="object-contain w-full h-full" />
           </div>
         )}
         <h1 className="text-base font-bold text-center text-white leading-tight">{settings?.park_name || 'Campground'}</h1>
@@ -191,87 +196,53 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </div>
 
       {/* Nav groups */}
-      <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-1">
-
-        {/* Dashboard — always visible */}
-        <Link
-          href="/admin"
-          onClick={() => setSidebarOpen(false)}
-          className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all duration-150 mb-2"
+      <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-0.5">
+        {/* Dashboard */}
+        <Link href="/admin" onClick={() => setSidebarOpen(false)}
+          className="flex items-center px-4 rounded-xl text-sm font-semibold transition-all duration-150 mb-3"
           style={{
+            minHeight: '48px', display: 'flex', alignItems: 'center',
             background: pathname === '/admin' ? 'var(--accent-color, #12c9e5)' : 'rgba(255,255,255,0.07)',
-            color: pathname === '/admin' ? '#fff' : 'rgba(255,255,255,0.8)',
+            color: '#fff',
             boxShadow: pathname === '/admin' ? '0 2px 8px rgba(18,201,229,0.3)' : 'none',
-          }}
-        >
-          <span className="text-base leading-none">▦</span>
-          <span>Dashboard</span>
+          }}>
+          Dashboard
         </Link>
 
         {visibleGroups.map((group) => {
           const active = isGroupActive(group)
           const open = openGroup === group.label
-
           return (
-            <div key={group.label}>
-              {/* Group header button */}
-              <button
-                onClick={() => toggleGroup(group.label)}
-                className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left transition-all duration-150"
+            <div key={group.label} className="mb-0.5">
+              <button onClick={() => toggleGroup(group.label)}
+                className="w-full flex items-center justify-between px-4 rounded-xl text-left transition-all duration-150"
                 style={{
-                  background: active ? 'rgba(255,255,255,0.12)' : 'transparent',
-                  color: active ? '#fff' : 'rgba(255,255,255,0.55)',
-                }}
-                onMouseEnter={e => {
-                  if (!active) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'
-                }}
-                onMouseLeave={e => {
-                  if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'
-                }}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-base leading-none">{group.icon}</span>
-                  <span className="text-sm font-semibold tracking-wide">{group.label}</span>
-                  {active && (
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--accent-color, #12c9e5)' }} />
-                  )}
-                </div>
-                <svg
-                  className="w-3.5 h-3.5 transition-transform duration-200"
-                  style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', opacity: 0.5 }}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
+                  minHeight: '48px',
+                  background: active && !open ? 'rgba(255,255,255,0.1)' : open ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: 'rgba(255,255,255,0.85)',
+                }}>
+                <span className="text-sm font-semibold">{group.label}</span>
+                <svg className="w-4 h-4 transition-transform duration-200 flex-shrink-0"
+                  style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', opacity: 0.6 }}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
-
-              {/* Group items */}
               {open && (
-                <div className="mt-0.5 ml-2 pl-3 space-y-0.5" style={{ borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                <div className="mt-0.5 space-y-0.5 pb-1">
                   {group.items.filter(item => !item.minPlan || planAtLeast(plan, item.minPlan) || posEnabled).map((item) => {
-                    const itemActive = item.href === pathname ||
-                      (item.href !== '/admin' && pathname.startsWith(item.href))
+                    const itemActive = item.href === pathname || (item.href !== '/admin' && pathname.startsWith(item.href))
                     return (
-                      <Link
-                        key={item.name}
-                        href={item.href}
-                        onClick={() => setSidebarOpen(false)}
-                        className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150"
+                      <Link key={item.name} href={item.href} onClick={() => setSidebarOpen(false)}
+                        className="flex items-center px-4 ml-2 rounded-xl text-sm transition-all duration-150"
                         style={{
-                          background: itemActive ? 'var(--accent-color, #12c9e5)' : 'transparent',
-                          color: itemActive ? '#fff' : 'rgba(255,255,255,0.6)',
+                          minHeight: '44px', display: 'flex', alignItems: 'center',
+                          background: itemActive ? 'var(--accent-color, #12c9e5)' : 'rgba(255,255,255,0.05)',
+                          color: itemActive ? '#fff' : 'rgba(255,255,255,0.8)',
                           fontWeight: itemActive ? 600 : 400,
-                          boxShadow: itemActive ? '0 2px 8px rgba(18,201,229,0.3)' : 'none',
-                        }}
-                        onMouseEnter={e => {
-                          if (!itemActive) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)'
-                        }}
-                        onMouseLeave={e => {
-                          if (!itemActive) (e.currentTarget as HTMLElement).style.background = 'transparent'
-                        }}
-                      >
-                        <span className="text-xs leading-none opacity-70">{item.icon}</span>
-                        <span>{item.name}</span>
+                          boxShadow: itemActive ? '0 2px 8px rgba(18,201,229,0.25)' : 'none',
+                        }}>
+                        {item.name}
                       </Link>
                     )
                   })}
@@ -283,46 +254,36 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </nav>
 
       {/* Footer */}
-      <div className="px-3 py-4 space-y-1" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-
+      <div className="px-3 py-4 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
         {/* Dashboard view toggle */}
-        <div className="mb-3 px-1">
-          <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'rgba(255,255,255,0.3)'}}>Dashboard View</p>
-          <div className="flex rounded-lg overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.1)'}}>
-            <button
-              onClick={()=>toggleDashboardView('staff')}
-              className="flex-1 py-1.5 text-xs font-semibold transition-all"
-              style={{background:dashboardView==='staff'?'rgba(255,255,255,0.15)':'transparent',color:dashboardView==='staff'?'#fff':'rgba(255,255,255,0.4)'}}>
+        <div className="mb-2">
+          <p className="text-xs font-semibold uppercase tracking-widest mb-2 px-1" style={{color:'rgba(255,255,255,0.35)'}}>Dashboard View</p>
+          <div className="flex rounded-xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.12)'}}>
+            <button onClick={()=>toggleDashboardView('staff')}
+              className="flex-1 text-xs font-semibold transition-all"
+              style={{minHeight:'40px',background:dashboardView==='staff'?'rgba(255,255,255,0.18)':'transparent',color:dashboardView==='staff'?'#fff':'rgba(255,255,255,0.45)'}}>
               Staff
             </button>
-            <button
-              onClick={()=>toggleDashboardView('owner')}
-              className="flex-1 py-1.5 text-xs font-semibold transition-all"
-              style={{background:dashboardView==='owner'?'rgba(255,255,255,0.15)':'transparent',color:dashboardView==='owner'?'#fff':'rgba(255,255,255,0.4)'}}>
+            <button onClick={()=>toggleDashboardView('owner')}
+              className="flex-1 text-xs font-semibold transition-all"
+              style={{minHeight:'40px',background:dashboardView==='owner'?'rgba(255,255,255,0.18)':'transparent',color:dashboardView==='owner'?'#fff':'rgba(255,255,255,0.45)'}}>
               Owner
             </button>
           </div>
         </div>
-
-        <Link
-          href="/"
-          className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all duration-150"
-          style={{ color: 'rgba(255,255,255,0.5)' }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#fff'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.5)'}
-        >
-          <span>←</span>
-          <span>View Booking Site</span>
+        <Link href="/"
+          className="flex items-center px-4 rounded-xl text-sm transition-all duration-150"
+          style={{minHeight:'44px',display:'flex',alignItems:'center',color:'rgba(255,255,255,0.6)'}}
+          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='#fff'}
+          onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='rgba(255,255,255,0.6)'}>
+          View Booking Site
         </Link>
-        <button
-          onClick={handleLogout}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all duration-150"
-          style={{ color: 'rgba(255,255,255,0.5)' }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#fff'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.5)'}
-        >
-          <span>↗</span>
-          <span>Log Out</span>
+        <button onClick={handleLogout}
+          className="w-full flex items-center px-4 rounded-xl text-sm transition-all duration-150"
+          style={{minHeight:'44px',color:'rgba(255,255,255,0.6)'}}
+          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='#fff'}
+          onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='rgba(255,255,255,0.6)'}>
+          Log Out
         </button>
       </div>
     </div>
@@ -342,11 +303,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           ) : null}
           <span className="font-semibold text-sm">{settings?.park_name || 'Admin'}</span>
         </div>
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="p-2 rounded-lg transition-colors"
-          style={{ background: 'rgba(255,255,255,0.1)' }}
-        >
+        <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 rounded-lg transition-colors"
+          style={{ background: 'rgba(255,255,255,0.1)' }}>
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {sidebarOpen
               ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -356,11 +314,32 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </button>
       </div>
 
-      <div className="flex">
-        {/* Desktop sidebar */}
-        <div className="hidden lg:flex lg:flex-col w-60 min-h-screen flex-shrink-0">
-          <SidebarContent />
-        </div>
+      <div className="flex relative">
+        {/* Desktop sidebar — collapsible */}
+        {!sidebarCollapsed && (
+          <div className="hidden lg:flex lg:flex-col w-60 min-h-screen flex-shrink-0 relative">
+            <SidebarContent />
+            {/* Collapse button */}
+            <button
+              onClick={toggleSidebarCollapsed}
+              className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-12 rounded-r-lg flex items-center justify-center transition-all hover:w-8 z-10"
+              style={{ background: '#1a3a2a', color: 'rgba(255,255,255,0.7)' }}
+              title="Collapse sidebar">
+              ‹
+            </button>
+          </div>
+        )}
+
+        {/* Expand tab — shown when sidebar is collapsed */}
+        {sidebarCollapsed && (
+          <button
+            onClick={toggleSidebarCollapsed}
+            className="hidden lg:flex fixed left-0 top-1/2 -translate-y-1/2 w-6 h-16 rounded-r-xl flex-col items-center justify-center z-30 transition-all hover:w-8"
+            style={{ background: '#1a3a2a', color: 'rgba(255,255,255,0.8)' }}
+            title="Expand sidebar">
+            ›
+          </button>
+        )}
 
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
@@ -368,10 +347,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="w-60 flex flex-col">
               <SidebarContent />
             </div>
-            <div
-              className="flex-1 bg-black bg-opacity-50"
-              onClick={() => setSidebarOpen(false)}
-            />
+            <div className="flex-1 bg-black bg-opacity-50" onClick={() => setSidebarOpen(false)} />
           </div>
         )}
 
