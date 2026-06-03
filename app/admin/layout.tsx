@@ -70,7 +70,7 @@ const navGroups: NavGroup[] = [
     icon: '💰',
     items: [
       { name: 'Taxes & Fees', href: '/admin/fees', icon: '🧾' },
-      { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
+      ...(seasonalEnabled ? [{ name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const }] : []),
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
       { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
       { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
@@ -100,6 +100,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settings, setSettings] = useState<any>(null)
   const [posEnabled, setPosEnabled] = useState(false)
+  const [seasonalEnabled, setSeasonalEnabled] = useState(false)
 
   // Find which group contains the active page and open only that one
   const getActiveGroup = () => {
@@ -142,13 +143,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     supabase
       .from('settings')
-      .select('park_name, logo_url, logo_shape, plan, pos_enabled')
+      .select('park_name, logo_url, logo_shape, plan, pos_enabled, seasonal_enabled')
       .limit(1)
       .single()
       .then(({ data }) => {
         if (data) {
           setSettings(data)
           setPosEnabled(!!data.pos_enabled)
+          setSeasonalEnabled(!!data.seasonal_enabled)
           if (data.plan) setPlan(data.plan)
         }
       })

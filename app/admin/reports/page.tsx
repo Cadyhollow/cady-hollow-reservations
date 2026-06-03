@@ -53,14 +53,16 @@ export default function ReportsPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
+    supabase.from('settings').select('plan, pos_enabled, seasonal_enabled').single().then(({ data }) => {
       if (data?.plan && !['ridgeline','summit'].includes(data.plan)) router.replace('/admin')
       if (data?.pos_enabled) setPosEnabled(true)
+      if (data?.seasonal_enabled) setSeasonalEnabled(true)
     })
   }, [])
 
   const [activeTab, setActiveTab] = useState<'dashboard'|'reservations'|'seasonal'|'transactions'|'store'>('dashboard')
   const [posEnabled, setPosEnabled] = useState(false)
+  const [seasonalEnabled, setSeasonalEnabled] = useState(false)
   const [reportBy, setReportBy] = useState<'payment_date'|'stay_date'>('payment_date')
   const [dateRange, setDateRange] = useState('this_year')
   const [customStart, setCustomStart] = useState('')
@@ -577,7 +579,7 @@ export default function ReportsPage() {
         {([
           {key:'dashboard',label:'📊 Dashboard'},
           {key:'reservations',label:'🏕️ Reservations'},
-          {key:'seasonal',label:'⛺ Seasonal'},
+          ...(seasonalEnabled ? [{key:'seasonal',label:'⛺ Seasonal'}] : []),
           {key:'transactions',label:'💳 Transactions'},
           ...(posEnabled?[{key:'store',label:'🛒 Store'}]:[]),
         ] as {key:string,label:string}[]).map(tab=>(
@@ -673,7 +675,7 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              {seasonalEnabled && <div className="bg-white rounded-2xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-gray-900">Seasonal Snapshot</h2>
                   <button onClick={()=>setActiveTab('seasonal')} className="text-xs text-blue-500 font-semibold hover:underline">View all →</button>
@@ -699,7 +701,7 @@ export default function ReportsPage() {
                     {seasonalCampers.length>5&&<p className="text-xs text-gray-400 text-center pt-1">+{seasonalCampers.length-5} more</p>}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           </div>
         )}

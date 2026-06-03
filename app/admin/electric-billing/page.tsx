@@ -96,8 +96,8 @@ export default function ElectricBillingPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
-      if (data?.plan !== 'summit') router.replace('/admin')
+    supabase.from('settings').select('plan, pos_enabled, seasonal_enabled').single().then(({ data }) => {
+      if (data?.plan !== 'summit' || !data?.seasonal_enabled) router.replace('/admin')
     })
   }, [])
 

@@ -82,6 +82,7 @@ export default function FolioPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [posEnabled, setPosEnabled] = useState(false)
   const [activeCategory, setActiveCategory] = useState('')
   const [categories, setCategories] = useState<string[]>(FALLBACK_CATEGORIES)
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
@@ -128,6 +129,7 @@ export default function FolioPage() {
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
+    if (settings?.pos_enabled) setPosEnabled(true)
 
     if (isNew) { setLoading(false); return }
 
@@ -502,12 +504,14 @@ export default function FolioPage() {
         >
           Guest Tab
         </button>
-        <button
-          onClick={() => { setActiveTab('items'); setActiveCategory('') }}
-          style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'items' ? '#15803d' : '#6b7280' }}
-        >
-          Add Items
-        </button>
+        {posEnabled && (
+          <button
+            onClick={() => { setActiveTab('items'); setActiveCategory('') }}
+            style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'items' ? '#15803d' : '#6b7280' }}
+          >
+            Add Items
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
@@ -634,8 +638,8 @@ export default function FolioPage() {
           )}
         </div>
 
-        {/* Right: Product picker */}
-        <div style={{ flex: 1, background: '#C9D2D9', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
+        {/* Right: Product picker — only shown when POS enabled */}
+        <div style={{ flex: 1, background: '#C9D2D9', display: posEnabled && activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           {/* Category or Items view */}
           {activeCategory === '' ? (
             <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, alignContent: 'start' }}>
