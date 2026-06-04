@@ -68,6 +68,7 @@ type CamperRow = {
   historyLoaded: boolean
   editEmailMode: boolean
   editEmailValue: string
+  showBillConfirm: boolean
 }
 
 function generateMonthOptions(): string[] {
@@ -162,7 +163,7 @@ export default function ElectricBillingPage() {
         guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
-        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '',
+        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '',, showBillConfirm: false,
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
       }
@@ -519,7 +520,8 @@ export default function ElectricBillingPage() {
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                           {!row.sent ? (
-                            <button onClick={() => sendBill(i)} disabled={row.sending || !row.finalAmount}
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
+                              disabled={row.sending || !row.finalAmount}
                               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
                               {row.sending ? 'Sending...' : '✉ Send Bill'}
                             </button>
@@ -528,7 +530,7 @@ export default function ElectricBillingPage() {
                               <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>✓ Sent!</span>
                               {!row.editEmailMode ? (
                                 <>
-                                  <button onClick={() => resendBill(i)}
+                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
                                     style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                                     Re-send
                                   </button>
@@ -582,6 +584,27 @@ export default function ElectricBillingPage() {
 
                           {row.error && <span style={{ fontSize: 12, color: '#dc2626' }}>{row.error}</span>}
                           {!row.guest.email && <span style={{ fontSize: 12, color: '#9ca3af' }}>No email on file</span>}
+                        </div>
+                      )}
+
+                      {row.showBillConfirm && (
+                        <div style={{ margin: '0 14px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '14px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 6 }}>
+                            {row.sent ? 'Re-send electric bill to ' + row.guest.name + '?' : 'Send electric bill to ' + row.guest.name + '?'}
+                          </div>
+                          <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
+                            A <strong>{billingMonth} electric bill for ${row.finalAmount}</strong> will be sent to <strong>{row.guest.email}</strong>
+                          </div>
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); row.sent ? resendBill(i) : sendBill(i) }}
+                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                              Yes, Send Bill
+                            </button>
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u })}
+                              style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
+                              Cancel
+                            </button>
+                          </div>
                         </div>
                       )}
 
