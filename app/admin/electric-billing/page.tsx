@@ -160,7 +160,7 @@ export default function ElectricBillingPage() {
         guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
-        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false,
+        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '',
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
       }
@@ -340,6 +340,22 @@ export default function ElectricBillingPage() {
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], [field]: value }; return u })
   }
 
+  async function resendBill(index: number, overrideEmail?: string) {
+    const row = campers[index]
+    if (overrideEmail) {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], guest: { ...u[index].guest, email: overrideEmail }, editEmailMode: false }; return u })
+    }
+    const { data: oldReading } = await supabase
+      .from('electric_readings').select('folio_line_item_id')
+      .eq('guest_id', row.guest.id).eq('billing_month', billingMonth).single()
+    if (oldReading?.folio_line_item_id) {
+      await supabase.from('folio_line_items').delete().eq('id', oldReading.folio_line_item_id)
+    }
+    await supabase.from('electric_readings').delete().eq('guest_id', row.guest.id).eq('billing_month', billingMonth)
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sent: false, sending: false, error: '' }; return u })
+    setTimeout(() => sendBill(index), 150)
+  }
+
   async function sendBill(index: number) {
     const row = campers[index]
     if (row.skip || row.sent) return
@@ -500,10 +516,47 @@ export default function ElectricBillingPage() {
 
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          <button onClick={() => sendBill(i)} disabled={row.sending || row.sent || !row.finalAmount}
-                            style={{ background: row.sent ? '#15803d' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: row.sent || !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
-                            {row.sending ? 'Sending...' : row.sent ? '✓ Sent!' : '✉ Send Bill'}
-                          </button>
+                          {!row.sent ? (
+                            <button onClick={() => sendBill(i)} disabled={row.sending || !row.finalAmount}
+                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
+                              {row.sending ? 'Sending...' : '✉ Send Bill'}
+                            </button>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>✓ Sent!</span>
+                              {!row.editEmailMode ? (
+                                <>
+                                  <button onClick={() => resendBill(i)}
+                                    style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                    Re-send
+                                  </button>
+                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: true, editEmailValue: row.guest.email }; return u })}
+                                    style={{ background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                    Edit & Re-send
+                                  </button>
+                                  <button onClick={() => { if (confirm('Send a second bill for ' + billingMonth + ' to ' + row.guest.name + '?')) { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], sent: false }; return u }) } }}
+                                    style={{ background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                    + Send Another
+                                  </button>
+                                </>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <input type='email' value={row.editEmailValue}
+                                    onChange={e => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailValue: e.target.value }; return u })}
+                                    style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 10px', fontSize: 13, width: 200 }}
+                                    placeholder='Email address' />
+                                  <button onClick={() => resendBill(i, row.editEmailValue)}
+                                    style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                    Send
+                                  </button>
+                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: false }; return u })}
+                                    style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, padding: '5px 10px', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}>
+                                    Cancel
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           {row.folioBalance > 0 && !row.showPayment && (
                             <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (row.folioBalance / 100).toFixed(2)) }}
