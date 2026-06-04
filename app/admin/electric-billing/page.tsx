@@ -788,6 +788,15 @@ export default function ElectricBillingPage() {
                               ))}
                             </div>
                           )}
+                          {/* Balance due summary */}
+                          <div style={{ padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #e5e7eb', background: row.folioBalance < 0 ? '#f0fdf4' : row.folioBalance === 0 ? '#f0fdf4' : '#fef2f2' }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance < 0 ? '#15803d' : row.folioBalance === 0 ? '#15803d' : '#dc2626' }}>
+                              {row.folioBalance < 0 ? 'Credit on Account' : row.folioBalance === 0 ? '✓ Paid in Full' : 'Balance Due'}
+                            </span>
+                            <span style={{ fontSize: 15, fontWeight: 800, color: row.folioBalance < 0 ? '#15803d' : row.folioBalance === 0 ? '#15803d' : '#dc2626' }}>
+                              {row.folioBalance < 0 ? '-$' + (Math.abs(row.folioBalance) / 100).toFixed(2) : '$' + (row.folioBalance / 100).toFixed(2)}
+                            </span>
+                          </div>
                         </div>
                       )}
                     </div>
