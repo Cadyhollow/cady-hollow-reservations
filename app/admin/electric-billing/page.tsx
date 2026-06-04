@@ -345,18 +345,40 @@ export default function ElectricBillingPage() {
 
   async function resendBill(index: number, overrideEmail?: string) {
     const row = campers[index]
-    if (overrideEmail) {
-      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], guest: { ...u[index].guest, email: overrideEmail }, editEmailMode: false }; return u })
-    }
-    const { data: oldReading } = await supabase
-      .from('electric_readings').select('folio_line_item_id')
-      .eq('guest_id', row.guest.id).eq('billing_month', billingMonth).single()
-    if (oldReading?.folio_line_item_id) {
-      await supabase.from('folio_line_items').delete().eq('id', oldReading.folio_line_item_id)
-    }
-    await supabase.from('electric_readings').delete().eq('guest_id', row.guest.id).eq('billing_month', billingMonth)
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sent: false, sending: false, error: '' }; return u })
-    setTimeout(() => sendBill(index), 150)
+    const emailToUse = overrideEmail || row.guest.email
+    if (!emailToUse) return
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: true, error: '', editEmailMode: false }; return u })
+
+    // Just re-send the email — don't touch the database
+    const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId).order('charged_at')
+    const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed')
+    const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
+    const balance = Math.max(0, itemsTotal - paymentsTotal)
+
+    const thisElectricDesc = billingMonth + ' Electric'
+    const electricItem = (allItems || []).find((i: any) => i.description === thisElectricDesc)
+    const electricAmount = electricItem?.line_total || row.calculatedAmount
+
+    const { data: prevBills } = await supabase.from('electric_readings').select('created_at')
+      .eq('guest_id', row.guest.id).neq('billing_month', billingMonth)
+      .order('created_at', { ascending: false }).limit(1)
+    const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
+
+    const newLineItems = (allItems || []).filter((item: any) => {
+      if (item.description === thisElectricDesc) return false
+      if (!previousBillSentAt) return true
+      return new Date(item.charged_at) > new Date(previousBillSentAt)
+    })
+    const newLineItemsTotal = newLineItems.reduce((s: number, i: any) => s + i.line_total, 0)
+    const previousBalance = balance - electricAmount - newLineItemsTotal
+
+    const res = await fetch('/api/electric-bill-email', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guestName: row.guest.name, guestEmail: emailToUse, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount, lineItems: newLineItems, totalBalance: balance, previousBalance: previousBalance > 0 ? previousBalance : 0 }),
+    })
+    const data = await res.json()
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
   async function sendBill(index: number) {
