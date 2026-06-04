@@ -163,7 +163,7 @@ export default function ElectricBillingPage() {
         guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
-        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '',, showBillConfirm: false,
+        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '', showBillConfirm: false,
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
       }
