@@ -373,9 +373,27 @@ export default function ElectricBillingPage() {
     const newLineItemsTotal = newLineItems.reduce((s: number, i: any) => s + i.line_total, 0)
     const previousBalance = balance - electricAmount - newLineItemsTotal
 
+    // Payments received since last bill
+    const paymentsReceivedAmt = (allPayments || [])
+      .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) > new Date(previousBillSentAt))
+      .reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+    const chargesBeforeResend = (allItems || [])
+      .filter((i: any) => i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
+      .reduce((s: number, i: any) => s + i.line_total, 0)
+    const paymentsBeforeResend = (allPayments || [])
+      .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) <= new Date(previousBillSentAt))
+      .reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+    const balanceForwardResend = chargesBeforeResend - paymentsBeforeResend
+    const liveBalanceResend = itemsTotal - paymentsTotal
+
     const res = await fetch('/api/electric-bill-email', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guestName: row.guest.name, guestEmail: emailToUse, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount, lineItems: newLineItems, totalBalance: balance, previousBalance: previousBalance > 0 ? previousBalance : 0 }),
+      body: JSON.stringify({
+        guestName: row.guest.name, guestEmail: emailToUse, siteNumber: row.guest.site_number,
+        billingMonth, emailMessage, electricAmount,
+        newCharges: newLineItems, paymentsReceived: paymentsReceivedAmt,
+        totalBalance: liveBalanceResend, balanceForward: balanceForwardResend,
+      }),
     })
     const data = await res.json()
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
@@ -414,10 +432,11 @@ export default function ElectricBillingPage() {
     })
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
-    const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed')
+    const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
     const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-    const newBalance = Math.max(0, itemsTotal - paymentsTotal)
+    // Live folio balance — matches what shows in their guest folio exactly
+    const liveBalance = itemsTotal - paymentsTotal
 
     // Find the date the previous electric bill was sent for this camper
     const { data: prevBills } = await supabase
@@ -429,22 +448,38 @@ export default function ElectricBillingPage() {
       .limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
 
-    // Only pass line items added AFTER the previous bill (excluding this month's electric — shown separately)
-    // Everything before the previous bill becomes "previous balance"
     const thisElectricDesc = billingMonth + ' Electric'
-    const newLineItems = (allItems || []).filter((item: any) => {
+
+    // Balance Forward = everything owed BEFORE this billing month
+    // = all charges before this electric bill minus all payments before this electric bill
+    const chargesBefore = (allItems || [])
+      .filter((i: any) => i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
+      .reduce((s: number, i: any) => s + i.line_total, 0)
+    const paymentsBefore = (allPayments || [])
+      .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) <= new Date(previousBillSentAt))
+      .reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+    const balanceForward = chargesBefore - paymentsBefore
+
+    // New charges since last bill (excluding this month's electric — shown separately)
+    const newCharges = (allItems || []).filter((item: any) => {
       if (item.description === thisElectricDesc) return false
       if (!previousBillSentAt) return true
       return new Date(item.charged_at) > new Date(previousBillSentAt)
     })
 
-    // Previous balance = total minus this electric charge minus new line items
-    const newLineItemsTotal = newLineItems.reduce((s: number, i: any) => s + i.line_total, 0)
-    const previousBalance = newBalance - finalAmountCents - newLineItemsTotal
+    // Payments received since last bill
+    const paymentsReceivedAmount = (allPayments || [])
+      .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) > new Date(previousBillSentAt))
+      .reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
 
     const res = await fetch('/api/electric-bill-email', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number, billingMonth, emailMessage, electricAmount: finalAmountCents, lineItems: newLineItems, totalBalance: newBalance, previousBalance: previousBalance > 0 ? previousBalance : 0 }),
+      body: JSON.stringify({
+        guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
+        billingMonth, emailMessage, electricAmount: finalAmountCents,
+        newCharges, paymentsReceived: paymentsReceivedAmount,
+        totalBalance: liveBalance, balanceForward,
+      }),
     })
     const data = await res.json()
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: newBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })

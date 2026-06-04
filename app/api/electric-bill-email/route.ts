@@ -18,9 +18,10 @@ export async function POST(request: NextRequest) {
       billingMonth,
       emailMessage,
       electricAmount,
-      lineItems,
+      newCharges,
+      paymentsReceived,
       totalBalance,
-      previousBalance,
+      balanceForward,
     } = body
 
     const { data: settings } = await supabase
@@ -33,19 +34,22 @@ export async function POST(request: NextRequest) {
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
     const replyToEmail = settings?.park_email || fromEmail
 
-    const hasPreviousBalance = previousBalance > 0
-
     const formatDateTime = (dateStr: string) => {
       const d = new Date(dateStr)
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
         ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
     }
 
-    const itemizedRows = lineItems.map((item: any) => `
+    const newChargeRows = (newCharges || []).map((item: any) => `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}${item.charged_at ? ' · ' + formatDateTime(item.charged_at) : ''}</td>
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>
       </tr>`).join('')
+
+    const isCredit = totalBalance < 0
+    const balanceColor = isCredit ? '#4ADE80' : totalBalance === 0 ? '#4ADE80' : '#FCD34D'
+    const balanceLabel = isCredit ? 'Credit on Account' : totalBalance === 0 ? '✓ Paid in Full' : 'Total Balance Due'
+    const balanceDisplay = isCredit ? '$' + (Math.abs(totalBalance)/100).toFixed(2) : totalBalance === 0 ? '' : '$' + (totalBalance/100).toFixed(2)
 
     const html = `<!DOCTYPE html>
 <html>
@@ -71,23 +75,30 @@ export async function POST(request: NextRequest) {
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
     <h3 style="color:#ffffff;margin:0 0 16px;font-size:16px;">Account Statement</h3>
     <table style="width:100%;border-collapse:collapse;">
-      ${hasPreviousBalance ? `
       <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Previous balance</td>
-        <td style="padding:6px 0;color:#FCA5A5;font-size:14px;font-weight:bold;text-align:right;">$${(previousBalance/100).toFixed(2)}</td>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${balanceForward < 0 ? 'Credit Forward' : 'Balance Forward'}</td>
+        <td style="padding:6px 0;font-size:14px;font-weight:bold;text-align:right;color:${balanceForward < 0 ? '#4ADE80' : balanceForward === 0 ? '#9CA3AF' : '#FCA5A5'};">
+          ${balanceForward < 0 ? '-$' + (Math.abs(balanceForward)/100).toFixed(2) : '$' + (balanceForward/100).toFixed(2)}
+        </td>
       </tr>
       <tr><td colspan="2" style="padding:4px 0;border-top:1px solid #374151;"></td></tr>
-      ` : ''}
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${billingMonth} Electric</td>
         <td style="padding:6px 0;color:#FCD34D;font-size:14px;font-weight:bold;text-align:right;">$${(electricAmount/100).toFixed(2)}</td>
       </tr>
-      ${itemizedRows}
+      ${newChargeRows}
+      <tr><td colspan="2" style="padding:4px 0;border-top:1px solid #374151;"></td></tr>
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Payments Received</td>
+        <td style="padding:6px 0;color:${paymentsReceived > 0 ? '#4ADE80' : '#9CA3AF'};font-size:14px;font-weight:bold;text-align:right;">
+          ${paymentsReceived > 0 ? '-$' + (paymentsReceived/100).toFixed(2) : '$0.00'}
+        </td>
+      </tr>
       <tr><td colspan="2" style="padding:8px 0 0;border-top:1px solid #374151;"></td></tr>
       <tr>
-        <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">Total Balance Due</td>
-        <td style="padding:8px 0 4px;color:${totalBalance === 0 ? '#4ADE80' : '#FCD34D'};font-size:16px;font-weight:bold;text-align:right;">
-          ${totalBalance === 0 ? '✓ Paid in full' : '$' + (totalBalance/100).toFixed(2)}
+        <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">${balanceLabel}</td>
+        <td style="padding:8px 0 4px;color:${balanceColor};font-size:16px;font-weight:bold;text-align:right;">
+          ${balanceDisplay}
         </td>
       </tr>
     </table>
