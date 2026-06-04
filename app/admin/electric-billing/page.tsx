@@ -66,6 +66,8 @@ type CamperRow = {
   receiptSent: boolean
   readings: ElectricReading[]
   historyLoaded: boolean
+  editEmailMode: boolean
+  editEmailValue: string
 }
 
 function generateMonthOptions(): string[] {
