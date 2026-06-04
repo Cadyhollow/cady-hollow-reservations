@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 
     const itemsTotal = (lineItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (payments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-    const balanceRemaining = Math.max(0, itemsTotal - paymentsTotal)
+    const balanceRemaining = itemsTotal - paymentsTotal
     const mostRecentPayment = payments && payments.length > 0 ? payments[payments.length - 1] : null
 
     // Load reservation if applicable
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
       </tr>`).join('')}
       <tr style="border-top:1px solid #374151;">
         <td style="padding:8px 0 4px;color:#ffffff;font-size:15px;font-weight:bold;">Balance remaining</td>
-        <td style="padding:8px 0 4px;font-size:15px;font-weight:bold;text-align:right;color:${balanceRemaining === 0 ? '#4ADE80' : '#FCD34D'};">${balanceRemaining === 0 ? '✓ Paid in full' : '$' + (balanceRemaining/100).toFixed(2)}</td>
+        <td style="padding:8px 0 4px;font-size:15px;font-weight:bold;text-align:right;color:${balanceRemaining <= 0 ? '#4ADE80' : '#FCD34D'};">${balanceRemaining < 0 ? 'Credit on Account: $' + (Math.abs(balanceRemaining)/100).toFixed(2) : balanceRemaining === 0 ? '✓ Paid in full' : '$' + (balanceRemaining/100).toFixed(2)}</td>
       </tr>
     </table>
   </div>
@@ -140,7 +140,7 @@ ${'─'.repeat(40)}
 PAYMENTS
 ${(payments || []).map((p: any) => `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: $${(p.amount/100).toFixed(2)}`).join('\n')}
 
-${mostRecentPayment ? 'Most recent payment: $' + (mostRecentPayment.amount/100).toFixed(2) + '\n' : ''}Balance remaining: ${balanceRemaining === 0 ? 'PAID IN FULL' : '$' + (balanceRemaining/100).toFixed(2)}
+${mostRecentPayment ? 'Most recent payment: $' + (mostRecentPayment.amount/100).toFixed(2) + '\n' : ''}Balance remaining: ${balanceRemaining < 0 ? 'Credit on Account: $' + (Math.abs(balanceRemaining)/100).toFixed(2) : balanceRemaining === 0 ? 'PAID IN FULL' : '$' + (balanceRemaining/100).toFixed(2)}
 ${'─'.repeat(40)}
 Thank you!
 ${campgroundName}`
