@@ -150,7 +150,7 @@ export default function ElectricBillingPage() {
         ])
         const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
         const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-        folioBalance = Math.max(0, itemsTotal - paymentsTotal)
+        folioBalance = itemsTotal - paymentsTotal
         recentCharges = items || []
         folioPayments = pmts || []
       }
