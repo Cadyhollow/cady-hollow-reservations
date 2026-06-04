@@ -482,7 +482,7 @@ export default function ElectricBillingPage() {
       }),
     })
     const data = await res.json()
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: newBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: liveBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
   async function sendAllBills() {
