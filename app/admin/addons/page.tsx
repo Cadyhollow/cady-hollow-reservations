@@ -121,12 +121,28 @@ export default function AddonsPage() {
             </div>
             <div className="flex flex-col gap-3 pt-2">
               <div className="flex items-center gap-3">
-                <input type="checkbox" id="is_active_addon" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
-                <label htmlFor="is_active_addon" className="text-sm font-medium text-gray-700">Active</label>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, is_active: !form.is_active })}
+                  className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+                  style={{ backgroundColor: form.is_active ? '#15803d' : '#d1d5db' }}
+                >
+                  <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.is_active ? 'translateX(20px)' : 'translateX(0px)' }} />
+                </button>
+                <span className="text-sm font-medium text-gray-700">Active</span>
               </div>
               <div className="flex items-center gap-3">
-                <input type="checkbox" id="is_early_checkin" checked={form.is_early_checkin} onChange={e => setForm({ ...form, is_early_checkin: e.target.checked })} className="w-4 h-4 accent-green-700" />
-                <label htmlFor="is_early_checkin" className="text-sm font-medium text-gray-700">Early check-in option</label>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, is_early_checkin: !form.is_early_checkin })}
+                  className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+                  style={{ backgroundColor: form.is_early_checkin ? '#15803d' : '#d1d5db' }}
+                >
+                  <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.is_early_checkin ? 'translateX(20px)' : 'translateX(0px)' }} />
+                </button>
+                <span className="text-sm font-medium text-gray-700">Early check-in option</span>
               </div>
             </div>
           </div>
