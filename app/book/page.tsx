@@ -649,7 +649,7 @@ const deposit = site.nightly_rate + proportionalFees
                     <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.early_checkin_price / 100).toFixed(2)}</p>
                     {earlyBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
                   </div>
-                  <input type="checkbox" disabled={earlyBlocked} checked={earlyChecked && !earlyBlocked} onChange={e => setEarlyChecked(e.target.checked)} className="w-5 h-5 cursor-pointer disabled:cursor-not-allowed" style={{ accentColor: 'var(--accent-color)' }} />
+                  <button type="button" disabled={earlyBlocked} onClick={() => setEarlyChecked(!earlyChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors disabled:cursor-not-allowed" style={{ borderColor: 'var(--accent-color)', backgroundColor: (earlyChecked && !earlyBlocked) ? 'var(--accent-color)' : 'transparent' }}>{(earlyChecked && !earlyBlocked) && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
                 </div>
               )}
 
@@ -661,7 +661,7 @@ const deposit = site.nightly_rate + proportionalFees
                     <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.late_checkout_price / 100).toFixed(2)}</p>
                     {lateBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
                   </div>
-                  <input type="checkbox" disabled={lateBlocked} checked={lateChecked && !lateBlocked} onChange={e => setLateChecked(e.target.checked)} className="w-5 h-5 cursor-pointer disabled:cursor-not-allowed" style={{ accentColor: 'var(--accent-color)' }} />
+                  <button type="button" disabled={lateBlocked} onClick={() => setLateChecked(!lateChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors disabled:cursor-not-allowed" style={{ borderColor: 'var(--accent-color)', backgroundColor: (lateChecked && !lateBlocked) ? 'var(--accent-color)' : 'transparent' }}>{(lateChecked && !lateBlocked) && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
                 </div>
               )}
 
@@ -839,6 +839,18 @@ const deposit = site.nightly_rate + proportionalFees
                   </div>
                 )
               })}
+              {earlyFee > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-gray-400">Early Check-In</p>
+                  <p className="text-white font-medium">${(earlyFee / 100).toFixed(2)}</p>
+                </div>
+              )}
+              {lateFee > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-gray-400">Late Check-Out</p>
+                  <p className="text-white font-medium">${(lateFee / 100).toFixed(2)}</p>
+                </div>
+              )}
               {feeBreakdown.map(fee => (
                 <div key={fee.id} className="flex justify-between">
                   <p className="text-gray-400">{fee.name}</p>
