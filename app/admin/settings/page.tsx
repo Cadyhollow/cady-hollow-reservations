@@ -60,7 +60,11 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [plan, setPlan] = useState('trailhead')
+  const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
+  const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  useEffect(() => { setEarlyPriceInput((form.early_checkin_price / 100).toFixed(2)) }, [form.early_checkin_price])
+  useEffect(() => { setLatePriceInput((form.late_checkout_price / 100).toFixed(2)) }, [form.late_checkout_price])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { fetchSettings() }, [])
@@ -415,8 +419,9 @@ export default function SettingsPage() {
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
                       <input type="number" min="0" step="0.01"
                         className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm"
-                        value={(form.early_checkin_price / 100).toFixed(2)}
-                        onChange={e => setForm({ ...form, early_checkin_price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                        value={earlyPriceInput}
+                        onChange={e => setEarlyPriceInput(e.target.value)}
+                        onBlur={() => setForm({ ...form, early_checkin_price: Math.round((parseFloat(earlyPriceInput) || 0) * 100) })}
                       />
                     </div>
                   </div>
@@ -462,8 +467,9 @@ export default function SettingsPage() {
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
                       <input type="number" min="0" step="0.01"
                         className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm"
-                        value={(form.late_checkout_price / 100).toFixed(2)}
-                        onChange={e => setForm({ ...form, late_checkout_price: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                        value={latePriceInput}
+                        onChange={e => setLatePriceInput(e.target.value)}
+                        onBlur={() => setForm({ ...form, late_checkout_price: Math.round((parseFloat(latePriceInput) || 0) * 100) })}
                       />
                     </div>
                   </div>
