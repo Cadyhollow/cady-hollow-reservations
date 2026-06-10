@@ -574,7 +574,7 @@ function ManualBookingInner() {
           {/* Payment */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment</h3>
-            <p className="text-xs text-gray-500 mb-4">Enter what was collected today and what the guest will owe at arrival. Balance due is the cash price — card adds 3% at check-in.</p>
+            <p className="text-xs text-gray-500 mb-4">Enter what was collected today and what the guest will owe at arrival. Balance due is the cash price.{hasCashCardSplit ? ` Card adds $${(cardOnlyFeesTotal / 100).toFixed(2)} at check-in.` : ''}</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
@@ -612,7 +612,7 @@ function ManualBookingInner() {
                   value={balanceDue}
                   onChange={e => setBalanceDue(e.target.value.replace(/[^0-9.]/g, ''))}
                 />
-                <p className="text-xs text-gray-400 mt-1">Suggested: ${(cashTotal / 100).toFixed(2)} cash. Card adds 3% at check-in.</p>
+                <p className="text-xs text-gray-400 mt-1">Suggested: ${(cashTotal / 100).toFixed(2)} cash.{hasCashCardSplit ? ` Card adds $${(cardOnlyFeesTotal / 100).toFixed(2)} at check-in.` : ''}</p>
               </div>
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
