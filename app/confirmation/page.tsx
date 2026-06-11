@@ -121,12 +121,12 @@ function ConfirmationContent() {
             <div>
               <p className="text-gray-400">Arrival</p>
               <p className="text-white font-medium">{reservation.arrival_date}</p>
-              <p className="text-gray-500 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
+              <p className="text-gray-300 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
             </div>
             <div>
               <p className="text-gray-400">Departure</p>
               <p className="text-white font-medium">{reservation.departure_date}</p>
-              <p className="text-gray-500 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
+              <p className="text-gray-300 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
             </div>
             <div>
               <p className="text-gray-400">Guests</p>
