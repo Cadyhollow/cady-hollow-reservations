@@ -16,7 +16,13 @@ type ArrivalGuest = {
   num_children: number
   addons: { name: string; quantity: number }[]
   checkedIn: boolean
+  waiver_signed: boolean
+  guest_email: string
+  early_checkin: boolean
+  late_checkout: boolean
 }
+
+import WaiverActions from './reservations/WaiverActions'
 
 export default function AdminDashboard() {
   const [settings, setSettings] = useState<any>(null)
@@ -196,6 +202,10 @@ export default function AdminDashboard() {
         num_children: r.num_children,
         addons: addonMap[r.id] || [],
         checkedIn: r.checked_in || false,
+        waiver_signed: r.waiver_signed || false,
+        guest_email: r.guest_email || '',
+        early_checkin: r.early_checkin || false,
+        late_checkout: r.late_checkout || false,
       })))
     }
 
@@ -398,6 +408,7 @@ export default function AdminDashboard() {
                         {guest.num_adults} adult{guest.num_adults !== 1 ? 's' : ''}
                         {guest.num_children > 0 ? `, ${guest.num_children} child${guest.num_children !== 1 ? 'ren' : ''}` : ''}
                       </p>
+                      <WaiverActions reservationId={guest.id} guestEmail={guest.guest_email} signed={guest.waiver_signed} />
 
                       <div className="flex items-center gap-3 mt-2">
                         {paidInFull ? (
@@ -421,6 +432,20 @@ export default function AdminDashboard() {
                               📦 {addon.name}{addon.quantity > 1 ? ` ×${addon.quantity}` : ''}
                             </span>
                           ))}
+                        </div>
+                      )}
+                      {(guest.early_checkin || guest.late_checkout) && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {guest.early_checkin && (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium bg-orange-100 border border-orange-300 text-orange-800 px-2 py-0.5 rounded-full">
+                              🕐 Early Check-In
+                            </span>
+                          )}
+                          {guest.late_checkout && (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded-full">
+                              🕒 Late Check-Out
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
