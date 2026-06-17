@@ -37,6 +37,8 @@ export default function NewReservationWizard() {
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<string | null>(null)
   const [newReservationId, setNewReservationId] = useState<string | null>(null)
+  const [sendWaiver, setSendWaiver] = useState(true)
+  const [waiverMsg, setWaiverMsg] = useState<string | null>(null)
   const [newFolioId, setNewFolioId] = useState<string | null>(null)
   const [terminalStatus, setTerminalStatus] = useState<'' | 'waiting' | 'timeout'>('')
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
@@ -363,6 +365,19 @@ export default function NewReservationWizard() {
         setNewReservationId(data.reservationId)
         setNewFolioId(folio.id)
         setConfirmation(data.confirmationNumber)
+        // Email the liability waiver if the toggle is on, the waiver is enabled, and we have an email.
+        if (sendWaiver && settings?.waiver_enabled && form.guest_email) {
+          try {
+            const wRes = await fetch('/api/send-waiver', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reservationId: data.reservationId, sendEmail: true }),
+            })
+            const wData = await wRes.json()
+            if (wData?.emailed) setWaiverMsg(`Liability waiver emailed to ${wData.guestEmail}`)
+            else if (wData?.success) setWaiverMsg('Waiver link created — email could not be sent here, but the link is ready.')
+          } catch { /* non-blocking: booking already succeeded */ }
+        }
         setSaving(false)
       }
 
@@ -469,6 +484,8 @@ export default function NewReservationWizard() {
     setTerminalStatus('')
     setShowPOS(false)
     setPosCart([])
+    setSendWaiver(true)
+    setWaiverMsg(null)
     setStep(1)
     setForm({
       arrival_date: '', departure_date: '', site_id: '',
@@ -518,6 +535,9 @@ export default function NewReservationWizard() {
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-10 text-center">
           <div className="text-2xl font-semibold text-green-700 mb-1">Reservation created</div>
           <div className="text-sm text-gray-500 mb-7">Confirmation #{confirmation}</div>
+          {waiverMsg && (
+            <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-4 py-2 mb-6 inline-block">✓ {waiverMsg}</div>
+          )}
           <div className="flex gap-3 justify-center">
             <a href={`/admin/folio/${newReservationId}`} className="px-5 py-2 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800">Open folio</a>
             <a href={`/admin/reservations?id=${newReservationId}`} className="px-5 py-2 text-sm rounded-lg border border-gray-200">View reservation</a>
@@ -560,7 +580,7 @@ export default function NewReservationWizard() {
             )}
           </div>
 
-          <SummaryPanel pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} />
+          <SummaryPanel pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} sendWaiver={sendWaiver} setSendWaiver={setSendWaiver} />
         </div>
       </div>
     </div>
@@ -685,7 +705,7 @@ function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
   )
 }
 
-function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS }: any) {
+function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS, sendWaiver, setSendWaiver }: any) {
   const cash = pricing?.cashTotal || 0
   const fee = pricing ? pricing.cardSurcharge(cash) : 0
   const [editingTotal, setEditingTotal] = useState(false)
@@ -758,6 +778,25 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
             <div className="text-xs text-gray-400 mt-1 text-right">card charge {money(paidCents + pricing.cardSurcharge(paidCents))} (incl. {pricing.cardSurchargePercent}%)</div>
           )}
           {error && <div className="text-xs text-red-600 mt-3">{error}</div>}
+          {settings?.waiver_enabled && (
+            <div
+              onClick={() => { if (form.guest_email) setSendWaiver((v: boolean) => !v) }}
+              className={`flex items-center gap-2.5 mt-4 text-[13px] rounded-lg border px-3 py-2.5 select-none ${form.guest_email ? 'cursor-pointer border-gray-200 hover:bg-gray-50' : 'border-gray-100 cursor-default'}`}
+            >
+              <span
+                className="w-5 h-5 rounded flex items-center justify-center shrink-0 text-white text-xs font-bold"
+                style={{
+                  border: `2px solid ${sendWaiver && form.guest_email ? '#15803d' : '#9ca3af'}`,
+                  background: sendWaiver && form.guest_email ? '#15803d' : '#fff',
+                }}
+              >
+                {sendWaiver && form.guest_email ? '✓' : ''}
+              </span>
+              <span className={form.guest_email ? 'text-gray-700' : 'text-gray-400'}>
+                {form.guest_email ? 'Email liability waiver to guest' : 'No guest email — sign in person after booking'}
+              </span>
+            </div>
+          )}
           <button
             onClick={onComplete}
             disabled={saving}
