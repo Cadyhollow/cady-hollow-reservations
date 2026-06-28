@@ -403,23 +403,30 @@ function BookingForm() {
       : discountResult.discount_value
     : 0
   const total = Math.max(0, subtotal + feesTotal - discountAmount)
-  const proportionalFees = site.nights > 0 ? Math.round(feesTotal / site.nights) : 0
-  const firstNightDeposit = site.nightly_rate + proportionalFees
+  const realCashFees = feesTotal - cardOnlyFeesTotal
+  const proportionalCashFees = site.nights > 0 ? Math.round(realCashFees / site.nights) : 0
+  const firstNightDeposit = site.nightly_rate + proportionalCashFees
+
+  // Cash-canonical: the stay price with the card surcharge removed. We STORE this,
+  // and every deposit type is derived from it so `deposit` is always a CASH value.
+  // The surcharge is added on top per-payment at charge time (see handlePayment).
+  const cashTotal = total - cardOnlyFeesTotal
+
   const depositType = settings?.deposit_type || 'first_night'
   const depositValue = settings?.deposit_value || 0
-  let deposit: number
+  let deposit: number              // always cash (surcharge added at charge time)
   let depositLabel: string
   let depositSubtext: string
   if (depositType === 'percentage') {
-    deposit = Math.min(Math.round(total * depositValue / 100), total)
+    deposit = Math.min(Math.round(cashTotal * depositValue / 100), cashTotal)
     depositLabel = `Pay ${depositValue}% Deposit`
     depositSubtext = 'Balance due at check-in'
   } else if (depositType === 'flat') {
-    deposit = Math.min(depositValue, total)
+    deposit = Math.min(depositValue, cashTotal)
     depositLabel = 'Pay Deposit'
     depositSubtext = 'Balance due at check-in'
   } else if (depositType === 'full') {
-    deposit = total
+    deposit = cashTotal
     depositLabel = 'Pay in Full'
     depositSubtext = ''
   } else {
@@ -428,6 +435,10 @@ function BookingForm() {
     depositSubtext = 'First night only · Balance due at check-in'
   }
   const showDepositButton = depositType !== 'full'
+
+  // Surcharge on the deposit's cash amount, for a truthful button label.
+  const depositSurcharge = cashTotal > 0 ? Math.round(deposit * cardOnlyFeesTotal / cashTotal) : 0
+  const depositDisplay = deposit + depositSurcharge
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
@@ -455,7 +466,10 @@ function BookingForm() {
       const result = await cardRef.current.tokenize()
       if (result.status !== 'OK') { setPaymentError('Card details invalid. Please check and try again.'); setPaymentLoading(false); return }
 
-      const amountToPay = paymentType === 'deposit' ? deposit : total
+      // Both deposit and full are already CASH values; surcharge is added below.
+      const cashAmountToPay = paymentType === 'deposit' ? deposit : cashTotal
+      // Surcharge actually charged on this payment, scaled to the cash amount.
+      const surchargeAmount = cashTotal > 0 ? Math.round(cashAmountToPay * cardOnlyFeesTotal / cashTotal) : 0
       const addonItems = Object.entries(selectedAddons)
         .filter(([_, qty]) => qty > 0)
         .map(([id, quantity]) => {
@@ -479,14 +493,14 @@ function BookingForm() {
           camperLength: parseInt(form.camper_length) || 0,
           camperAmperage: form.camper_amperage,
           nightlyRate: site.nightly_rate,
-          totalPrice: total,
-          amountToPay, paymentType, addonItems,
+          totalPrice: cashTotal,
+          amountToPay: cashAmountToPay, paymentType, addonItems,
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
           earlyCheckin: earlyFee > 0, earlyCheckinFee: earlyFee,
           lateCheckout: lateFee > 0, lateCheckoutFee: lateFee,
-          feesTotal,
-          cardOnlyFeesTotal,
+          feesTotal: realCashFees,
+          surchargeAmount,
           nights: site.nights,
           waiverSigned: waiverSigned,
           signatureData,
@@ -823,7 +837,7 @@ function BookingForm() {
                     style={{ borderColor: 'var(--accent-color)', color: 'var(--accent-color)', backgroundColor: 'transparent' }}
                     onClick={() => handlePayment('deposit')}
                   >
-                    {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `${depositLabel} — $${(deposit / 100).toFixed(2)}`}
+                    {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `${depositLabel} — $${(depositDisplay / 100).toFixed(2)}`}
                     {depositSubtext && <span className="block text-xs font-normal mt-0.5 text-gray-400">{depositSubtext}</span>}
                   </button>
                 )}

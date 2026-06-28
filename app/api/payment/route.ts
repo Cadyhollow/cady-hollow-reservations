@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       signatureData,
       feesTotal = 0,
       cardOnlyFeesTotal = 0,
+      surchargeAmount = 0,
     } = body
 
     // Double-check availability before charging
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
           source_id: sourceId,
           idempotency_key: `res-${Date.now()}`,
           amount_money: {
-            amount: amountToPay,
+            amount: amountToPay + (surchargeAmount || 0),
             currency: 'USD',
           },
           location_id: process.env.SQUARE_LOCATION_ID,
@@ -119,7 +120,8 @@ export async function POST(request: NextRequest) {
       camper_amperage: camperAmperage || '',
       base_nightly_rate: nightlyRate,
       extra_guest_fee_total: extraGuestFee,
-      fees_total: cardOnlyFeesTotal || 0,
+      fees_total: feesTotal || 0,
+      surcharge_amount: surchargeAmount || 0,
       addons_total: addonTotal,
       early_checkin: earlyCheckin,
       early_checkin_fee: earlyCheckinFee,

@@ -488,7 +488,7 @@ export default function FolioPage() {
   const feeAlreadyPaid = reservation && feesTotal > 0 ? Math.round(reservation.amount_paid * feesTotal / reservation.total_price) : 0
   const cashReservationBalance = reservation ? Math.max(0, reservationBalance - (feesTotal - feeAlreadyPaid)) : 0
   const hasFeeDiscount = feesTotal > 0 && cashReservationBalance < reservationBalance
-  const grandTotal = cashReservationBalance + itemsTotal
+  const grandTotal = reservationBalance + itemsTotal
   const totalDue = Math.max(0, grandTotal - paymentsTotal)
   const overpaid = paymentsTotal > grandTotal ? paymentsTotal - grandTotal : 0
 
@@ -524,16 +524,16 @@ export default function FolioPage() {
     }
     if (rEarly > 0) resLines.push({ label: 'Early check-in', amount: rEarly })
     if (rLate > 0) resLines.push({ label: 'Late check-out', amount: rLate })
-    // card surcharge is a payment-method cost, not a stay charge — excluded from cash ledger
+    if (rFees > 0) resLines.push({ label: 'Fees', amount: rFees })
     if (rDiscount > 0) resLines.push({ label: 'Discount', amount: rDiscount, negative: true })
     // Reconcile: surface any amount baked into total_price that the stored breakdown didn't account for
     const shown = resLines.reduce((s, l) => s + (l.negative ? -l.amount : l.amount), 0)
-    const leftover = (reservation.total_price - rFees) - shown
+    const leftover = reservation.total_price - shown
     if (leftover > 0) resLines.push({ label: 'Other charges', amount: leftover })
     else if (leftover < 0) resLines.push({ label: 'Adjustment', amount: -leftover, negative: true })
   }
-  const fullCharges = (reservation ? reservation.total_price - feesTotal : 0) + itemsTotal
-  const fullPaid = (reservation ? reservation.amount_paid - feeAlreadyPaid : 0) + paymentsTotal
+  const fullCharges = (reservation ? reservation.total_price : 0) + itemsTotal
+  const fullPaid = (reservation ? reservation.amount_paid : 0) + paymentsTotal
   const isGuestAcct = folio?.folio_type === 'guest_account'
   let balanceLabel = 'Balance due'
   let balanceAmount = totalDue
@@ -573,7 +573,7 @@ export default function FolioPage() {
       ledgerEvents.push({ key: `res-${i}`, kind: 'charge', ts: LEDGER_OPENING_TS, order: _lOrder++, label: l.label, sub: 'At booking', amount: l.amount, negative: l.negative, isOpening: true, balanceAfter: 0 })
     })
     if (reservation.amount_paid > 0) {
-      ledgerEvents.push({ key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++, label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid - feeAlreadyPaid, isOpening: true, balanceAfter: 0 })
+      ledgerEvents.push({ key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++, label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid, isOpening: true, balanceAfter: 0 })
     }
   }
   activeItems.forEach((item) => {
