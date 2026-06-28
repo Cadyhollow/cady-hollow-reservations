@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
       camperAmperage = '',
       totalPrice,
       amountPaid,
+      surchargeAmount = 0,
       paymentType,
       confirmationNumber,
       addonDetails = [],
@@ -218,18 +219,20 @@ export async function POST(request: NextRequest) {
                   <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(totalPrice / 100).toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Paid Today</td>
-                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
-                </tr>
-                ${balanceDue > 0 && paymentType === 'deposit' && feesTotal > 0 ? `
+                ${surchargeAmount > 0 ? `
                 <tr>
-                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due — Cash/Check</td>
-                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${((balanceDue - feesTotal + Math.round(amountPaid * feesTotal / totalPrice)) / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Stay payment</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due — Card (incl. ${Math.round(feesTotal / (totalPrice - feesTotal) * 100)}% fee)</td>
-                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${(balanceDue / 100).toFixed(2)}</td>
-                </tr>` : balanceDue > 0 ? `
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Card processing fee</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(surchargeAmount / 100).toFixed(2)}</td>
+                </tr>` : ''}
+                <tr>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;font-weight:bold;">Paid Today</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;font-weight:bold;text-align:right;">$${((amountPaid + surchargeAmount) / 100).toFixed(2)}</td>
+                </tr>
+                ${balanceDue > 0 ? `
                 <tr>
                   <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due at Check-in</td>
                   <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${(balanceDue / 100).toFixed(2)}</td>
