@@ -117,7 +117,7 @@ export default function AdminDashboard() {
       // webhook amount_paid mirror doesn't drop folio money. Single source of
       // truth: amount_paid (booking) + folio_payments (folio/walk-in/POS),
       // counted net of card surcharge to match the arrivals bridge.
-      const foldIds = Array.from(new Set([...(monthData || []).map((r: any) => r.id), ...(upcomingData || []).map((r: any) => r.id)]))
+      const foldIds = Array.from(new Set((upcomingData || []).map((r: any) => r.id)))
       const folioPaidByRes: Record<string, number> = {}
       if (foldIds.length > 0) {
         const { data: dashFolios } = await supabase
@@ -142,7 +142,24 @@ export default function AdminDashboard() {
         }
       }
       const thisMonth = monthData || []
-      const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0), 0)
+      // Revenue This Month = money actually RECEIVED this month to date, across
+      // everything: booking payments (by created_at) + folio payments (walk-in /
+      // POS / seasonal / electric, by paid_at). Both net of card surcharge —
+      // amount_paid is already cash-canonical post-Option-B.
+      const monthStartISO = firstOfMonth + 'T00:00:00'
+      const [{ data: monthBookingPmts }, { data: monthFolioPmts }] = await Promise.all([
+        supabase.from('reservations')
+          .select('amount_paid')
+          .gt('amount_paid', 0)
+          .neq('status', 'cancelled')
+          .gte('created_at', monthStartISO),
+        supabase.from('folio_payments')
+          .select('amount, surcharge_amount')
+          .eq('status', 'completed')
+          .gte('paid_at', monthStartISO),
+      ])
+      const revenue = (monthBookingPmts || []).reduce((s: number, r: any) => s + (r.amount_paid || 0), 0)
+        + (monthFolioPmts || []).reduce((s: number, p: any) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0)
 
       setStats({
         totalThisMonth: thisMonth.length,
@@ -306,6 +323,7 @@ export default function AdminDashboard() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm text-gray-500">{settings?.park_location || ''} · Admin Dashboard</p>
+          <p className="text-sm font-semibold text-gray-700 mt-0.5">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
         </div>
       </div>
 
@@ -344,6 +362,7 @@ export default function AdminDashboard() {
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#f0fdf4',borderColor:'#bbf7d0'}}>
             <p className="text-xs font-semibold mb-1" style={{color:'#14532d'}}>Revenue This Month</p>
             <p className="text-3xl font-bold" style={{color:'#14532d'}}>${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
+            <p className="text-xs mt-1" style={{color:'#16a34a'}}>collected this month · net of card fees</p>
           </div>
         ) : (
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#faf5ff',borderColor:'#e9d5ff'}}>
