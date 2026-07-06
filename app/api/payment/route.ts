@@ -131,6 +131,7 @@ export async function POST(request: NextRequest) {
       total_price: totalPrice,
       amount_paid: amountToPay,
       payment_type: paymentType,
+      payment_method: 'card', // online bookings are always paid by card
       square_payment_id: squarePaymentId,
       waiver_signed: waiverSigned || false,
     }
