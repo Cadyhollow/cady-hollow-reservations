@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { fetchUnifiedTransactions, type UnifiedPayment } from '@/lib/transactions'
 
 type Reservation = {
   id: string
@@ -76,6 +77,7 @@ export default function ReportsPage() {
   const [cancelledReservations, setCancelledReservations] = useState<Reservation[]>([])
   const [resPayments, setResPayments] = useState<PaymentRow[]>([])
   const [transactions, setTransactions] = useState<PaymentRow[]>([])
+  const [unifiedTx, setUnifiedTx] = useState<UnifiedPayment[]>([])
   const [lineItems, setLineItems] = useState<LineItemRow[]>([])
   const [guestAccountPayments, setGuestAccountPayments] = useState<PaymentRow[]>([])
   // Booking payments recorded on reservations (deposits / online), keyed by created_at.
@@ -327,6 +329,9 @@ export default function ReportsPage() {
     const typedPmtData = pmtData as any[]
     setResPayments(typedPmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
     setTransactions(typedPmtData)
+    // Unified transaction log (folio + booking payments) — same source as /admin/transactions
+    const uni = await fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59')
+    setUnifiedTx(uni)
     setGuestAccountPayments(typedPmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
     setLoading(false)
   }
@@ -446,17 +451,18 @@ export default function ReportsPage() {
   // Average days between when a booking was made (created_at) and arrival — booking lead time.
   const avgLeadTime = reservations.length>0 ? reservations.reduce((sum,r)=>{ const days=Math.round((new Date(r.arrival_date+'T12:00:00').getTime()-new Date(r.created_at).getTime())/86400000); return sum+Math.max(0,days) },0)/reservations.length : 0
 
-  // Transactions filtering
-  const filteredTransactions = transactions.filter(t => {
-    const folio = t.folios as any
-    const matchSearch = txSearch===''||((folio?.guest_name||'').toLowerCase().includes(txSearch.toLowerCase()))
+  // Transactions filtering — unified source (folio + booking payments)
+  const filteredTransactions = unifiedTx.filter(t => {
+    const matchSearch = txSearch===''||t.guest_name.toLowerCase().includes(txSearch.toLowerCase())
     const matchMethod = txMethodFilter==='all'||t.method===txMethodFilter
-    const matchType = txTypeFilter==='all'||(txTypeFilter==='reservation'&&folio?.reservation_id!==null)||(txTypeFilter==='walkin'&&folio?.reservation_id===null)
+    const matchType = txTypeFilter==='all'
+      ||(txTypeFilter==='reservation'&&(t.folio_type==='reservation'||t.is_reservation_payment))
+      ||(txTypeFilter==='walkin'&&(t.folio_type==='walkin'||t.folio_type==='walkup'))
     const matchDateFrom = !txDateFrom || (t.paid_at && t.paid_at >= txDateFrom)
     const matchDateTo = !txDateTo || (t.paid_at && t.paid_at <= txDateTo+'T23:59:59')
     return matchSearch&&matchMethod&&matchType&&matchDateFrom&&matchDateTo
   })
-  const txByDay: { [day: string]: PaymentRow[] } = {}
+  const txByDay: { [day: string]: UnifiedPayment[] } = {}
   filteredTransactions.forEach(t => {
     if (!t.paid_at) return
     const day = new Date(t.paid_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})
@@ -954,18 +960,19 @@ export default function ReportsPage() {
                         </div>
                         <div className="space-y-1">
                           {dayTx.map(t=>{
-                            const folio=t.folios as any
                             const timeStr=t.paid_at?new Date(t.paid_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):''
-                            const isWalkup=folio?.reservation_id===null
+                            const isWalkup=t.folio_type==='walkin'||t.folio_type==='walkup'
+                            const isBooking=t.is_reservation_payment
                             return (
-                              <div key={t.id} onClick={()=>openTransaction(t)}
+                              <div key={t.id} onClick={()=>isBooking?router.push('/admin/reservations?id='+t.reservation_id):openTransaction(t as any)}
                                 className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-blue-50 cursor-pointer border border-transparent hover:border-blue-100 transition-all">
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${t.method==='cash'?'bg-amber-400':t.method==='card'?'bg-purple-400':t.method==='venmo'?'bg-blue-400':'bg-gray-400'}`}/>
                                   <div className="min-w-0">
                                     <div className="text-sm font-medium text-gray-900 truncate">
-                                      {folio?.guest_name||'Walk-up Guest'}
+                                      {t.guest_name||'Walk-up Guest'}
                                       {isWalkup&&<span className="ml-2 text-xs text-blue-600 font-normal bg-blue-50 px-1.5 py-0.5 rounded">Walk-up</span>}
+                                      {isBooking&&<span className="ml-2 text-xs text-emerald-600 font-normal bg-emerald-50 px-1.5 py-0.5 rounded">Online</span>}
                                     </div>
                                     <div className="text-xs text-gray-400">{timeStr} · {t.method}</div>
                                   </div>
@@ -1168,7 +1175,7 @@ export default function ReportsPage() {
             {/* Panel header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-white">
               <div>
-                <h2 className="text-lg font-bold text-gray-900">{(selectedTx.folios as any)?.guest_name||'Walk-up Guest'}</h2>
+                <h2 className="text-lg font-bold text-gray-900">{(selectedTx as any).guest_name||(selectedTx.folios as any)?.guest_name||'Walk-up Guest'}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {selectedTx.paid_at?new Date(selectedTx.paid_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}):''} · {selectedTx.method}
                 </p>
