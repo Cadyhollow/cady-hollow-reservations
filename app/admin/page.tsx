@@ -387,10 +387,8 @@ export default function AdminDashboard() {
       {/* Quick links */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
-          { label: 'New Reservation', href: '/admin/new-reservation', icon: '✨' },
-          { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
+          { label: 'New Reservation', href: '/admin/new-reservation', icon: '➕' },
           ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' }] : []),
-          { label: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🏕️' },
           { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
           ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
