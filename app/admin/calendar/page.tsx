@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd } from '@/lib/transactions'
 
@@ -71,6 +71,34 @@ export default function CalendarPage() {
   const [viewMode, setViewMode] = useState<'timeline' | 'month'>('timeline')
   const [monthDate, setMonthDate] = useState<Date>(new Date())
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set())
+
+  // ── Touch axis locking: first few px of a swipe decide the axis; the gesture
+  // stays locked to it so the grid never drifts diagonally on iPad. ──
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
+  const axisLock = useRef<'x' | 'y' | null>(null)
+  function onGridTouchStart(e: React.TouchEvent) {
+    touchStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    axisLock.current = null
+  }
+  function onGridTouchMove(e: React.TouchEvent) {
+    const el = gridRef.current
+    if (!el || !touchStart.current) return
+    if (!axisLock.current) {
+      const dx = Math.abs(e.touches[0].clientX - touchStart.current.x)
+      const dy = Math.abs(e.touches[0].clientY - touchStart.current.y)
+      if (dx < 6 && dy < 6) return // not enough movement to judge yet
+      axisLock.current = dx > dy ? 'x' : 'y'
+      el.style.overflowX = axisLock.current === 'x' ? 'auto' : 'hidden'
+      el.style.overflowY = axisLock.current === 'y' ? 'auto' : 'hidden'
+    }
+  }
+  function onGridTouchEnd() {
+    const el = gridRef.current
+    if (el) { el.style.overflowX = 'auto'; el.style.overflowY = 'auto' }
+    touchStart.current = null
+    axisLock.current = null
+  }
 
   const startStr = ymd(windowStart)
   const endStr = ymd(addDays(windowStart, DAYS - 1))
@@ -304,7 +332,8 @@ export default function CalendarPage() {
       <div className="flex gap-6 items-start">
         {/* Grid */}
         {viewMode === 'timeline' && (
-        <div className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto" style={{ maxHeight: "calc(100vh - 210px)" }}>
+        <div ref={gridRef} onTouchStart={onGridTouchStart} onTouchMove={onGridTouchMove} onTouchEnd={onGridTouchEnd} onTouchCancel={onGridTouchEnd}
+          className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto" style={{ maxHeight: "calc(100vh - 210px)" }}>
           <div style={{ width: LABEL_W + DAYS * DAY_W, minWidth: LABEL_W + DAYS * DAY_W }}>
             {/* Date header */}
             <div className="flex sticky top-0 z-20 bg-white border-b border-gray-200">
