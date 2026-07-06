@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
-import { fetchUnifiedTransactions, ymd, type UnifiedPayment } from '@/lib/transactions'
+import { fetchUnifiedTransactions, ymd, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -26,6 +26,7 @@ type LineItem = {
 export default function TransactionsPage() {
   const router = useRouter()
   const [payments, setPayments] = useState<Payment[]>([])
+  const [customMethods, setCustomMethods] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [methodFilter, setMethodFilter] = useState('all')
@@ -86,7 +87,11 @@ export default function TransactionsPage() {
     setLoading(true)
     const { start, end } = getDateBounds()
     // One shared source (folio payments + booking payments) — same data as Reports.
-    const all = await fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59')
+    const [all, { data: settingsData }] = await Promise.all([
+      fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59'),
+      supabase.from('settings').select('custom_payment_methods').single(),
+    ])
+    setCustomMethods(settingsData?.custom_payment_methods || [])
     setPayments(all)
     setLoading(false)
   }
@@ -144,10 +149,7 @@ export default function TransactionsPage() {
   }
 
   function methodDot(method: string) {
-    if (method === 'cash') return '#f59e0b'
-    if (method === 'card') return '#8b5cf6'
-    if (method === 'check') return '#6b7280'
-    return '#d1d5db'
+    return methodColor(method, customMethods)
   }
 
   // Filtered payments
@@ -178,9 +180,11 @@ export default function TransactionsPage() {
 
   // Summary totals
   const totalCollected = filtered.reduce((s, p) => s + p.amount, 0) / 100
-  const totalCash = filtered.filter(p => p.method === 'cash').reduce((s, p) => s + p.amount, 0) / 100
-  const totalCard = filtered.filter(p => p.method === 'card').reduce((s, p) => s + p.amount, 0) / 100
-  const totalCheck = filtered.filter(p => p.method === 'check').reduce((s, p) => s + p.amount, 0) / 100
+  const methods = allPaymentMethods(customMethods)
+  const methodStats = methods.map(m => {
+    const rows = filtered.filter(p => p.method === m)
+    return { method: m, total: rows.reduce((s, p) => s + p.amount, 0) / 100, count: rows.length }
+  })
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto">
@@ -218,12 +222,11 @@ export default function TransactionsPage() {
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 gap-3 mb-6" style={{ gridTemplateColumns: undefined }} data-cards>
+        <style>{`@media (min-width: 768px) { [data-cards] { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important; } }`}</style>
         {[
           { label: 'Total Collected', value: '$' + totalCollected.toFixed(2), sub: filtered.length + ' payments' },
-          { label: 'Cash', value: '$' + totalCash.toFixed(2), sub: filtered.filter(p => p.method === 'cash').length + ' payments' },
-          { label: 'Card', value: '$' + totalCard.toFixed(2), sub: filtered.filter(p => p.method === 'card').length + ' payments' },
-          { label: 'Check', value: '$' + totalCheck.toFixed(2), sub: filtered.filter(p => p.method === 'check').length + ' payments' },
+          ...methodStats.map(ms => ({ label: methodLabel(ms.method), value: '$' + ms.total.toFixed(2), sub: ms.count + ' payments' })),
         ].map((stat, i) => (
           <div key={i} className="bg-white rounded-2xl border border-gray-200 p-4">
             <p className="text-xs text-gray-500">{stat.label}</p>
@@ -252,9 +255,7 @@ export default function TransactionsPage() {
         </div>
         <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={methodFilter} onChange={e => setMethodFilter(e.target.value)}>
           <option value="all">All Methods</option>
-          <option value="cash">Cash</option>
-          <option value="card">Card</option>
-          <option value="check">Check</option>
+          {methods.map(m => <option key={m} value={m}>{methodLabel(m)}</option>)}
         </select>
         <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
           <option value="all">All Types</option>

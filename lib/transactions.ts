@@ -88,3 +88,29 @@ export async function fetchUnifiedTransactions(startISO: string, endISO: string)
 // Base methods every campground has; custom ones (venmo, paypal, ...) come from
 // settings.custom_payment_methods and get appended by callers.
 export const BASE_PAYMENT_METHODS = ['cash', 'card', 'check'] as const
+
+// ── Payment method helpers (Fix 6) ──────────────────────────────────────────
+// Custom methods (venmo, paypal, cashapp, ...) come from settings.custom_payment_methods.
+// Callers pass the settings row (or the array itself); we normalize + dedupe.
+export function allPaymentMethods(custom?: string[] | null): string[] {
+  const extras = (custom || [])
+    .map(m => (m || '').trim().toLowerCase())
+    .filter(m => m.length > 0 && !(BASE_PAYMENT_METHODS as readonly string[]).includes(m))
+  return [...BASE_PAYMENT_METHODS, ...Array.from(new Set(extras))]
+}
+
+// Display: 'cash' -> 'Cash', 'cashapp' -> 'Cashapp' (clients can name methods as they like)
+export function methodLabel(method: string): string {
+  if (!method) return ''
+  return method.charAt(0).toUpperCase() + method.slice(1)
+}
+
+// Consistent dot colors: fixed for the base three, rotating palette for customs
+const CUSTOM_METHOD_COLORS = ['#3b82f6', '#10b981', '#ec4899', '#f97316', '#14b8a6']
+export function methodColor(method: string, custom?: string[] | null): string {
+  if (method === 'cash') return '#f59e0b'
+  if (method === 'card') return '#8b5cf6'
+  if (method === 'check') return '#6b7280'
+  const idx = (custom || []).findIndex(m => (m || '').trim().toLowerCase() === method)
+  return idx >= 0 ? CUSTOM_METHOD_COLORS[idx % CUSTOM_METHOD_COLORS.length] : '#d1d5db'
+}
