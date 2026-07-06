@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import { fetchUnifiedTransactions, type UnifiedPayment } from '@/lib/transactions'
+import { fetchUnifiedTransactions, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 
 type Reservation = {
   id: string
@@ -78,6 +78,7 @@ export default function ReportsPage() {
   const [resPayments, setResPayments] = useState<PaymentRow[]>([])
   const [transactions, setTransactions] = useState<PaymentRow[]>([])
   const [unifiedTx, setUnifiedTx] = useState<UnifiedPayment[]>([])
+  const [customMethods, setCustomMethods] = useState<string[]>([])
   const [lineItems, setLineItems] = useState<LineItemRow[]>([])
   const [guestAccountPayments, setGuestAccountPayments] = useState<PaymentRow[]>([])
   // Booking payments recorded on reservations (deposits / online), keyed by created_at.
@@ -167,7 +168,8 @@ export default function ReportsPage() {
     const today = new Date().toISOString().split('T')[0]
 
     // Load settings for total_sites and total_cabins
-    const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins').single()
+    const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins, custom_payment_methods').single()
+    setCustomMethods(settingsData?.custom_payment_methods || [])
     const configuredSites = settingsData?.total_sites || 84
     const configuredCabins = settingsData?.total_cabins || 3
     setTotalSites(configuredSites)
@@ -396,9 +398,12 @@ export default function ReportsPage() {
   const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
   // All payments for method breakdown
   const allPayments = [...transactions]
-  const totalCash = allPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100
-  const totalCard = allPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100
-  const totalCheck = allPayments.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100
+  const methods = allPaymentMethods(customMethods)
+  // Method breakdown from the UNIFIED list (folio + booking payments) — gross amounts
+  const methodTotals = methods.map(m => ({
+    method: m,
+    value: unifiedTx.filter(t => t.method === m).reduce((s, t) => s + t.amount, 0) / 100,
+  }))
   const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
@@ -700,8 +705,9 @@ export default function ReportsPage() {
               <div className="bg-white rounded-2xl border border-gray-200 p-5">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Methods</h2>
                 <div className="space-y-3">
-                  {[{label:'Cash',value:totalCash,color:'#f59e0b'},{label:'Card',value:totalCard,color:'#8b5cf6'},{label:'Check',value:totalCheck,color:'#6b7280'}].map(m=>{
-                    const total=totalCash+totalCard+totalCheck
+                  {methodTotals.map(mt=>{
+                    const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
+                    const total=methodTotals.reduce((s,x)=>s+x.value,0)
                     const pct=total>0?Math.round((m.value/total)*100):0
                     return (
                       <div key={m.label}>
@@ -918,10 +924,7 @@ export default function ReportsPage() {
                 <input type="text" placeholder="Search guest name..." className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-40" value={txSearch} onChange={e=>setTxSearch(e.target.value)}/>
                 <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white" value={txMethodFilter} onChange={e=>setTxMethodFilter(e.target.value)}>
                   <option value="all">All Methods</option>
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="check">Check</option>
-                  <option value="venmo">Venmo</option>
+                  {methods.map(m=><option key={m} value={m}>{methodLabel(m)}</option>)}
                 </select>
                 <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white" value={txTypeFilter} onChange={e=>setTxTypeFilter(e.target.value)}>
                   <option value="all">All Types</option>
@@ -936,11 +939,12 @@ export default function ReportsPage() {
             </div>
 
             {/* Summary */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4" data-txcards>
+              <style>{`@media (min-width: 768px) { [data-txcards] { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important; } }`}</style>
               <KPICard label="Total Collected" value={'$'+(filteredTransactions.reduce((s,t)=>s+t.amount,0)/100).toFixed(2)} sub="all methods"/>
-              <KPICard label="Cash" value={'$'+(filteredTransactions.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
-              <KPICard label="Card" value={'$'+(filteredTransactions.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
-              <KPICard label="Check" value={'$'+(filteredTransactions.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
+              {methods.map(m=>(
+                <KPICard key={m} label={methodLabel(m)} value={'$'+(filteredTransactions.filter(t=>t.method===m).reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
+              ))}
             </div>
 
             {/* Transaction log */}
@@ -967,7 +971,7 @@ export default function ReportsPage() {
                               <div key={t.id} onClick={()=>isBooking?router.push('/admin/reservations?id='+t.reservation_id):openTransaction(t as any)}
                                 className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-blue-50 cursor-pointer border border-transparent hover:border-blue-100 transition-all">
                                 <div className="flex items-center gap-3 min-w-0">
-                                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${t.method==='cash'?'bg-amber-400':t.method==='card'?'bg-purple-400':t.method==='venmo'?'bg-blue-400':'bg-gray-400'}`}/>
+                                  <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:methodColor(t.method,customMethods)}}/>
                                   <div className="min-w-0">
                                     <div className="text-sm font-medium text-gray-900 truncate">
                                       {t.guest_name||'Walk-up Guest'}
@@ -1230,7 +1234,7 @@ export default function ReportsPage() {
                             <div className="flex items-center justify-between">
                               <div>
                                 <div className="flex items-center gap-2">
-                                  <div className={`w-2 h-2 rounded-full ${p.method==='cash'?'bg-amber-400':p.method==='card'?'bg-purple-400':'bg-gray-400'}`}/>
+                                  <div className="w-2 h-2 rounded-full" style={{background:methodColor(p.method,customMethods)}}/>
                                   <span className="text-sm font-medium text-gray-900 capitalize">{p.method}</span>
                                   {p.status==='refunded'&&<span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-semibold">Refunded</span>}
                                   {p.status==='partially_refunded'&&<span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded font-semibold">Partial Refund</span>}
