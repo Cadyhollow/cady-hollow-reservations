@@ -86,6 +86,8 @@ export default function CalendarPage() {
   const [adjChildren, setAdjChildren] = useState(0)
   const [adjSaving, setAdjSaving] = useState(false)
   const [adjError, setAdjError] = useState('')
+  const [dbg, setDbg] = useState<string[]>([])
+  const dbgLog = (m: string) => setDbg(prev => [...prev.slice(-7), m])
   const [drag, setDragState] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
@@ -99,6 +101,7 @@ export default function CalendarPage() {
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
+    dbgLog('PD ' + side + ' scrollL=' + Math.round(gridRef.current?.scrollLeft || 0))
     const prev = dragRef.current
     // Re-grabbing a parked adjustment continues from its ghost dates, not the originals
     const regrab = prev && !prev.active && prev.resId === r.id
@@ -153,6 +156,7 @@ export default function CalendarPage() {
       if (bL + livePx < minLeftPx) { livePx = minLeftPx - bL; blocked = true }
       if (bL + livePx > bR - DAY_W) { livePx = bR - DAY_W - bL; blocked = true }
     }
+    dbgLog('PM ' + Math.round(livePx))
     const snap = Math.round(livePx / DAY_W)
     const ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
     const ghostDeparture = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
@@ -168,7 +172,7 @@ export default function CalendarPage() {
   // chasing the cursor in a feedback loop.
   useEffect(() => {
     if (!drag?.active) return
-    const up = () => { if (dragRef.current?.active) endDrag() }
+    const up = () => { if (dragRef.current?.active) endDrag('WINDOW') }
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
     window.addEventListener('blur', up)
@@ -179,7 +183,8 @@ export default function CalendarPage() {
     }
   }, [drag?.active])
 
-  function endDrag() {
+  function endDrag(reason: string = '?') {
+    dbgLog('END: ' + reason)
     if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
     pendingX.current = null
     const d = dragRef.current
@@ -484,9 +489,9 @@ export default function CalendarPage() {
                 <div className="absolute flex items-center justify-center"
                   onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'L', e.clientX) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
-                  onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
-                  onPointerCancel={() => endDrag()}
-                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag() }}
+                  onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
+                  onPointerCancel={() => endDrag('CANCEL')}
+                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -498,9 +503,9 @@ export default function CalendarPage() {
                 <div className="absolute flex items-center justify-center"
                   onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'R', e.clientX) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
-                  onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
-                  onPointerCancel={() => endDrag()}
-                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag() }}
+                  onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
+                  onPointerCancel={() => endDrag('CANCEL')}
+                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -856,6 +861,11 @@ export default function CalendarPage() {
         )
       })()}
 
+      {dbg.length > 0 && (
+        <div className="fixed top-2 left-2 z-[100] bg-black/80 text-green-400 text-[10px] font-mono rounded-lg px-2 py-1 pointer-events-none">
+          {dbg.map((m, i) => <div key={i}>{m}</div>)}
+        </div>
+      )}
       {loading && (
         <div className="fixed inset-0 bg-white bg-opacity-60 flex items-center justify-center">
           <p className="text-gray-500 text-sm">Loading reservations…</p>
