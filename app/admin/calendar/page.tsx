@@ -86,8 +86,6 @@ export default function CalendarPage() {
   const [adjChildren, setAdjChildren] = useState(0)
   const [adjSaving, setAdjSaving] = useState(false)
   const [adjError, setAdjError] = useState('')
-  const [dbg, setDbg] = useState<string[]>([])
-  const dbgLog = (m: string) => setDbg(prev => [...prev.slice(-5), m])
   const [drag, setDragState] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
@@ -99,7 +97,6 @@ export default function CalendarPage() {
   const rafId = useRef<number | null>(null)
 
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
-    dbgLog('beginDrag ' + side)
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     const prev = dragRef.current
@@ -834,11 +831,6 @@ export default function CalendarPage() {
         )
       })()}
 
-      {dbg.length > 0 && (
-        <div className="fixed top-2 left-2 z-[100] bg-black/80 text-green-400 text-[10px] font-mono rounded-lg px-2 py-1 pointer-events-none">
-          {dbg.map((m, i) => <div key={i}>{m}</div>)}
-        </div>
-      )}
       {loading && (
         <div className="fixed inset-0 bg-white bg-opacity-60 flex items-center justify-center">
           <p className="text-gray-500 text-sm">Loading reservations…</p>
