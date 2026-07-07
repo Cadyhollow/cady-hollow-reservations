@@ -107,8 +107,10 @@ export default function CalendarPage() {
     const origArrival = regrab ? prev.origArrival : r.arrival_date
     const origDeparture = regrab ? prev.origDeparture : r.departure_date
     const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
-    let minArrival = fetchLo
-    let maxDeparture = fetchHi
+    // Wide soft bounds — real walls are same-site neighbors below; the data
+    // horizon must never lock a drag (fetchLo/fetchHi shift with view state).
+    let minArrival = ymd(addDays(windowStart, -365))
+    let maxDeparture = ymd(addDays(windowStart, 365))
     for (const s of siblings) {
       if (s.departure_date <= origArrival && s.departure_date > minArrival) minArrival = s.departure_date
       if (s.arrival_date >= origDeparture && s.arrival_date < maxDeparture) maxDeparture = s.arrival_date
@@ -135,10 +137,13 @@ export default function CalendarPage() {
     const d = dragRef.current
     if (!d || !d.active) return
     const dx = clientX - d.startX
-    const bL = Math.max(0, (diffDays(startStr, d.baseArrival) + 0.5) * DAY_W)
-    const bR = Math.min(DAYS * DAY_W, (diffDays(startStr, d.baseDeparture) + 0.5) * DAY_W)
-    const minLeftPx = Math.max(0, (diffDays(startStr, d.minArrival) + 0.5) * DAY_W)
-    const maxRightPx = Math.min(DAYS * DAY_W, (diffDays(startStr, d.maxDeparture) + 0.5) * DAY_W)
+    // TRUE pixel positions — never window-clipped. Clipping here corrupts the
+    // clamp box for bars near/past the window edges (the "can't drag by one
+    // day after paging forward" bug). Display clipping happens in render only.
+    const bL = (diffDays(startStr, d.baseArrival) + 0.5) * DAY_W
+    const bR = (diffDays(startStr, d.baseDeparture) + 0.5) * DAY_W
+    const minLeftPx = (diffDays(startStr, d.minArrival) + 0.5) * DAY_W
+    const maxRightPx = (diffDays(startStr, d.maxDeparture) + 0.5) * DAY_W
     let livePx = dx
     let blocked = false
     if (d.side === 'R') {
