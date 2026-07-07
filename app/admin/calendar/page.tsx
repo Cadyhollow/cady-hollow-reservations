@@ -161,6 +161,24 @@ export default function CalendarPage() {
 
   function cancelDragAll() { setDrag(null); setFocusId(null) }
 
+  // Safety net: element-level pointerup can occasionally be missed even with
+  // capture (browser reality — production drag libs all do this). While a drag
+  // is active, window-level listeners guarantee the release is never lost;
+  // otherwise pointermove (which fires on hover, no button needed) keeps
+  // chasing the cursor in a feedback loop.
+  useEffect(() => {
+    if (!drag?.active) return
+    const up = () => { if (dragRef.current?.active) endDrag() }
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    window.addEventListener('blur', up)
+    return () => {
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      window.removeEventListener('blur', up)
+    }
+  }, [drag?.active])
+
   function endDrag() {
     if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
     pendingX.current = null
@@ -468,6 +486,7 @@ export default function CalendarPage() {
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
                   onPointerCancel={() => endDrag()}
+                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag() }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -481,6 +500,7 @@ export default function CalendarPage() {
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
                   onPointerCancel={() => endDrag()}
+                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag() }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
