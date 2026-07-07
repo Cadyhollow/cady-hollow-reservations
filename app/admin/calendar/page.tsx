@@ -157,6 +157,8 @@ export default function CalendarPage() {
     setDrag({ ...d, livePx, ghostArrival, ghostDeparture, blocked })
   }
 
+  function cancelDragAll() { setDrag(null); setFocusId(null) }
+
   function endDrag() {
     if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
     pendingX.current = null
