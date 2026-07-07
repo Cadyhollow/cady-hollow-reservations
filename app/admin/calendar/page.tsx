@@ -73,10 +73,12 @@ export default function CalendarPage() {
   // ── Slice 2: drag-to-adjust engine ──
   type DragState = {
     resId: string; side: 'L' | 'R'
-    origArrival: string; origDeparture: string
-    ghostArrival: string; ghostDeparture: string
+    origArrival: string; origDeparture: string   // reservation's true dates
+    baseArrival: string; baseDeparture: string   // dates at grab time (parked ghost on re-grab)
+    ghostArrival: string; ghostDeparture: string // snapped preview, committed on release
     minArrival: string; maxDeparture: string
     blocked: boolean; startX: number; active: boolean
+    livePx: number                               // clamped pixel delta of the moving edge
   }
   const [pricingData, setPricingData] = useState<{ settings: PricingSettings | null; fees: PricingFee[]; rules: PricingRule[] }>({ settings: null, fees: [], rules: [] })
   const [adjustModal, setAdjustModal] = useState<null | { r: Reservation; ghostArrival: string; ghostDeparture: string }>(null)
@@ -90,125 +92,81 @@ export default function CalendarPage() {
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
 
-  // Pixel-space drag context — lives in a ref so per-move updates NEVER re-render.
-  // The bar follows the finger pixel-for-pixel; snapping happens only on release.
-  const dragPx = useRef<{
-    wrapper: HTMLElement | null
-    origLeftPx: number; origWidthPx: number
-    minLeftPx: number; maxRightPx: number
-    lastLeftPx: number; lastRightPx: number
-  } | null>(null)
+  // ── Pointer-Events drag engine (setPointerCapture = the gesture belongs to the
+  // handle, mouse and touch unified; touch-action:none on the handle stops iOS
+  // scroll). React owns ALL rendering; moves update state once per animation frame. ──
+  const pendingX = useRef<number | null>(null)
+  const rafId = useRef<number | null>(null)
 
-  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number, handleEl?: HTMLElement) {
+  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
     dbgLog('beginDrag ' + side)
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
+    const prev = dragRef.current
+    // Re-grabbing a parked adjustment continues from its ghost dates, not the originals
+    const regrab = prev && !prev.active && prev.resId === r.id
+    const baseArrival = regrab ? prev.ghostArrival : r.arrival_date
+    const baseDeparture = regrab ? prev.ghostDeparture : r.departure_date
+    const origArrival = regrab ? prev.origArrival : r.arrival_date
+    const origDeparture = regrab ? prev.origDeparture : r.departure_date
     const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
     let minArrival = fetchLo
     let maxDeparture = fetchHi
     for (const s of siblings) {
-      if (s.departure_date <= r.arrival_date && s.departure_date > minArrival) minArrival = s.departure_date
-      if (s.arrival_date >= r.departure_date && s.arrival_date < maxDeparture) maxDeparture = s.arrival_date
-    }
-    const origLeftPx = Math.max(0, (diffDays(startStr, r.arrival_date) + 0.5) * DAY_W)
-    const origRightPx = Math.min(DAYS * DAY_W, (diffDays(startStr, r.departure_date) + 0.5) * DAY_W)
-    dragPx.current = {
-      wrapper: handleEl ? (handleEl.parentElement as HTMLElement) : null,
-      origLeftPx, origWidthPx: origRightPx - origLeftPx,
-      minLeftPx: Math.max(0, (diffDays(startStr, minArrival) + 0.5) * DAY_W),
-      maxRightPx: Math.min(DAYS * DAY_W, (diffDays(startStr, maxDeparture) + 0.5) * DAY_W),
-      lastLeftPx: origLeftPx, lastRightPx: origRightPx,
+      if (s.departure_date <= origArrival && s.departure_date > minArrival) minArrival = s.departure_date
+      if (s.arrival_date >= origDeparture && s.arrival_date < maxDeparture) maxDeparture = s.arrival_date
     }
     setDrag({
       resId: r.id, side,
-      origArrival: r.arrival_date, origDeparture: r.departure_date,
-      ghostArrival: r.arrival_date, ghostDeparture: r.departure_date,
-      minArrival, maxDeparture, blocked: false, startX: clientX, active: true,
+      origArrival, origDeparture, baseArrival, baseDeparture,
+      ghostArrival: baseArrival, ghostDeparture: baseDeparture,
+      minArrival, maxDeparture, blocked: false, startX: clientX, active: true, livePx: 0,
     })
   }
 
-  function moveDrag(clientX: number) {
+  function queueMove(clientX: number) {
+    pendingX.current = clientX
+    if (rafId.current == null) {
+      rafId.current = requestAnimationFrame(() => {
+        rafId.current = null
+        if (pendingX.current != null) applyMove(pendingX.current)
+      })
+    }
+  }
+
+  function applyMove(clientX: number) {
     const d = dragRef.current
-    const px = dragPx.current
-    if (!d || !d.active || !px || !px.wrapper) return
+    if (!d || !d.active) return
     const dx = clientX - d.startX
-    let leftPx = px.origLeftPx
-    let rightPx = px.origLeftPx + px.origWidthPx
+    const bL = Math.max(0, (diffDays(startStr, d.baseArrival) + 0.5) * DAY_W)
+    const bR = Math.min(DAYS * DAY_W, (diffDays(startStr, d.baseDeparture) + 0.5) * DAY_W)
+    const minLeftPx = Math.max(0, (diffDays(startStr, d.minArrival) + 0.5) * DAY_W)
+    const maxRightPx = Math.min(DAYS * DAY_W, (diffDays(startStr, d.maxDeparture) + 0.5) * DAY_W)
+    let livePx = dx
     let blocked = false
     if (d.side === 'R') {
-      rightPx = px.origLeftPx + px.origWidthPx + dx
-      const minRight = px.origLeftPx + DAY_W
-      if (rightPx < minRight) { rightPx = minRight; blocked = true }
-      if (rightPx > px.maxRightPx) { rightPx = px.maxRightPx; blocked = true }
+      if (bR + livePx > maxRightPx) { livePx = maxRightPx - bR; blocked = true }
+      if (bR + livePx < bL + DAY_W) { livePx = bL + DAY_W - bR; blocked = true }
     } else {
-      leftPx = px.origLeftPx + dx
-      const maxLeft = px.origLeftPx + px.origWidthPx - DAY_W
-      if (leftPx > maxLeft) { leftPx = maxLeft; blocked = true }
-      if (leftPx < px.minLeftPx) { leftPx = px.minLeftPx; blocked = true }
+      if (bL + livePx < minLeftPx) { livePx = minLeftPx - bL; blocked = true }
+      if (bL + livePx > bR - DAY_W) { livePx = bR - DAY_W - bL; blocked = true }
     }
-    px.lastLeftPx = leftPx; px.lastRightPx = rightPx
-    px.wrapper.style.left = leftPx + 'px'
-    px.wrapper.style.width = Math.max(rightPx - leftPx, 20) + 'px'
-    // Tooltip shows the SNAPPED preview of what release will give
-    const snap = d.side === 'R'
-      ? Math.round((rightPx - (px.origLeftPx + px.origWidthPx)) / DAY_W)
-      : Math.round((px.origLeftPx - leftPx) / DAY_W)
-    const ghostDep = d.side === 'R' ? ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), snap)) : d.origDeparture
-    const ghostArr = d.side === 'L' ? ymd(addDays(new Date(d.origArrival + 'T12:00:00'), -snap)) : d.origArrival
-    const nights = diffDays(ghostArr, ghostDep) - diffDays(d.origArrival, d.origDeparture)
-    const tip = px.wrapper.querySelector('[data-drag-tooltip]') as HTMLElement | null
-    if (tip) {
-      tip.textContent = blocked ? 'No availability' : nights === 0 ? 'No change'
-        : (nights > 0 ? '+' + nights : String(nights)) + ' night' + (Math.abs(nights) !== 1 ? 's' : '') +
-          (d.side === 'R'
-            ? ' · thru ' + new Date(ghostDep + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-            : ' · from ' + new Date(ghostArr + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
-      tip.style.background = blocked ? '#dc2626' : '#111827'
-    }
-    // Original-edge marker stays pinned to the ORIGINAL edge while the wrapper moves
-    const mk = px.wrapper.querySelector('[data-drag-marker]') as HTMLElement | null
-    if (mk) mk.style.left = ((d.side === 'L' ? px.origLeftPx - leftPx : px.origWidthPx) - 1) + 'px'
+    const snap = Math.round(livePx / DAY_W)
+    const ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
+    const ghostDeparture = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
+    setDrag({ ...d, livePx, ghostArrival, ghostDeparture, blocked })
   }
 
   function endDrag() {
+    if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
+    pendingX.current = null
     const d = dragRef.current
-    const px = dragPx.current
     if (!d) return
-    if (!px) { setDrag(null); return }
-    let ghostArrival = d.origArrival
-    let ghostDeparture = d.origDeparture
-    if (d.side === 'R') {
-      const delta = Math.round((px.lastRightPx - (px.origLeftPx + px.origWidthPx)) / DAY_W)
-      ghostDeparture = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), delta))
-      if (ghostDeparture > d.maxDeparture) ghostDeparture = d.maxDeparture
-      const minDep = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), 1))
-      if (ghostDeparture < minDep) ghostDeparture = minDep
-    } else {
-      const delta = Math.round((px.lastLeftPx - px.origLeftPx) / DAY_W)
-      ghostArrival = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), delta))
-      if (ghostArrival < d.minArrival) ghostArrival = d.minArrival
-      const maxArr = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), -1))
-      if (ghostArrival > maxArr) ghostArrival = maxArr
-    }
-    if (px.wrapper) { px.wrapper.style.left = ''; px.wrapper.style.width = '' }
-    dragPx.current = null
-    if (ghostArrival === d.origArrival && ghostDeparture === d.origDeparture) setDrag(null)
-    else setDrag({ ...d, ghostArrival, ghostDeparture, active: false, blocked: false })
+    if (d.ghostArrival === d.origArrival && d.ghostDeparture === d.origDeparture) { setDrag(null); return }
+    // Park at snapped ghost; base becomes the ghost so re-grabs continue seamlessly
+    setDrag({ ...d, baseArrival: d.ghostArrival, baseDeparture: d.ghostDeparture, active: false, blocked: false, livePx: 0 })
   }
 
-  function cancelDragAll() { setDrag(null); setFocusId(null) }
-
-  // iOS Safari yields a gesture only if non-passive touchmove+preventDefault is
-  // attached to the ELEMENT the touch started on, SYNCHRONOUSLY at grab time —
-  // document-level or effect-delayed listeners lose the race and get no events.
-  function attachTouchDrag(el: HTMLElement) {
-    const mv = (e: TouchEvent) => { e.preventDefault(); e.stopPropagation(); moveDrag(e.touches[0].clientX) }
-    const end = () => { el.removeEventListener('touchmove', mv); el.removeEventListener('touchend', end); el.removeEventListener('touchcancel', end); endDrag() }
-    el.addEventListener('touchmove', mv, { passive: false })
-    el.addEventListener('touchend', end)
-    el.addEventListener('touchcancel', end)
-    dbgLog('element listeners ATTACHED')
-  }
   // Long-press-to-focus: 600ms hold on a bar, cancelled by >8px movement
   const longPress = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
   function startLongPress(r: Reservation, e: React.TouchEvent) {
@@ -436,8 +394,13 @@ export default function CalendarPage() {
           {barsFor(site).map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
             <div key={r.id} className="absolute" style={(() => {
               const isGhosting = drag && drag.resId === r.id
-              const dLeft = isGhosting ? Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W) : left
-              const dRight = isGhosting ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W) : left + Math.max(width, 20)
+              let dLeft = left, dRight = left + Math.max(width, 20)
+              if (isGhosting) {
+                const bL = Math.max(0, (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W)
+                const bR = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.baseDeparture) + 0.5) * DAY_W)
+                if (drag.active) { dLeft = drag.side === 'L' ? bL + drag.livePx : bL; dRight = drag.side === 'R' ? bR + drag.livePx : bR }
+                else { dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W); dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W) }
+              }
               return { left: dLeft, width: Math.max(dRight - dLeft, 20),
               top: focusId === r.id ? -6 : 7,
               height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
@@ -468,7 +431,10 @@ export default function CalendarPage() {
               </button>
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
               {drag && drag.resId === r.id && (drag.active || drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
-                const dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
+                const bL = Math.max(0, (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W)
+                const dLeft = drag.active
+                  ? (drag.side === 'L' ? bL + drag.livePx : bL)
+                  : Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
                 const oEdge = drag.side === 'R'
                   ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.origDeparture) + 0.5) * DAY_W) - dLeft
                   : Math.max(0, (diffDays(startStr, drag.origArrival) + 0.5) * DAY_W) - dLeft
@@ -494,11 +460,11 @@ export default function CalendarPage() {
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div className="absolute flex items-center justify-center"
-                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'L', e.touches[0].clientX, e.currentTarget as HTMLElement); attachTouchDrag(e.currentTarget as HTMLElement) }}
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'L', e.clientX, e.currentTarget as HTMLElement)
-                    const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
-                    const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
-                    window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'L', e.clientX) }}
+                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
+                  onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
+                  onPointerCancel={() => endDrag()}
+                  onClick={(e) => e.stopPropagation()}
                   style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
@@ -507,11 +473,11 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
-                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'R', e.touches[0].clientX, e.currentTarget as HTMLElement); attachTouchDrag(e.currentTarget as HTMLElement) }}
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'R', e.clientX, e.currentTarget as HTMLElement)
-                    const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
-                    const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
-                    window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'R', e.clientX) }}
+                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
+                  onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
+                  onPointerCancel={() => endDrag()}
+                  onClick={(e) => e.stopPropagation()}
                   style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
