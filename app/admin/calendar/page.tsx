@@ -316,7 +316,7 @@ export default function CalendarPage() {
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
               {focusId === r.id && !clippedL && (
                 <div className="absolute flex items-center justify-center"
-                  style={{ left: -18, top: -8, width: 36, height: '100%', paddingTop: 8, paddingBottom: 8, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                  style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
                   </div>
@@ -324,7 +324,7 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
-                  style={{ right: -18, top: -8, width: 36, height: '100%', paddingTop: 8, paddingBottom: 8, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                  style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
                   </div>
