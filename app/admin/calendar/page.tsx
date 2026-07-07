@@ -285,21 +285,25 @@ export default function CalendarPage() {
               style={{ left: i * DAY_W, width: DAY_W, borderRight: '1px solid rgba(17,24,39,0.08)', background: ds === todayStr ? 'rgba(46,107,138,0.07)' : wknd ? 'rgba(0,0,0,0.03)' : 'transparent' }} />
           })}
           {barsFor(site).map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
-            <div key={r.id} className="absolute" style={{ left, width: Math.max(width, 20), top: 7, height: ROW_H - 14,
+            <div key={r.id} className="absolute" style={{ left, width: Math.max(width, 20),
+              top: focusId === r.id ? -6 : 7,
+              height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
               zIndex: focusId === r.id ? 30 : undefined,
-              opacity: focusId && focusId !== r.id ? 0.35 : 1,
-              transition: 'opacity 150ms, transform 150ms',
-              transform: focusId === r.id ? 'scale(1.04)' : 'none' }}>
+              opacity: focusId && focusId !== r.id ? 0.3 : 1,
+              transition: 'opacity 150ms, top 150ms, height 150ms',
+              WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties}>
               <button
                 onClick={() => { if (!focusId) setSelected(selected?.id === r.id ? null : r) }}
                 onTouchStart={(e) => { if (!focusId && draggableStatus(r)) startLongPress(r, e) }}
                 onTouchMove={moveLongPress}
                 onTouchEnd={cancelLongPress}
                 onTouchCancel={cancelLongPress}
-                className="w-full h-full flex items-center gap-1 px-2 text-[11px] font-semibold truncate transition-all hover:brightness-110"
+                className="w-full h-full flex items-center gap-1 px-2 font-semibold truncate transition-all hover:brightness-110"
                 title={r.guest_name + ' · ' + r.arrival_date + ' → ' + r.departure_date + ' · ' + nights + ' night' + (nights !== 1 ? 's' : '')}
                 style={{
+                  fontSize: focusId === r.id ? 14 : 11,
                   background: colors.bg, color: colors.text,
+                  WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none',
                   borderRadius: (clippedL ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedL ? '2px' : '8px'),
                   outline: selected?.id === r.id && !focusId ? '2px solid #111827' : 'none',
                   outlineOffset: 1,
@@ -312,16 +316,18 @@ export default function CalendarPage() {
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
               {focusId === r.id && !clippedL && (
                 <div className="absolute flex items-center justify-center"
-                  style={{ left: -14, top: -8, width: 28, height: ROW_H - 14 + 16, zIndex: 31,
-                    background: '#111827', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.4)', touchAction: 'none' }}>
-                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>⋮</span>
+                  style={{ left: -18, top: -8, width: 36, height: '100%', paddingTop: 8, paddingBottom: 8, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
+                  </div>
                 </div>
               )}
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
-                  style={{ right: -14, top: -8, width: 28, height: ROW_H - 14 + 16, zIndex: 31,
-                    background: '#111827', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.4)', touchAction: 'none' }}>
-                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>⋮</span>
+                  style={{ right: -18, top: -8, width: 36, height: '100%', paddingTop: 8, paddingBottom: 8, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
+                  </div>
                 </div>
               )}
             </div>
