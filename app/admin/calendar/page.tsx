@@ -90,9 +90,18 @@ export default function CalendarPage() {
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
 
-  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
-    dbgLog('beginDrag ' + side + ' @' + Math.round(clientX))
-    if (r.checked_in && side === 'L') { dbgLog('rejected: checked-in L'); return }
+  // Pixel-space drag context — lives in a ref so per-move updates NEVER re-render.
+  // The bar follows the finger pixel-for-pixel; snapping happens only on release.
+  const dragPx = useRef<{
+    wrapper: HTMLElement | null
+    origLeftPx: number; origWidthPx: number
+    minLeftPx: number; maxRightPx: number
+    lastLeftPx: number; lastRightPx: number
+  } | null>(null)
+
+  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number, handleEl?: HTMLElement) {
+    dbgLog('beginDrag ' + side)
+    if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
     let minArrival = fetchLo
@@ -100,6 +109,15 @@ export default function CalendarPage() {
     for (const s of siblings) {
       if (s.departure_date <= r.arrival_date && s.departure_date > minArrival) minArrival = s.departure_date
       if (s.arrival_date >= r.departure_date && s.arrival_date < maxDeparture) maxDeparture = s.arrival_date
+    }
+    const origLeftPx = Math.max(0, (diffDays(startStr, r.arrival_date) + 0.5) * DAY_W)
+    const origRightPx = Math.min(DAYS * DAY_W, (diffDays(startStr, r.departure_date) + 0.5) * DAY_W)
+    dragPx.current = {
+      wrapper: handleEl ? (handleEl.parentElement as HTMLElement) : null,
+      origLeftPx, origWidthPx: origRightPx - origLeftPx,
+      minLeftPx: Math.max(0, (diffDays(startStr, minArrival) + 0.5) * DAY_W),
+      maxRightPx: Math.min(DAYS * DAY_W, (diffDays(startStr, maxDeparture) + 0.5) * DAY_W),
+      lastLeftPx: origLeftPx, lastRightPx: origRightPx,
     }
     setDrag({
       resId: r.id, side,
@@ -111,30 +129,71 @@ export default function CalendarPage() {
 
   function moveDrag(clientX: number) {
     const d = dragRef.current
-    if (!d || !d.active) { dbgLog('move ignored: ' + (d ? 'inactive' : 'no drag')); return }
-    dbgLog('move @' + Math.round(clientX) + ' Δ' + Math.round((clientX - d.startX)))
-    const dayDelta = Math.round((clientX - d.startX) / DAY_W)
+    const px = dragPx.current
+    if (!d || !d.active || !px || !px.wrapper) return
+    const dx = clientX - d.startX
+    let leftPx = px.origLeftPx
+    let rightPx = px.origLeftPx + px.origWidthPx
     let blocked = false
     if (d.side === 'R') {
-      let target = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), dayDelta))
-      const minDep = ymd(addDays(new Date(d.ghostArrival + 'T12:00:00'), 1))
-      if (target < minDep) { target = minDep; blocked = true }
-      if (target > d.maxDeparture) { target = d.maxDeparture; blocked = true }
-      setDrag({ ...d, ghostDeparture: target, blocked })
+      rightPx = px.origLeftPx + px.origWidthPx + dx
+      const minRight = px.origLeftPx + DAY_W
+      if (rightPx < minRight) { rightPx = minRight; blocked = true }
+      if (rightPx > px.maxRightPx) { rightPx = px.maxRightPx; blocked = true }
     } else {
-      let target = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), dayDelta))
-      const maxArr = ymd(addDays(new Date(d.ghostDeparture + 'T12:00:00'), -1))
-      if (target > maxArr) { target = maxArr; blocked = true }
-      if (target < d.minArrival) { target = d.minArrival; blocked = true }
-      setDrag({ ...d, ghostArrival: target, blocked })
+      leftPx = px.origLeftPx + dx
+      const maxLeft = px.origLeftPx + px.origWidthPx - DAY_W
+      if (leftPx > maxLeft) { leftPx = maxLeft; blocked = true }
+      if (leftPx < px.minLeftPx) { leftPx = px.minLeftPx; blocked = true }
     }
+    px.lastLeftPx = leftPx; px.lastRightPx = rightPx
+    px.wrapper.style.left = leftPx + 'px'
+    px.wrapper.style.width = Math.max(rightPx - leftPx, 20) + 'px'
+    // Tooltip shows the SNAPPED preview of what release will give
+    const snap = d.side === 'R'
+      ? Math.round((rightPx - (px.origLeftPx + px.origWidthPx)) / DAY_W)
+      : Math.round((px.origLeftPx - leftPx) / DAY_W)
+    const ghostDep = d.side === 'R' ? ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), snap)) : d.origDeparture
+    const ghostArr = d.side === 'L' ? ymd(addDays(new Date(d.origArrival + 'T12:00:00'), -snap)) : d.origArrival
+    const nights = diffDays(ghostArr, ghostDep) - diffDays(d.origArrival, d.origDeparture)
+    const tip = px.wrapper.querySelector('[data-drag-tooltip]') as HTMLElement | null
+    if (tip) {
+      tip.textContent = blocked ? 'No availability' : nights === 0 ? 'No change'
+        : (nights > 0 ? '+' + nights : String(nights)) + ' night' + (Math.abs(nights) !== 1 ? 's' : '') +
+          (d.side === 'R'
+            ? ' · thru ' + new Date(ghostDep + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            : ' · from ' + new Date(ghostArr + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
+      tip.style.background = blocked ? '#dc2626' : '#111827'
+    }
+    // Original-edge marker stays pinned to the ORIGINAL edge while the wrapper moves
+    const mk = px.wrapper.querySelector('[data-drag-marker]') as HTMLElement | null
+    if (mk) mk.style.left = ((d.side === 'L' ? px.origLeftPx - leftPx : px.origWidthPx) - 1) + 'px'
   }
 
   function endDrag() {
     const d = dragRef.current
+    const px = dragPx.current
     if (!d) return
-    if (d.ghostArrival === d.origArrival && d.ghostDeparture === d.origDeparture) setDrag(null)
-    else setDrag({ ...d, active: false, blocked: false })
+    if (!px) { setDrag(null); return }
+    let ghostArrival = d.origArrival
+    let ghostDeparture = d.origDeparture
+    if (d.side === 'R') {
+      const delta = Math.round((px.lastRightPx - (px.origLeftPx + px.origWidthPx)) / DAY_W)
+      ghostDeparture = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), delta))
+      if (ghostDeparture > d.maxDeparture) ghostDeparture = d.maxDeparture
+      const minDep = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), 1))
+      if (ghostDeparture < minDep) ghostDeparture = minDep
+    } else {
+      const delta = Math.round((px.lastLeftPx - px.origLeftPx) / DAY_W)
+      ghostArrival = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), delta))
+      if (ghostArrival < d.minArrival) ghostArrival = d.minArrival
+      const maxArr = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), -1))
+      if (ghostArrival > maxArr) ghostArrival = maxArr
+    }
+    if (px.wrapper) { px.wrapper.style.left = ''; px.wrapper.style.width = '' }
+    dragPx.current = null
+    if (ghostArrival === d.origArrival && ghostDeparture === d.origDeparture) setDrag(null)
+    else setDrag({ ...d, ghostArrival, ghostDeparture, active: false, blocked: false })
   }
 
   function cancelDragAll() { setDrag(null); setFocusId(null) }
@@ -408,7 +467,7 @@ export default function CalendarPage() {
                 {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
               </button>
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
-              {drag && drag.resId === r.id && (drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
+              {drag && drag.resId === r.id && (drag.active || drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
                 const dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
                 const oEdge = drag.side === 'R'
                   ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.origDeparture) + 0.5) * DAY_W) - dLeft
@@ -422,9 +481,9 @@ export default function CalendarPage() {
                 return (
                   <>
                     {/* Dashed marker where the ORIGINAL edge was — the solid bar is the live preview */}
-                    <div className="absolute pointer-events-none" style={{ left: oEdge - 1, top: -4, bottom: -4, width: 0,
+                    <div data-drag-marker className="absolute pointer-events-none" style={{ left: oEdge - 1, top: -4, bottom: -4, width: 0,
                       borderLeft: '2px dashed rgba(17,24,39,0.5)', zIndex: 32 }} />
-                    <div className="absolute pointer-events-none whitespace-nowrap px-2 py-1 rounded-lg text-xs font-bold"
+                    <div data-drag-tooltip className="absolute pointer-events-none whitespace-nowrap px-2 py-1 rounded-lg text-xs font-bold"
                       style={{ left: '50%', transform: 'translateX(-50%)', top: -36,
                         background: drag.blocked ? '#dc2626' : '#111827', color: '#fff', zIndex: 40,
                         boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
@@ -435,8 +494,8 @@ export default function CalendarPage() {
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div className="absolute flex items-center justify-center"
-                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'L', e.touches[0].clientX); attachTouchDrag(e.currentTarget as HTMLElement) }}
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'L', e.clientX)
+                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'L', e.touches[0].clientX, e.currentTarget as HTMLElement); attachTouchDrag(e.currentTarget as HTMLElement) }}
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'L', e.clientX, e.currentTarget as HTMLElement)
                     const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
                     const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
                     window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
@@ -448,8 +507,8 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
-                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'R', e.touches[0].clientX); attachTouchDrag(e.currentTarget as HTMLElement) }}
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'R', e.clientX)
+                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'R', e.touches[0].clientX, e.currentTarget as HTMLElement); attachTouchDrag(e.currentTarget as HTMLElement) }}
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'R', e.clientX, e.currentTarget as HTMLElement)
                     const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
                     const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
                     window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
