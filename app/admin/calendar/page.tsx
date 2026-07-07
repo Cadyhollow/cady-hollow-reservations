@@ -98,10 +98,12 @@ export default function CalendarPage() {
   // scroll). React owns ALL rendering; moves update state once per animation frame. ──
   const pendingX = useRef<number | null>(null)
   const grabTime = useRef(0)
+  const dragElem = useRef<HTMLElement | null>(null)
+  const liveRef = useRef<{ px: number; ghostArrival: string; ghostDeparture: string; blocked: boolean } | null>(null)
   const dragPointerId = useRef<number | null>(null)
   const rafId = useRef<number | null>(null)
 
-  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number, isTouch = false) {
+  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number, isTouch = false, handleEl?: HTMLElement) {
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     dbgLog('PD ' + side + ' scrollL=' + Math.round(gridRef.current?.scrollLeft || 0))
@@ -128,6 +130,8 @@ export default function CalendarPage() {
       ghostArrival: baseArrival, ghostDeparture: baseDeparture,
       minArrival, maxDeparture, blocked: false, startX: clientX, active: true, livePx: 0, isTouch,
     })
+    dragElem.current = handleEl ? (handleEl.parentElement as HTMLElement) : null
+    liveRef.current = { px: 0, ghostArrival: baseArrival, ghostDeparture: baseDeparture, blocked: false }
   }
 
   function queueMove(clientX: number) {
@@ -142,11 +146,10 @@ export default function CalendarPage() {
 
   function applyMove(clientX: number) {
     const d = dragRef.current
-    if (!d || !d.active) return
+    const el = dragElem.current
+    if (!d || !d.active || !el || !liveRef.current) return
     const dx = clientX - d.startX
-    // TRUE pixel positions — never window-clipped. Clipping here corrupts the
-    // clamp box for bars near/past the window edges (the "can't drag by one
-    // day after paging forward" bug). Display clipping happens in render only.
+    // TRUE pixel positions — never window-clipped (clamp math must use real edges)
     const bL = (diffDays(startStr, d.baseArrival) + 0.5) * DAY_W
     const bR = (diffDays(startStr, d.baseDeparture) + 0.5) * DAY_W
     const minLeftPx = (diffDays(startStr, d.minArrival) + 0.5) * DAY_W
@@ -160,11 +163,50 @@ export default function CalendarPage() {
       if (bL + livePx < minLeftPx) { livePx = minLeftPx - bL; blocked = true }
       if (bL + livePx > bR - DAY_W) { livePx = bR - DAY_W - bL; blocked = true }
     }
-    dbgLog('PM ' + Math.round(livePx))
     const snap = Math.round(livePx / DAY_W)
     const ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
     const ghostDeparture = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
-    setDrag({ ...d, livePx, ghostArrival, ghostDeparture, blocked })
+    liveRef.current = { px: livePx, ghostArrival, ghostDeparture, blocked }
+    // ZERO re-renders mid-drag: direct style writes on the wrapper React last
+    // rendered (no setState = nothing to fight). One state commit on release.
+    const newLeft = d.side === 'L' ? bL + livePx : bL
+    const newRight = d.side === 'R' ? bR + livePx : bR
+    el.style.left = Math.max(0, newLeft) + 'px'
+    el.style.width = Math.max(Math.min(newRight, DAYS * DAY_W) - Math.max(0, newLeft), 20) + 'px'
+    const dN = diffDays(ghostArrival, ghostDeparture) - diffDays(d.origArrival, d.origDeparture)
+    const tip = el.querySelector('[data-drag-tooltip]') as HTMLElement | null
+    if (tip) {
+      tip.textContent = blocked ? 'No availability' : dN === 0 ? 'No change'
+        : (dN > 0 ? '+' + dN : String(dN)) + ' night' + (Math.abs(dN) !== 1 ? 's' : '') +
+          (d.side === 'R'
+            ? ' · thru ' + new Date(ghostDeparture + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            : ' · from ' + new Date(ghostArrival + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
+      tip.style.background = blocked ? '#dc2626' : '#111827'
+    }
+    const mk = el.querySelector('[data-drag-marker]') as HTMLElement | null
+    if (mk) {
+      const origEdgePx = d.side === 'R'
+        ? (diffDays(startStr, d.origDeparture) + 0.5) * DAY_W
+        : (diffDays(startStr, d.origArrival) + 0.5) * DAY_W
+      mk.style.left = (origEdgePx - Math.max(0, newLeft) - 1) + 'px'
+    }
+  }
+
+  function endDrag(reason: string = '?') {
+    dbgLog('END: ' + reason)
+    if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
+    pendingX.current = null
+    const d = dragRef.current
+    const live = liveRef.current
+    const el = dragElem.current
+    if (el) { el.style.left = ''; el.style.width = '' } // React resumes ownership
+    dragElem.current = null
+    liveRef.current = null
+    if (!d) return
+    const ghostArrival = live ? live.ghostArrival : d.ghostArrival
+    const ghostDeparture = live ? live.ghostDeparture : d.ghostDeparture
+    if (ghostArrival === d.origArrival && ghostDeparture === d.origDeparture) { setDrag(null); return }
+    setDrag({ ...d, ghostArrival, ghostDeparture, baseArrival: ghostArrival, baseDeparture: ghostDeparture, active: false, blocked: false, livePx: 0 })
   }
 
   // Touch gestures are driven END-TO-END by native touch events: Chrome-on-iOS
@@ -217,16 +259,6 @@ export default function CalendarPage() {
     }
   }, [drag?.active])
 
-  function endDrag(reason: string = '?') {
-    dbgLog('END: ' + reason)
-    if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null }
-    pendingX.current = null
-    const d = dragRef.current
-    if (!d) return
-    if (d.ghostArrival === d.origArrival && d.ghostDeparture === d.origDeparture) { setDrag(null); return }
-    // Park at snapped ghost; base becomes the ghost so re-grabs continue seamlessly
-    setDrag({ ...d, baseArrival: d.ghostArrival, baseDeparture: d.ghostDeparture, active: false, blocked: false, livePx: 0 })
-  }
 
   // Long-press-to-focus: 600ms hold on a bar, cancelled by >8px movement
   const longPress = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
@@ -287,10 +319,10 @@ export default function CalendarPage() {
   // Month bounds — one fetch covers BOTH the timeline window and the viewed month
   const monthFirstStr = ymd(new Date(monthDate.getFullYear(), monthDate.getMonth(), 1))
   const monthLastStr = ymd(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0))
-  const fetchLo = monthFirstStr < startStr ? monthFirstStr : startStr
-  const fetchHi = monthLastStr > fetchEndStr ? monthLastStr : fetchEndStr
+  const fetchLo = viewMode === 'month' && monthFirstStr < startStr ? monthFirstStr : startStr
+  const fetchHi = viewMode === 'month' && monthLastStr > fetchEndStr ? monthLastStr : fetchEndStr
 
-  useEffect(() => { fetchData() }, [startStr, monthFirstStr])
+  useEffect(() => { fetchData() }, [startStr, monthFirstStr, viewMode])
 
   async function fetchData() {
     setLoading(true)
@@ -521,7 +553,7 @@ export default function CalendarPage() {
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div key="handle-L" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'L', e.clientX, t); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'L', e.clientX, t, e.currentTarget as HTMLElement); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); if (!dragRef.current?.isTouch) endDrag('up') }}
                   onPointerCancel={() => { if (!dragRef.current?.isTouch) endDrag('CANCEL') }}
@@ -535,7 +567,7 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div key="handle-R" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'R', e.clientX, t); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'R', e.clientX, t, e.currentTarget as HTMLElement); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); if (!dragRef.current?.isTouch) endDrag('up') }}
                   onPointerCancel={() => { if (!dragRef.current?.isTouch) endDrag('CANCEL') }}
