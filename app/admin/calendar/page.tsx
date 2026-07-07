@@ -359,7 +359,6 @@ export default function CalendarPage() {
     g.cleanup()
     if (g.raf != null) cancelAnimationFrame(g.raf)
     const snap = Math.round(g.livePx / DAY_W)
-    g.el.style.left = ''; g.el.style.width = '' // React resumes ownership
     eng.current = null
     if (!d) return
     let ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
@@ -372,7 +371,6 @@ export default function CalendarPage() {
     if (eng.current) {
       eng.current.cleanup()
       if (eng.current.raf != null) cancelAnimationFrame(eng.current.raf)
-      eng.current.el.style.left = ''; eng.current.el.style.width = ''
       eng.current = null
     }
     setDrag(null); setFocusId(null)
