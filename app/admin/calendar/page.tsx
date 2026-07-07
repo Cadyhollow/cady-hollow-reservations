@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd } from '@/lib/transactions'
 import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
@@ -60,6 +60,165 @@ function diffDays(a: string, b: string) {
   return Math.round((new Date(b + 'T12:00:00').getTime() - new Date(a + 'T12:00:00').getTime()) / 86400000)
 }
 
+const EMPTY_RES: Reservation[] = []
+const fmtMD = (s: string) => new Date(s + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+// Statuses that may be date-adjusted: confirmed / manual / checked-in. Never pending.
+function draggableStatus(r: Reservation) {
+  return r.checked_in || r.status === 'confirmed' || r.status === 'manual'
+}
+
+type SiteRowProps = {
+  site: Site; typeLabel: string
+  avail: { label: string; open: boolean }
+  resList: Reservation[]
+  dayList: Date[]
+  todayStr: string; startStr: string; endStr: string
+  selectedId: string | null; focusId: string | null
+  rowDrag: any // this row's drag state, or null — the per-frame invalidation key
+  onSelect: (r: Reservation | null) => void
+  onStartDrag: (r: Reservation, side: 'L' | 'R', clientX: number, handleEl: HTMLElement, isTouch: boolean) => void
+  onLongPressStart: (r: Reservation, e: React.TouchEvent) => void
+  onLongPressMove: (e: React.TouchEvent) => void
+  onLongPressCancel: () => void
+}
+
+// Memoized row: during a drag, only the row whose rowDrag changed re-renders —
+// the other ~89 skip entirely (the iPad smoothness lever; also speeds scrolling).
+const SiteRow = memo(function SiteRow({ site, typeLabel, avail, resList, dayList, todayStr, startStr, endStr, selectedId, focusId, rowDrag, onSelect, onStartDrag, onLongPressStart, onLongPressMove, onLongPressCancel }: SiteRowProps) {
+  const bars = resList
+    .filter(r => r.arrival_date <= endStr && r.departure_date > startStr)
+    .map(r => {
+      const startOff = diffDays(startStr, r.arrival_date)
+      const endOff = diffDays(startStr, r.departure_date)
+      const rawLeft = (startOff + 0.5) * DAY_W
+      const rawRight = (endOff + 0.5) * DAY_W
+      const left = Math.max(0, rawLeft)
+      const right = Math.min(DAYS * DAY_W, rawRight)
+      const clippedL = rawLeft < 0
+      const clippedR = rawRight > DAYS * DAY_W
+      const nights = diffDays(r.arrival_date, r.departure_date)
+      const statusKey = r.checked_in ? 'checked_in' : (STATUS_BAR[r.status] ? r.status : 'confirmed')
+      return { r, left, width: right - left, clippedL, clippedR, nights, colors: STATUS_BAR[statusKey] }
+    })
+  return (
+    <div className="flex" style={{ height: ROW_H }}>
+      <div className="sticky left-0 z-10 bg-white border-b border-r border-gray-100 flex flex-col justify-center px-2 shrink-0" style={{ width: LABEL_W }}>
+        <span className="text-xs font-semibold text-gray-800 flex items-center gap-1.5 truncate">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: SITE_TYPE_DOT[site.site_type] || '#d1d5db' }} />
+          {typeLabel} {site.site_number}
+        </span>
+        <span className="text-[10px] font-medium truncate" style={{ color: avail.open ? '#16a34a' : '#9ca3af' }}>
+          {avail.open ? '● open now' : '→ ' + avail.label}
+        </span>
+      </div>
+      <div className="relative border-b border-gray-100" style={{ width: DAYS * DAY_W, height: ROW_H }}>
+        {dayList.map((d, i) => {
+          const ds = ymd(d)
+          const wknd = d.getDay() === 0 || d.getDay() === 6
+          return <div key={i} className="absolute top-0 bottom-0"
+            style={{ left: i * DAY_W, width: DAY_W, borderRight: '1px solid rgba(17,24,39,0.08)', background: ds === todayStr ? 'rgba(46,107,138,0.07)' : wknd ? 'rgba(0,0,0,0.03)' : 'transparent' }} />
+        })}
+        {bars.map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
+          <div key={r.id} className="absolute" style={(() => {
+            const isGhosting = rowDrag && rowDrag.resId === r.id
+            let dLeft = left, dRight = left + Math.max(width, 20)
+            if (isGhosting) {
+              if (rowDrag.active) {
+                const bL = (diffDays(startStr, rowDrag.baseArrival) + 0.5) * DAY_W
+                const bR = (diffDays(startStr, rowDrag.baseDeparture) + 0.5) * DAY_W
+                dLeft = Math.max(0, rowDrag.side === 'L' ? bL + rowDrag.livePx : bL)
+                dRight = Math.min(DAYS * DAY_W, rowDrag.side === 'R' ? bR + rowDrag.livePx : bR)
+              } else {
+                dLeft = Math.max(0, (diffDays(startStr, rowDrag.ghostArrival) + 0.5) * DAY_W)
+                dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, rowDrag.ghostDeparture) + 0.5) * DAY_W)
+              }
+            }
+            return { left: dLeft, width: Math.max(dRight - dLeft, 20),
+            top: focusId === r.id ? -6 : 7,
+            height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
+            zIndex: focusId === r.id ? 30 : undefined,
+            opacity: focusId && focusId !== r.id ? 0.3 : 1,
+            transition: rowDrag && rowDrag.resId === r.id ? 'opacity 150ms' : 'opacity 150ms, top 150ms, height 150ms, left 120ms, width 120ms',
+            WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties })()}>
+            <button
+              onClick={() => { if (!focusId) onSelect(selectedId === r.id ? null : r) }}
+              onTouchStart={(e) => { if (!focusId && draggableStatus(r)) onLongPressStart(r, e) }}
+              onTouchMove={onLongPressMove}
+              onTouchEnd={onLongPressCancel}
+              onTouchCancel={onLongPressCancel}
+              className="w-full h-full flex items-center gap-1 px-2 font-semibold truncate transition-all hover:brightness-110"
+              title={r.guest_name + ' · ' + r.arrival_date + ' → ' + r.departure_date + ' · ' + nights + ' night' + (nights !== 1 ? 's' : '')}
+              style={{
+                fontSize: focusId === r.id ? 14 : 11,
+                background: colors.bg, color: colors.text,
+                WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none',
+                borderRadius: (clippedL ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedL ? '2px' : '8px'),
+                outline: selectedId === r.id && !focusId ? '2px solid #111827' : 'none',
+                outlineOffset: 1,
+                boxShadow: focusId === r.id ? '0 6px 20px rgba(0,0,0,0.35)' : 'none',
+              }}
+            >
+              <span className="truncate">{r.guest_name}</span>
+              {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
+            </button>
+            {rowDrag && rowDrag.resId === r.id && (rowDrag.active || rowDrag.ghostArrival !== rowDrag.origArrival || rowDrag.ghostDeparture !== rowDrag.origDeparture) && ((): React.ReactNode => {
+              const bL = Math.max(0, (diffDays(startStr, rowDrag.baseArrival) + 0.5) * DAY_W)
+              const dLeft = rowDrag.active
+                ? (rowDrag.side === 'L' ? bL + rowDrag.livePx : bL)
+                : Math.max(0, (diffDays(startStr, rowDrag.ghostArrival) + 0.5) * DAY_W)
+              const oEdge = rowDrag.side === 'R'
+                ? Math.min(DAYS * DAY_W, (diffDays(startStr, rowDrag.origDeparture) + 0.5) * DAY_W) - dLeft
+                : Math.max(0, (diffDays(startStr, rowDrag.origArrival) + 0.5) * DAY_W) - dLeft
+              const gNights = diffDays(rowDrag.ghostArrival, rowDrag.ghostDeparture)
+              const dN = gNights - diffDays(rowDrag.origArrival, rowDrag.origDeparture)
+              const label = (dN > 0 ? '+' + dN : String(dN)) + ' night' + (Math.abs(dN) !== 1 ? 's' : '') +
+                (rowDrag.side === 'R' ? ' · thru ' + fmtMD(rowDrag.ghostDeparture) : ' · from ' + fmtMD(rowDrag.ghostArrival))
+              return (
+                <>
+                  <div data-drag-marker className="absolute pointer-events-none" style={{ left: oEdge - 1, top: -4, bottom: -4, width: 0,
+                    borderLeft: '2px dashed rgba(17,24,39,0.5)', zIndex: 32 }} />
+                  <div data-drag-tooltip className="absolute pointer-events-none whitespace-nowrap px-2 py-1 rounded-lg text-xs font-bold"
+                    style={{ left: '50%', transform: 'translateX(-50%)', top: -36,
+                      background: rowDrag.blocked ? '#dc2626' : '#111827', color: '#fff', zIndex: 40,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+                    {rowDrag.blocked ? 'No availability' : (dN === 0 ? 'No change' : label)}
+                  </div>
+                </>
+              )
+            })()}
+            {focusId === r.id && !clippedL && !r.checked_in && (
+              <div key="handle-L" className="absolute flex items-center justify-center"
+                onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); onStartDrag(r, 'L', e.clientX, e.currentTarget as HTMLElement, e.pointerType === 'touch') }}
+                onClick={(e) => e.stopPropagation()}
+                style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
+                </div>
+              </div>
+            )}
+            {focusId === r.id && !clippedR && (
+              <div key="handle-R" className="absolute flex items-center justify-center"
+                onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); onStartDrag(r, 'R', e.clientX, e.currentTarget as HTMLElement, e.pointerType === 'touch') }}
+                onClick={(e) => e.stopPropagation()}
+                style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}, (a, b) =>
+  a.site === b.site && a.typeLabel === b.typeLabel &&
+  a.avail.label === b.avail.label && a.avail.open === b.avail.open &&
+  a.resList === b.resList && a.dayList === b.dayList &&
+  a.todayStr === b.todayStr && a.startStr === b.startStr && a.endStr === b.endStr &&
+  a.selectedId === b.selectedId && a.focusId === b.focusId && a.rowDrag === b.rowDrag
+)
+
 export default function CalendarPage() {
   const [windowStart, setWindowStart] = useState<Date>(() => addDays(new Date(), -3))
   const [reservations, setReservations] = useState<Reservation[]>([])
@@ -109,7 +268,6 @@ export default function CalendarPage() {
     cleanup: () => void
   }>(null)
 
-  const fmtMD = (s: string) => new Date(s + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
   function startDrag(r: Reservation, side: 'L' | 'R', clientX: number, handleEl: HTMLElement, isTouch: boolean) {
     if (r.checked_in && side === 'L') return
@@ -420,127 +578,17 @@ export default function CalendarPage() {
     windowStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
     addDays(windowStart, DAYS - 1).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
-  // Statuses that may be date-adjusted: confirmed / manual / checked-in. Never pending.
-  function draggableStatus(r: Reservation) {
-    return r.checked_in || r.status === 'confirmed' || r.status === 'manual'
-  }
-
-  function SiteRow({ site }: { site: Site }) {
-    const avail = availabilityFor(site.id)
+  const renderRow = (site: Site) => {
+    const resList = resBySite[site.id] || EMPTY_RES
+    const rowDrag = drag && resList.some(x => x.id === drag.resId) ? drag : null
     return (
-      <div className="flex" style={{ height: ROW_H }}>
-        <div className="sticky left-0 z-10 bg-white border-b border-r border-gray-100 flex flex-col justify-center px-2 shrink-0" style={{ width: LABEL_W }}>
-          <span className="text-xs font-semibold text-gray-800 flex items-center gap-1.5 truncate">
-            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: SITE_TYPE_DOT[site.site_type] || '#d1d5db' }} />
-            {siteTypeLabel(site.site_type)} {site.site_number}
-          </span>
-          <span className="text-[10px] font-medium truncate" style={{ color: avail.open ? '#16a34a' : '#9ca3af' }}>
-            {avail.open ? '● open now' : '→ ' + avail.label}
-          </span>
-        </div>
-        <div className="relative border-b border-gray-100" style={{ width: DAYS * DAY_W, height: ROW_H }}>
-          {dayList.map((d, i) => {
-            const ds = ymd(d)
-            const wknd = d.getDay() === 0 || d.getDay() === 6
-            return <div key={i} className="absolute top-0 bottom-0"
-              style={{ left: i * DAY_W, width: DAY_W, borderRight: '1px solid rgba(17,24,39,0.08)', background: ds === todayStr ? 'rgba(46,107,138,0.07)' : wknd ? 'rgba(0,0,0,0.03)' : 'transparent' }} />
-          })}
-          {barsFor(site).map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
-            <div key={r.id} className="absolute" style={(() => {
-              const isGhosting = drag && drag.resId === r.id
-              let dLeft = left, dRight = left + Math.max(width, 20)
-              if (isGhosting) {
-                if (drag.active) {
-                  const bL = (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W
-                  const bR = (diffDays(startStr, drag.baseDeparture) + 0.5) * DAY_W
-                  dLeft = Math.max(0, drag.side === 'L' ? bL + drag.livePx : bL)
-                  dRight = Math.min(DAYS * DAY_W, drag.side === 'R' ? bR + drag.livePx : bR)
-                } else {
-                  dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
-                  dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W)
-                }
-              }
-              return { left: dLeft, width: Math.max(dRight - dLeft, 20),
-              top: focusId === r.id ? -6 : 7,
-              height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
-              zIndex: focusId === r.id ? 30 : undefined,
-              opacity: focusId && focusId !== r.id ? 0.3 : 1,
-              transition: drag && drag.resId === r.id ? 'opacity 150ms' : 'opacity 150ms, top 150ms, height 150ms, left 120ms, width 120ms',
-              WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties })()}>
-              <button
-                onClick={() => { if (!focusId) setSelected(selected?.id === r.id ? null : r) }}
-                onTouchStart={(e) => { if (!focusId && draggableStatus(r)) startLongPress(r, e) }}
-                onTouchMove={moveLongPress}
-                onTouchEnd={cancelLongPress}
-                onTouchCancel={cancelLongPress}
-                className="w-full h-full flex items-center gap-1 px-2 font-semibold truncate transition-all hover:brightness-110"
-                title={r.guest_name + ' · ' + r.arrival_date + ' → ' + r.departure_date + ' · ' + nights + ' night' + (nights !== 1 ? 's' : '')}
-                style={{
-                  fontSize: focusId === r.id ? 14 : 11,
-                  background: colors.bg, color: colors.text,
-                  WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none',
-                  borderRadius: (clippedL ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedL ? '2px' : '8px'),
-                  outline: selected?.id === r.id && !focusId ? '2px solid #111827' : 'none',
-                  outlineOffset: 1,
-                  boxShadow: focusId === r.id ? '0 6px 20px rgba(0,0,0,0.35)' : 'none',
-                }}
-              >
-                <span className="truncate">{r.guest_name}</span>
-                {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
-              </button>
-              {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
-              {drag && drag.resId === r.id && (drag.active || drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && ((): React.ReactNode => {
-                const bL = Math.max(0, (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W)
-                const dLeft = drag.active
-                  ? (drag.side === 'L' ? bL + drag.livePx : bL)
-                  : Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
-                const oEdge = drag.side === 'R'
-                  ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.origDeparture) + 0.5) * DAY_W) - dLeft
-                  : Math.max(0, (diffDays(startStr, drag.origArrival) + 0.5) * DAY_W) - dLeft
-                const gNights = diffDays(drag.ghostArrival, drag.ghostDeparture)
-                const dN = gNights - diffDays(drag.origArrival, drag.origDeparture)
-                const label = (dN > 0 ? '+' + dN : String(dN)) + ' night' + (Math.abs(dN) !== 1 ? 's' : '') +
-                  (drag.side === 'R'
-                    ? ' · thru ' + new Date(drag.ghostDeparture + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                    : ' · from ' + new Date(drag.ghostArrival + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
-                return (
-                  <>
-                    {/* Dashed marker where the ORIGINAL edge was — the solid bar is the live preview */}
-                    <div data-drag-marker className="absolute pointer-events-none" style={{ left: oEdge - 1, top: -4, bottom: -4, width: 0,
-                      borderLeft: '2px dashed rgba(17,24,39,0.5)', zIndex: 32 }} />
-                    <div data-drag-tooltip className="absolute pointer-events-none whitespace-nowrap px-2 py-1 rounded-lg text-xs font-bold"
-                      style={{ left: '50%', transform: 'translateX(-50%)', top: -36,
-                        background: drag.blocked ? '#dc2626' : '#111827', color: '#fff', zIndex: 40,
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
-                      {drag.blocked ? 'No availability' : (dN === 0 ? 'No change' : label)}
-                    </div>
-                  </>
-                )
-              })()}
-              {focusId === r.id && !clippedL && !r.checked_in && (
-                <div key="handle-L" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); startDrag(r, 'L', e.clientX, e.currentTarget as HTMLElement, e.pointerType === 'touch') }}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
-                  </div>
-                </div>
-              )}
-              {focusId === r.id && !clippedR && (
-                <div key="handle-R" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); startDrag(r, 'R', e.clientX, e.currentTarget as HTMLElement, e.pointerType === 'touch') }}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      <SiteRow key={site.id} site={site} typeLabel={siteTypeLabel(site.site_type)}
+        avail={availabilityFor(site.id)} resList={resList} dayList={dayList}
+        todayStr={todayStr} startStr={startStr} endStr={endStr}
+        selectedId={selected?.id || null} focusId={focusId} rowDrag={rowDrag}
+        onSelect={setSelected} onStartDrag={startDrag}
+        onLongPressStart={startLongPress} onLongPressMove={moveLongPress} onLongPressCancel={cancelLongPress}
+      />
     )
   }
 
@@ -621,7 +669,7 @@ export default function CalendarPage() {
             </div>
 
             {/* Active site rows */}
-            {visibleRows.active.map(site => <SiteRow key={site.id} site={site} />)}
+            {visibleRows.active.map(renderRow)}
 
             {/* Divider + available rows */}
             {visibleRows.empty.length > 0 && (
@@ -631,7 +679,7 @@ export default function CalendarPage() {
                     Available this window ({visibleRows.empty.length})
                   </div>
                 </div>
-                {visibleRows.empty.map(site => <SiteRow key={site.id} site={site} />)}
+                {visibleRows.empty.map(renderRow)}
               </>
             )}
 
