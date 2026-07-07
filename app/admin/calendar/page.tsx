@@ -67,6 +67,25 @@ export default function CalendarPage() {
   const [showSeasonal, setShowSeasonal] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Reservation | null>(null)
+  const [focusId, setFocusId] = useState<string | null>(null)
+  // Long-press-to-focus: 600ms hold on a bar, cancelled by >8px movement
+  const longPress = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
+  function startLongPress(r: Reservation, e: React.TouchEvent) {
+    const t = e.touches[0]
+    cancelLongPress()
+    longPress.current = {
+      x: t.clientX, y: t.clientY,
+      timer: setTimeout(() => { setSelected(r); setFocusId(r.id); longPress.current = null }, 600),
+    }
+  }
+  function moveLongPress(e: React.TouchEvent) {
+    if (!longPress.current) return
+    const t = e.touches[0]
+    if (Math.abs(t.clientX - longPress.current.x) > 8 || Math.abs(t.clientY - longPress.current.y) > 8) cancelLongPress()
+  }
+  function cancelLongPress() {
+    if (longPress.current) { clearTimeout(longPress.current.timer); longPress.current = null }
+  }
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'timeline' | 'month'>('timeline')
   const [monthDate, setMonthDate] = useState<Date>(new Date())
@@ -240,6 +259,11 @@ export default function CalendarPage() {
     windowStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
     addDays(windowStart, DAYS - 1).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
+  // Statuses that may be date-adjusted: confirmed / manual / checked-in. Never pending.
+  function draggableStatus(r: Reservation) {
+    return r.checked_in || r.status === 'confirmed' || r.status === 'manual'
+  }
+
   function SiteRow({ site, key: _ }: { site: Site; key?: string }) {
     const avail = availabilityFor(site.id)
     return (
@@ -261,22 +285,46 @@ export default function CalendarPage() {
               style={{ left: i * DAY_W, width: DAY_W, borderRight: '1px solid rgba(17,24,39,0.08)', background: ds === todayStr ? 'rgba(46,107,138,0.07)' : wknd ? 'rgba(0,0,0,0.03)' : 'transparent' }} />
           })}
           {barsFor(site).map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
-            <button
-              key={r.id}
-              onClick={() => setSelected(selected?.id === r.id ? null : r)}
-              className="absolute flex items-center gap-1 px-2 text-[11px] font-semibold truncate transition-all hover:brightness-110"
-              title={r.guest_name + ' · ' + r.arrival_date + ' → ' + r.departure_date + ' · ' + nights + ' night' + (nights !== 1 ? 's' : '')}
-              style={{
-                left, width: Math.max(width, 20), top: 7, height: ROW_H - 14,
-                background: colors.bg, color: colors.text,
-                borderRadius: (clippedL ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedL ? '2px' : '8px'),
-                outline: selected?.id === r.id ? '2px solid #111827' : 'none',
-                outlineOffset: 1,
-              }}
-            >
-              <span className="truncate">{r.guest_name}</span>
-              {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
-            </button>
+            <div key={r.id} className="absolute" style={{ left, width: Math.max(width, 20), top: 7, height: ROW_H - 14,
+              zIndex: focusId === r.id ? 30 : undefined,
+              opacity: focusId && focusId !== r.id ? 0.35 : 1,
+              transition: 'opacity 150ms, transform 150ms',
+              transform: focusId === r.id ? 'scale(1.04)' : 'none' }}>
+              <button
+                onClick={() => { if (!focusId) setSelected(selected?.id === r.id ? null : r) }}
+                onTouchStart={(e) => { if (!focusId && draggableStatus(r)) startLongPress(r, e) }}
+                onTouchMove={moveLongPress}
+                onTouchEnd={cancelLongPress}
+                onTouchCancel={cancelLongPress}
+                className="w-full h-full flex items-center gap-1 px-2 text-[11px] font-semibold truncate transition-all hover:brightness-110"
+                title={r.guest_name + ' · ' + r.arrival_date + ' → ' + r.departure_date + ' · ' + nights + ' night' + (nights !== 1 ? 's' : '')}
+                style={{
+                  background: colors.bg, color: colors.text,
+                  borderRadius: (clippedL ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedR ? '2px' : '8px') + ' ' + (clippedL ? '2px' : '8px'),
+                  outline: selected?.id === r.id && !focusId ? '2px solid #111827' : 'none',
+                  outlineOffset: 1,
+                  boxShadow: focusId === r.id ? '0 6px 20px rgba(0,0,0,0.35)' : 'none',
+                }}
+              >
+                <span className="truncate">{r.guest_name}</span>
+                {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
+              </button>
+              {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
+              {focusId === r.id && !clippedL && (
+                <div className="absolute flex items-center justify-center"
+                  style={{ left: -14, top: -8, width: 28, height: ROW_H - 14 + 16, zIndex: 31,
+                    background: '#111827', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.4)', touchAction: 'none' }}>
+                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>⋮</span>
+                </div>
+              )}
+              {focusId === r.id && !clippedR && (
+                <div className="absolute flex items-center justify-center"
+                  style={{ right: -14, top: -8, width: 28, height: ROW_H - 14 + 16, zIndex: 31,
+                    background: '#111827', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.4)', touchAction: 'none' }}>
+                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>⋮</span>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       </div>
@@ -332,7 +380,8 @@ export default function CalendarPage() {
       <div className="flex gap-6 items-start">
         {/* Grid */}
         {viewMode === 'timeline' && (
-        <div ref={gridRef} onTouchStart={onGridTouchStart} onTouchMove={onGridTouchMove} onTouchEnd={onGridTouchEnd} onTouchCancel={onGridTouchEnd}
+        <div ref={gridRef} onClick={() => { if (focusId) setFocusId(null) }}
+          onTouchStart={onGridTouchStart} onTouchMove={onGridTouchMove} onTouchEnd={onGridTouchEnd} onTouchCancel={onGridTouchEnd}
           className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto" style={{ maxHeight: "calc(100vh - 210px)" }}>
           <div style={{ width: LABEL_W + DAYS * DAY_W, minWidth: LABEL_W + DAYS * DAY_W }}>
             {/* Date header */}
@@ -484,8 +533,17 @@ export default function CalendarPage() {
                   <div className="flex justify-between mt-1"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span></div>
                 </div>
               </div>
+              {viewMode === 'timeline' && draggableStatus(selected) && (
+                <button onClick={() => setFocusId(focusId === selected.id ? null : selected.id)}
+                  className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-semibold border-2 transition-colors"
+                  style={focusId === selected.id
+                    ? { borderColor: '#111827', background: '#111827', color: '#fff' }
+                    : { borderColor: 'var(--accent-color)', color: 'var(--accent-color)', background: '#fff' }}>
+                  {focusId === selected.id ? 'Done adjusting' : 'Adjust dates'}
+                </button>
+              )}
               <a href={'/admin/reservations?id=' + selected.id}
-                className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
+                className="mt-2 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
                 style={{ backgroundColor: 'var(--accent-color)' }}>
                 View Full Reservation
               </a>
