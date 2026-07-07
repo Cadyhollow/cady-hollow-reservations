@@ -195,7 +195,6 @@ export default function CalendarPage() {
       g.el.style.left = (g.grabLeft + livePx) + 'px'
       g.el.style.width = Math.max(g.grabWidth - livePx, 20) + 'px'
     }
-    dbgLog('PM ' + Math.round(livePx))
     const snap = Math.round(livePx / DAY_W)
     const gA = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
     const gD = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
@@ -473,8 +472,7 @@ export default function CalendarPage() {
               // OWNERSHIP HANDOFF: while THIS bar is actively dragging, React emits
               // NO left/width — applyMove's inline writes own the geometry unopposed.
               // endDrag clears the inline styles and React resumes with parked dates.
-              const dragOwns = isGhosting && drag.active
-              return { left: dragOwns ? undefined : dLeft, width: dragOwns ? undefined : Math.max(dRight - dLeft, 20),
+              return { left: dLeft, width: Math.max(dRight - dLeft, 20),
               top: focusId === r.id ? -6 : 7,
               height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
               zIndex: focusId === r.id ? 30 : undefined,
