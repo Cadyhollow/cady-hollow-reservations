@@ -79,6 +79,7 @@ export default function CalendarPage() {
     minArrival: string; maxDeparture: string
     blocked: boolean; startX: number; active: boolean
     livePx: number                               // clamped pixel delta of the moving edge
+    isTouch: boolean                             // touch stream drives; pointer 'up's ignored
   }
   const [pricingData, setPricingData] = useState<{ settings: PricingSettings | null; fees: PricingFee[]; rules: PricingRule[] }>({ settings: null, fees: [], rules: [] })
   const [adjustModal, setAdjustModal] = useState<null | { r: Reservation; ghostArrival: string; ghostDeparture: string }>(null)
@@ -100,7 +101,7 @@ export default function CalendarPage() {
   const dragPointerId = useRef<number | null>(null)
   const rafId = useRef<number | null>(null)
 
-  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
+  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number, isTouch = false) {
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     dbgLog('PD ' + side + ' scrollL=' + Math.round(gridRef.current?.scrollLeft || 0))
@@ -125,7 +126,7 @@ export default function CalendarPage() {
       resId: r.id, side,
       origArrival, origDeparture, baseArrival, baseDeparture,
       ghostArrival: baseArrival, ghostDeparture: baseDeparture,
-      minArrival, maxDeparture, blocked: false, startX: clientX, active: true, livePx: 0,
+      minArrival, maxDeparture, blocked: false, startX: clientX, active: true, livePx: 0, isTouch,
     })
   }
 
@@ -166,6 +167,23 @@ export default function CalendarPage() {
     setDrag({ ...d, livePx, ghostArrival, ghostDeparture, blocked })
   }
 
+  // Touch gestures are driven END-TO-END by native touch events: Chrome-on-iOS
+  // fires phantom pointerups mid-gesture (verified: same pointerId, type=touch,
+  // finger still down), but the parallel TOUCH stream keeps flowing — proven
+  // reliable on this hardware. Touch drags end ONLY on touchend/touchcancel.
+  function attachNativeTouch(el: HTMLElement) {
+    const mv = (e: TouchEvent) => { e.preventDefault(); if (e.touches[0]) queueMove(e.touches[0].clientX) }
+    const end = () => {
+      el.removeEventListener('touchmove', mv)
+      el.removeEventListener('touchend', end)
+      el.removeEventListener('touchcancel', end)
+      endDrag('touchend')
+    }
+    el.addEventListener('touchmove', mv, { passive: false })
+    el.addEventListener('touchend', end)
+    el.addEventListener('touchcancel', end)
+  }
+
   function cancelDragAll() { setDrag(null); setFocusId(null) }
 
   // Safety net: element-level pointerup can occasionally be missed even with
@@ -177,6 +195,7 @@ export default function CalendarPage() {
     if (!drag?.active) return
     const mk = (reason: string) => (e?: Event) => {
       if (!(dragRef.current?.active) || Date.now() - grabTime.current <= 150) return
+      if (dragRef.current?.isTouch && reason !== 'WINBLUR') return // touch stream owns touch drags
       let desc = reason
       if (e && 'pointerId' in e) {
         const pe = e as PointerEvent
@@ -502,11 +521,11 @@ export default function CalendarPage() {
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div key="handle-L" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; beginDrag(r, 'L', e.clientX) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'L', e.clientX, t); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
-                  onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
-                  onPointerCancel={() => endDrag('CANCEL')}
-                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
+                  onPointerUp={(e) => { e.stopPropagation(); if (!dragRef.current?.isTouch) endDrag('up') }}
+                  onPointerCancel={() => { if (!dragRef.current?.isTouch) endDrag('CANCEL') }}
+                  onLostPointerCapture={() => { if (dragRef.current?.active && !dragRef.current?.isTouch) endDrag('LOSTCAP') }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -516,11 +535,11 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div key="handle-R" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; beginDrag(r, 'R', e.clientX) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; const t = e.pointerType === 'touch'; beginDrag(r, 'R', e.clientX, t); if (t) attachNativeTouch(e.currentTarget as HTMLElement) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
-                  onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
-                  onPointerCancel={() => endDrag('CANCEL')}
-                  onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
+                  onPointerUp={(e) => { e.stopPropagation(); if (!dragRef.current?.isTouch) endDrag('up') }}
+                  onPointerCancel={() => { if (!dragRef.current?.isTouch) endDrag('CANCEL') }}
+                  onLostPointerCapture={() => { if (dragRef.current?.active && !dragRef.current?.isTouch) endDrag('LOSTCAP') }}
                   onClick={(e) => e.stopPropagation()}
                   style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
