@@ -460,7 +460,7 @@ export default function CalendarPage() {
                 {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
               </button>
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
-              {drag && drag.resId === r.id && (drag.active || drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
+              {drag && drag.resId === r.id && (drag.active || drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && ((): React.ReactNode => {
                 const bL = Math.max(0, (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W)
                 const dLeft = drag.active
                   ? (drag.side === 'L' ? bL + drag.livePx : bL)
@@ -489,9 +489,9 @@ export default function CalendarPage() {
                 )
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
-                <div className="absolute flex items-center justify-center"
+                <div key="handle-L" className="absolute flex items-center justify-center"
                   onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'L', e.clientX) }}
-                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
+                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
                   onPointerCancel={() => endDrag('CANCEL')}
                   onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
@@ -503,9 +503,9 @@ export default function CalendarPage() {
                 </div>
               )}
               {focusId === r.id && !clippedR && (
-                <div className="absolute flex items-center justify-center"
+                <div key="handle-R" className="absolute flex items-center justify-center"
                   onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'R', e.clientX) }}
-                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); queueMove(e.clientX) } }}
+                  onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
                   onPointerCancel={() => endDrag('CANCEL')}
                   onLostPointerCapture={() => { if (dragRef.current?.active) endDrag('LOSTCAP') }}
