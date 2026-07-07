@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd } from '@/lib/transactions'
+import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
 
 type Reservation = {
   id: string
@@ -68,6 +69,70 @@ export default function CalendarPage() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Reservation | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
+
+  // ── Slice 2: drag-to-adjust engine ──
+  type DragState = {
+    resId: string; side: 'L' | 'R'
+    origArrival: string; origDeparture: string
+    ghostArrival: string; ghostDeparture: string
+    minArrival: string; maxDeparture: string
+    blocked: boolean; startX: number; active: boolean
+  }
+  const [pricingData, setPricingData] = useState<{ settings: PricingSettings | null; fees: PricingFee[]; rules: PricingRule[] }>({ settings: null, fees: [], rules: [] })
+  const [adjustModal, setAdjustModal] = useState<null | { r: Reservation; ghostArrival: string; ghostDeparture: string }>(null)
+  const [adjAdults, setAdjAdults] = useState(2)
+  const [adjChildren, setAdjChildren] = useState(0)
+  const [adjSaving, setAdjSaving] = useState(false)
+  const [adjError, setAdjError] = useState('')
+  const [drag, setDragState] = useState<DragState | null>(null)
+  const dragRef = useRef<DragState | null>(null)
+  function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
+
+  function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
+    if (r.checked_in && side === 'L') return
+    const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
+    let minArrival = fetchLo
+    let maxDeparture = fetchHi
+    for (const s of siblings) {
+      if (s.departure_date <= r.arrival_date && s.departure_date > minArrival) minArrival = s.departure_date
+      if (s.arrival_date >= r.departure_date && s.arrival_date < maxDeparture) maxDeparture = s.arrival_date
+    }
+    setDrag({
+      resId: r.id, side,
+      origArrival: r.arrival_date, origDeparture: r.departure_date,
+      ghostArrival: r.arrival_date, ghostDeparture: r.departure_date,
+      minArrival, maxDeparture, blocked: false, startX: clientX, active: true,
+    })
+  }
+
+  function moveDrag(clientX: number) {
+    const d = dragRef.current
+    if (!d || !d.active) return
+    const dayDelta = Math.round((clientX - d.startX) / DAY_W)
+    let blocked = false
+    if (d.side === 'R') {
+      let target = ymd(addDays(new Date(d.origDeparture + 'T12:00:00'), dayDelta))
+      const minDep = ymd(addDays(new Date(d.ghostArrival + 'T12:00:00'), 1))
+      if (target < minDep) { target = minDep; blocked = true }
+      if (target > d.maxDeparture) { target = d.maxDeparture; blocked = true }
+      setDrag({ ...d, ghostDeparture: target, blocked })
+    } else {
+      let target = ymd(addDays(new Date(d.origArrival + 'T12:00:00'), dayDelta))
+      const maxArr = ymd(addDays(new Date(d.ghostDeparture + 'T12:00:00'), -1))
+      if (target > maxArr) { target = maxArr; blocked = true }
+      if (target < d.minArrival) { target = d.minArrival; blocked = true }
+      setDrag({ ...d, ghostArrival: target, blocked })
+    }
+  }
+
+  function endDrag() {
+    const d = dragRef.current
+    if (!d) return
+    if (d.ghostArrival === d.origArrival && d.ghostDeparture === d.origDeparture) setDrag(null)
+    else setDrag({ ...d, active: false, blocked: false })
+  }
+
+  function cancelDragAll() { setDrag(null); setFocusId(null) }
   // Long-press-to-focus: 600ms hold on a bar, cancelled by >8px movement
   const longPress = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
   function startLongPress(r: Reservation, e: React.TouchEvent) {
@@ -101,6 +166,7 @@ export default function CalendarPage() {
     axisLock.current = null
   }
   function onGridTouchMove(e: React.TouchEvent) {
+    if (dragRef.current?.active) return
     const el = gridRef.current
     if (!el || !touchStart.current) return
     if (!axisLock.current) {
@@ -144,6 +210,13 @@ export default function CalendarPage() {
       supabase.from('sites').select('*'),
       supabase.from('guests').select('site_number').eq('is_seasonal', true),
     ])
+    // Pricing inputs for the adjust-dates modal (tiny tables; fetched once per load)
+    const [{ data: pSettings }, { data: pFees }, { data: pRules }] = await Promise.all([
+      supabase.from('settings').select('*').limit(1).single(),
+      supabase.from('fees').select('*'),
+      supabase.from('pricing_rules').select('*'),
+    ])
+    setPricingData({ settings: pSettings as any, fees: (pFees as any) || [], rules: (pRules as any) || [] })
 
     // Fold in folio payments so the detail panel "Paid" is complete (display-only).
     const resList = resData || []
@@ -264,7 +337,7 @@ export default function CalendarPage() {
     return r.checked_in || r.status === 'confirmed' || r.status === 'manual'
   }
 
-  function SiteRow({ site, key: _ }: { site: Site; key?: string }) {
+  function SiteRow({ site }: { site: Site }) {
     const avail = availabilityFor(site.id)
     return (
       <div className="flex" style={{ height: ROW_H }}>
@@ -285,13 +358,17 @@ export default function CalendarPage() {
               style={{ left: i * DAY_W, width: DAY_W, borderRight: '1px solid rgba(17,24,39,0.08)', background: ds === todayStr ? 'rgba(46,107,138,0.07)' : wknd ? 'rgba(0,0,0,0.03)' : 'transparent' }} />
           })}
           {barsFor(site).map(({ r, left, width, clippedL, clippedR, nights, colors }) => (
-            <div key={r.id} className="absolute" style={{ left, width: Math.max(width, 20),
+            <div key={r.id} className="absolute" style={(() => {
+              const isGhosting = drag && drag.resId === r.id
+              const dLeft = isGhosting ? Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W) : left
+              const dRight = isGhosting ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W) : left + Math.max(width, 20)
+              return { left: dLeft, width: Math.max(dRight - dLeft, 20),
               top: focusId === r.id ? -6 : 7,
               height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
               zIndex: focusId === r.id ? 30 : undefined,
               opacity: focusId && focusId !== r.id ? 0.3 : 1,
-              transition: 'opacity 150ms, top 150ms, height 150ms',
-              WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties}>
+              transition: drag && drag.resId === r.id ? 'opacity 150ms' : 'opacity 150ms, top 150ms, height 150ms, left 120ms, width 120ms',
+              WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties })()}>
               <button
                 onClick={() => { if (!focusId) setSelected(selected?.id === r.id ? null : r) }}
                 onTouchStart={(e) => { if (!focusId && draggableStatus(r)) startLongPress(r, e) }}
@@ -314,8 +391,40 @@ export default function CalendarPage() {
                 {width > 120 && <span className="opacity-75 shrink-0">· {nights}n</span>}
               </button>
               {/* Fat grab handles — inert in Slice 1, drag logic arrives in Slice 2 */}
-              {focusId === r.id && !clippedL && (
+              {drag && drag.resId === r.id && (drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
+                const dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
+                const oEdge = drag.side === 'R'
+                  ? Math.min(DAYS * DAY_W, (diffDays(startStr, drag.origDeparture) + 0.5) * DAY_W) - dLeft
+                  : Math.max(0, (diffDays(startStr, drag.origArrival) + 0.5) * DAY_W) - dLeft
+                const gNights = diffDays(drag.ghostArrival, drag.ghostDeparture)
+                const dN = gNights - diffDays(drag.origArrival, drag.origDeparture)
+                const label = (dN > 0 ? '+' + dN : String(dN)) + ' night' + (Math.abs(dN) !== 1 ? 's' : '') +
+                  (drag.side === 'R'
+                    ? ' · thru ' + new Date(drag.ghostDeparture + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    : ' · from ' + new Date(drag.ghostArrival + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
+                return (
+                  <>
+                    {/* Dashed marker where the ORIGINAL edge was — the solid bar is the live preview */}
+                    <div className="absolute pointer-events-none" style={{ left: oEdge - 1, top: -4, bottom: -4, width: 0,
+                      borderLeft: '2px dashed rgba(17,24,39,0.5)', zIndex: 32 }} />
+                    <div className="absolute pointer-events-none whitespace-nowrap px-2 py-1 rounded-lg text-xs font-bold"
+                      style={{ left: '50%', transform: 'translateX(-50%)', top: -36,
+                        background: drag.blocked ? '#dc2626' : '#111827', color: '#fff', zIndex: 40,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+                      {drag.blocked ? 'No availability' : (dN === 0 ? 'No change' : label)}
+                    </div>
+                  </>
+                )
+              })()}
+              {focusId === r.id && !clippedL && !r.checked_in && (
                 <div className="absolute flex items-center justify-center"
+                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'L', e.touches[0].clientX) }}
+                  onTouchMove={(e) => { e.stopPropagation(); moveDrag(e.touches[0].clientX) }}
+                  onTouchEnd={(e) => { e.stopPropagation(); endDrag() }}
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'L', e.clientX)
+                    const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
+                    const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+                    window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
                   style={{ left: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
@@ -324,6 +433,13 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
+                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'R', e.touches[0].clientX) }}
+                  onTouchMove={(e) => { e.stopPropagation(); moveDrag(e.touches[0].clientX) }}
+                  onTouchEnd={(e) => { e.stopPropagation(); endDrag() }}
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'R', e.clientX)
+                    const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
+                    const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+                    window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up) }}
                   style={{ right: -18, top: 0, bottom: 0, width: 36, zIndex: 31, touchAction: 'none', cursor: 'ew-resize' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }} />)}
@@ -386,7 +502,7 @@ export default function CalendarPage() {
       <div className="flex gap-6 items-start">
         {/* Grid */}
         {viewMode === 'timeline' && (
-        <div ref={gridRef} onClick={() => { if (focusId) setFocusId(null) }}
+        <div ref={gridRef} onClick={() => { if (focusId) cancelDragAll() }}
           onTouchStart={onGridTouchStart} onTouchMove={onGridTouchMove} onTouchEnd={onGridTouchEnd} onTouchCancel={onGridTouchEnd}
           className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto" style={{ maxHeight: "calc(100vh - 210px)" }}>
           <div style={{ width: LABEL_W + DAYS * DAY_W, minWidth: LABEL_W + DAYS * DAY_W }}>
@@ -557,6 +673,126 @@ export default function CalendarPage() {
           </div>
         )}
       </div>
+
+      {/* ── Parked-drag action bar: always visible, can't hide behind panels ── */}
+      {drag && !drag.active && !adjustModal && (drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
+        const r = reservations.find(x => x.id === drag.resId)
+        if (!r) return null
+        const dN = diffDays(drag.ghostArrival, drag.ghostDeparture) - diffDays(drag.origArrival, drag.origDeparture)
+        return (
+          <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center pb-4 px-4 pointer-events-none">
+            <div className="pointer-events-auto flex items-center gap-3 bg-white rounded-2xl shadow-2xl border border-gray-200 px-5 py-3">
+              <div className="text-sm">
+                <span className="font-bold text-gray-900">{r.guest_name}</span>
+                <span className="text-gray-500 ml-2">{dN > 0 ? '+' + dN : dN} night{Math.abs(dN) !== 1 ? 's' : ''} · {new Date(drag.ghostArrival + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} → {new Date(drag.ghostDeparture + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+              </div>
+              <button onClick={() => setDrag(null)}
+                className="px-4 py-2 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={() => { setAdjAdults(r.num_adults); setAdjChildren(r.num_children); setAdjError(''); setAdjustModal({ r, ghostArrival: drag.ghostArrival, ghostDeparture: drag.ghostDeparture }) }}
+                className="px-5 py-2 rounded-xl text-sm font-bold text-white" style={{ background: '#16a34a' }}>Continue →</button>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Confirmation modal: real pricing, editable party size, nothing mutates until Confirm ── */}
+      {adjustModal && pricingData.settings && (() => {
+        const { r, ghostArrival, ghostDeparture } = adjustModal
+        const site = sites.find(s => s.id === r.site_id)
+        const pSite: PricingSite | null = site ? { id: site.id, site_type: site.site_type, base_rate: (site as any).base_rate ?? 0 } : null
+        const base = { site: pSite, num_adults: adjAdults, num_children: adjChildren,
+          settings: pricingData.settings, fees: pricingData.fees, pricingRules: pricingData.rules }
+        const orig = computePricing({ ...base, arrival_date: r.arrival_date, departure_date: r.departure_date })
+        const next = computePricing({ ...base, arrival_date: ghostArrival, departure_date: ghostDeparture })
+        const delta = next.cashTotal - orig.cashTotal
+        const dN = next.nights - orig.nights
+        const newTotal = (r.total_price || 0) + delta
+        const paid = r.total_paid ?? r.amount_paid ?? 0
+        const newBalance = newTotal - paid
+        async function confirmAdjust() {
+          setAdjSaving(true); setAdjError('')
+          // Last-second conflict re-check against the live database
+          const { data: clash } = await supabase.from('reservations').select('id')
+            .eq('site_id', r.site_id).neq('id', r.id).neq('status', 'cancelled')
+            .lt('arrival_date', ghostDeparture).gt('departure_date', ghostArrival)
+          if (clash && clash.length > 0) { setAdjError('Another reservation now overlaps these dates. Please re-check the calendar.'); setAdjSaving(false); return }
+          const { error } = await supabase.from('reservations')
+            .update({ arrival_date: ghostArrival, departure_date: ghostDeparture, total_price: newTotal })
+            .eq('id', r.id)
+          if (error) { setAdjError(error.message); setAdjSaving(false); return }
+          setAdjSaving(false); setAdjustModal(null); setDrag(null); setFocusId(null); setSelected(null)
+          fetchData()
+        }
+        const Stepper = ({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) => (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">{label}</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => onChange(Math.max(label === 'Adults' ? 1 : 0, value - 1))} className="w-8 h-8 rounded-lg border border-gray-200 text-gray-600 font-bold hover:bg-gray-50">−</button>
+              <span className="w-6 text-center text-sm font-bold text-gray-900">{value}</span>
+              <button onClick={() => onChange(value + 1)} className="w-8 h-8 rounded-lg border border-gray-200 text-gray-600 font-bold hover:bg-gray-50">+</button>
+            </div>
+          </div>
+        )
+        return (
+          <>
+            <div className="fixed inset-0 bg-black/50 z-50" onClick={() => !adjSaving && setAdjustModal(null)} />
+            <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[420px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900">{dN > 0 ? 'Extend stay' : 'Adjust dates'}</h3>
+                <p className="text-sm text-gray-500 mt-0.5">{r.guest_name} · Site {r.sites?.site_number}</p>
+              </div>
+              <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="text-gray-500">
+                    <div className="line-through">{r.arrival_date} → {r.departure_date}</div>
+                    <div className="font-semibold text-gray-900">{ghostArrival} → {ghostDeparture}</div>
+                  </div>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: '#f0fdf4', color: '#166534' }}>
+                    {dN > 0 ? '+' + dN : dN} night{Math.abs(dN) !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="space-y-2 border-t border-gray-100 pt-3">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Party for added nights</p>
+                  <Stepper label="Adults" value={adjAdults} onChange={setAdjAdults} />
+                  <Stepper label="Children" value={adjChildren} onChange={setAdjChildren} />
+                </div>
+                <div className="border-t border-gray-100 pt-3 space-y-1.5">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Price change</p>
+                  {next.lines.map((ln, i) => {
+                    const oLn = orig.lines.find(o => o.label.replace(/^\d+ nights? × /, '') === ln.label.replace(/^\d+ nights? × /, ''))
+                    const diff = ln.amount - (oLn?.amount || 0)
+                    if (diff === 0) return null
+                    return (
+                      <div key={i} className="flex justify-between text-sm">
+                        <span className="text-gray-600">{ln.label}</span>
+                        <span className="font-medium text-gray-900">{diff > 0 ? '+' : '−'}${(Math.abs(diff) / 100).toFixed(2)}</span>
+                      </div>
+                    )
+                  })}
+                  <div className="flex justify-between text-sm font-bold border-t border-gray-100 pt-2">
+                    <span className="text-gray-900">Added charges</span>
+                    <span style={{ color: delta >= 0 ? '#166534' : '#dc2626' }}>{delta >= 0 ? '+' : '−'}${(Math.abs(delta) / 100).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-500">New reservation total</span><span className="font-semibold text-gray-900">${(newTotal / 100).toFixed(2)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-500">Paid so far</span><span className="font-medium text-gray-700">${(paid / 100).toFixed(2)}</span></div>
+                  <div className="flex justify-between text-sm font-bold"><span className="text-gray-900">Balance due</span>
+                    <span style={{ color: newBalance > 0 ? '#d97706' : '#16a34a' }}>${(Math.max(newBalance, 0) / 100).toFixed(2)}</span></div>
+                </div>
+                {adjError && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{adjError}</div>}
+                <p className="text-xs text-gray-400">Balance can be collected on the guest's folio by cash, card, or any payment method.</p>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+                <button onClick={() => setAdjustModal(null)} disabled={adjSaving}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Go back</button>
+                <button onClick={confirmAdjust} disabled={adjSaving}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#16a34a' }}>
+                  {adjSaving ? 'Saving…' : 'Confirm change'}
+                </button>
+              </div>
+            </div>
+          </>
+        )
+      })()}
 
       {loading && (
         <div className="fixed inset-0 bg-white bg-opacity-60 flex items-center justify-center">
