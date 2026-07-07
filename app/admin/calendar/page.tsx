@@ -174,14 +174,15 @@ export default function CalendarPage() {
   // chasing the cursor in a feedback loop.
   useEffect(() => {
     if (!drag?.active) return
-    const up = () => { if (dragRef.current?.active && Date.now() - grabTime.current > 150) endDrag('WINDOW') }
-    window.addEventListener('pointerup', up)
-    window.addEventListener('pointercancel', up)
-    window.addEventListener('blur', up)
+    const mk = (reason: string) => () => { if (dragRef.current?.active && Date.now() - grabTime.current > 150) endDrag(reason) }
+    const wu = mk('WINUP'); const wc = mk('WINCANCEL'); const wb = mk('WINBLUR')
+    window.addEventListener('pointerup', wu)
+    window.addEventListener('pointercancel', wc)
+    window.addEventListener('blur', wb)
     return () => {
-      window.removeEventListener('pointerup', up)
-      window.removeEventListener('pointercancel', up)
-      window.removeEventListener('blur', up)
+      window.removeEventListener('pointerup', wu)
+      window.removeEventListener('pointercancel', wc)
+      window.removeEventListener('blur', wb)
     }
   }, [drag?.active])
 
@@ -573,7 +574,8 @@ export default function CalendarPage() {
         {viewMode === 'timeline' && (
         <div ref={gridRef} onClick={() => { if (focusId) cancelDragAll() }}
           onTouchStart={onGridTouchStart} onTouchMove={onGridTouchMove} onTouchEnd={onGridTouchEnd} onTouchCancel={onGridTouchEnd}
-          className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto" style={{ maxHeight: "calc(100vh - 210px)" }}>
+          className="flex-1 min-w-0 bg-white rounded-xl border border-gray-100 overflow-auto"
+          style={{ maxHeight: "calc(100vh - 210px)", touchAction: focusId ? 'none' : 'auto' }}>
           <div style={{ width: LABEL_W + DAYS * DAY_W, minWidth: LABEL_W + DAYS * DAY_W }}>
             {/* Date header */}
             <div className="flex sticky top-0 z-20 bg-white border-b border-gray-200">
