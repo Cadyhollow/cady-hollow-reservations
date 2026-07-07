@@ -132,6 +132,12 @@ export default function CalendarPage() {
     })
     dragElem.current = handleEl ? (handleEl.parentElement as HTMLElement) : null
     liveRef.current = { px: 0, ghostArrival: baseArrival, ghostDeparture: baseDeparture, blocked: false }
+    if (dragElem.current) {
+      const sL = Math.max(0, (diffDays(startStr, baseArrival) + 0.5) * DAY_W)
+      const sR = Math.min(DAYS * DAY_W, (diffDays(startStr, baseDeparture) + 0.5) * DAY_W)
+      dragElem.current.style.left = sL + 'px'
+      dragElem.current.style.width = Math.max(sR - sL, 20) + 'px'
+    }
   }
 
   function queueMove(clientX: number) {
@@ -167,6 +173,7 @@ export default function CalendarPage() {
     const ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
     const ghostDeparture = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
     liveRef.current = { px: livePx, ghostArrival, ghostDeparture, blocked }
+    dbgLog('PM ' + Math.round(livePx))
     // ZERO re-renders mid-drag: direct style writes on the wrapper React last
     // rendered (no setState = nothing to fight). One state commit on release.
     const newLeft = d.side === 'L' ? bL + livePx : bL
@@ -488,13 +495,15 @@ export default function CalendarPage() {
             <div key={r.id} className="absolute" style={(() => {
               const isGhosting = drag && drag.resId === r.id
               let dLeft = left, dRight = left + Math.max(width, 20)
-              if (isGhosting) {
-                const bL = Math.max(0, (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W)
-                const bR = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.baseDeparture) + 0.5) * DAY_W)
-                if (drag.active) { dLeft = drag.side === 'L' ? bL + drag.livePx : bL; dRight = drag.side === 'R' ? bR + drag.livePx : bR }
-                else { dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W); dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W) }
+              if (isGhosting && !drag.active) {
+                dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
+                dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W)
               }
-              return { left: dLeft, width: Math.max(dRight - dLeft, 20),
+              // OWNERSHIP HANDOFF: while THIS bar is actively dragging, React emits
+              // NO left/width — applyMove's inline writes own the geometry unopposed.
+              // endDrag clears the inline styles and React resumes with parked dates.
+              const dragOwns = isGhosting && drag.active
+              return { left: dragOwns ? undefined : dLeft, width: dragOwns ? undefined : Math.max(dRight - dLeft, 20),
               top: focusId === r.id ? -6 : 7,
               height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
               zIndex: focusId === r.id ? 30 : undefined,
