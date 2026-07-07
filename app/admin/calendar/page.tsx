@@ -90,6 +90,7 @@ export default function CalendarPage() {
 
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
     if (r.checked_in && side === 'L') return
+    touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
     let minArrival = fetchLo
     let maxDeparture = fetchHi
@@ -133,6 +134,23 @@ export default function CalendarPage() {
   }
 
   function cancelDragAll() { setDrag(null); setFocusId(null) }
+
+  // iOS Safari: React's synthetic touch handlers can't reliably beat native scroll.
+  // While a drag is active, attach NATIVE non-passive listeners that preventDefault,
+  // so the gesture belongs to the drag — not the scroller.
+  useEffect(() => {
+    if (!drag?.active) return
+    const mv = (e: TouchEvent) => { e.preventDefault(); moveDrag(e.touches[0].clientX) }
+    const end = () => endDrag()
+    document.addEventListener('touchmove', mv, { passive: false })
+    document.addEventListener('touchend', end)
+    document.addEventListener('touchcancel', end)
+    return () => {
+      document.removeEventListener('touchmove', mv)
+      document.removeEventListener('touchend', end)
+      document.removeEventListener('touchcancel', end)
+    }
+  }, [drag?.active])
   // Long-press-to-focus: 600ms hold on a bar, cancelled by >8px movement
   const longPress = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
   function startLongPress(r: Reservation, e: React.TouchEvent) {
@@ -419,8 +437,6 @@ export default function CalendarPage() {
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div className="absolute flex items-center justify-center"
                   onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'L', e.touches[0].clientX) }}
-                  onTouchMove={(e) => { e.stopPropagation(); moveDrag(e.touches[0].clientX) }}
-                  onTouchEnd={(e) => { e.stopPropagation(); endDrag() }}
                   onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'L', e.clientX)
                     const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
                     const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
@@ -434,8 +450,6 @@ export default function CalendarPage() {
               {focusId === r.id && !clippedR && (
                 <div className="absolute flex items-center justify-center"
                   onTouchStart={(e) => { e.stopPropagation(); beginDrag(r, 'R', e.touches[0].clientX) }}
-                  onTouchMove={(e) => { e.stopPropagation(); moveDrag(e.touches[0].clientX) }}
-                  onTouchEnd={(e) => { e.stopPropagation(); endDrag() }}
                   onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); beginDrag(r, 'R', e.clientX)
                     const mv = (ev: MouseEvent) => moveDrag(ev.clientX)
                     const up = () => { endDrag(); window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
