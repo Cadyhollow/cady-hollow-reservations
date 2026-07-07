@@ -84,12 +84,15 @@ export default function CalendarPage() {
   const [adjChildren, setAdjChildren] = useState(0)
   const [adjSaving, setAdjSaving] = useState(false)
   const [adjError, setAdjError] = useState('')
+  const [dbg, setDbg] = useState<string[]>([])
+  const dbgLog = (m: string) => setDbg(prev => [...prev.slice(-5), m])
   const [drag, setDragState] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
 
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
-    if (r.checked_in && side === 'L') return
+    dbgLog('beginDrag ' + side + ' @' + Math.round(clientX))
+    if (r.checked_in && side === 'L') { dbgLog('rejected: checked-in L'); return }
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     const siblings = (resBySite[r.site_id] || []).filter(x => x.id !== r.id)
     let minArrival = fetchLo
@@ -108,7 +111,8 @@ export default function CalendarPage() {
 
   function moveDrag(clientX: number) {
     const d = dragRef.current
-    if (!d || !d.active) return
+    if (!d || !d.active) { dbgLog('move ignored: ' + (d ? 'inactive' : 'no drag')); return }
+    dbgLog('move @' + Math.round(clientX) + ' Δ' + Math.round((clientX - d.startX)))
     const dayDelta = Math.round((clientX - d.startX) / DAY_W)
     let blocked = false
     if (d.side === 'R') {
@@ -141,6 +145,7 @@ export default function CalendarPage() {
   useEffect(() => {
     if (!drag?.active) return
     const mv = (e: TouchEvent) => { e.preventDefault(); moveDrag(e.touches[0].clientX) }
+    dbgLog('native listeners ATTACHED')
     const end = () => endDrag()
     document.addEventListener('touchmove', mv, { passive: false })
     document.addEventListener('touchend', end)
@@ -808,6 +813,11 @@ export default function CalendarPage() {
         )
       })()}
 
+      {dbg.length > 0 && (
+        <div className="fixed top-2 left-2 z-[100] bg-black/80 text-green-400 text-[10px] font-mono rounded-lg px-2 py-1 pointer-events-none">
+          {dbg.map((m, i) => <div key={i}>{m}</div>)}
+        </div>
+      )}
       {loading && (
         <div className="fixed inset-0 bg-white bg-opacity-60 flex items-center justify-center">
           <p className="text-gray-500 text-sm">Loading reservations…</p>
