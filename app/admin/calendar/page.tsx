@@ -97,6 +97,7 @@ export default function CalendarPage() {
   // scroll). React owns ALL rendering; moves update state once per animation frame. ──
   const pendingX = useRef<number | null>(null)
   const grabTime = useRef(0)
+  const dragPointerId = useRef<number | null>(null)
   const rafId = useRef<number | null>(null)
 
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
@@ -174,7 +175,18 @@ export default function CalendarPage() {
   // chasing the cursor in a feedback loop.
   useEffect(() => {
     if (!drag?.active) return
-    const mk = (reason: string) => () => { if (dragRef.current?.active && Date.now() - grabTime.current > 150) endDrag(reason) }
+    const mk = (reason: string) => (e?: Event) => {
+      if (!(dragRef.current?.active) || Date.now() - grabTime.current <= 150) return
+      let desc = reason
+      if (e && 'pointerId' in e) {
+        const pe = e as PointerEvent
+        const tgt = (pe.target as HTMLElement)
+        desc = reason + ' id=' + pe.pointerId + (pe.pointerId === dragPointerId.current ? '(SAME)' : '(OTHER!)')
+          + ' type=' + pe.pointerType + ' prim=' + pe.isPrimary
+          + ' tgt=' + (tgt?.tagName || '?') + (tgt?.dataset?.dragTooltip !== undefined ? '.tooltip' : '')
+      }
+      endDrag(desc)
+    }
     const wu = mk('WINUP'); const wc = mk('WINCANCEL'); const wb = mk('WINBLUR')
     window.addEventListener('pointerup', wu)
     window.addEventListener('pointercancel', wc)
@@ -490,7 +502,7 @@ export default function CalendarPage() {
               })()}
               {focusId === r.id && !clippedL && !r.checked_in && (
                 <div key="handle-L" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'L', e.clientX) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; beginDrag(r, 'L', e.clientX) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
                   onPointerCancel={() => endDrag('CANCEL')}
@@ -504,7 +516,7 @@ export default function CalendarPage() {
               )}
               {focusId === r.id && !clippedR && (
                 <div key="handle-R" className="absolute flex items-center justify-center"
-                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); beginDrag(r, 'R', e.clientX) }}
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); dragPointerId.current = e.pointerId; beginDrag(r, 'R', e.clientX) }}
                   onPointerMove={(e) => { if (dragRef.current?.active) { e.stopPropagation(); const el = e.currentTarget as HTMLElement; if (!el.hasPointerCapture(e.pointerId)) { try { el.setPointerCapture(e.pointerId) } catch {} } queueMove(e.clientX) } }}
                   onPointerUp={(e) => { e.stopPropagation(); endDrag('up') }}
                   onPointerCancel={() => endDrag('CANCEL')}
