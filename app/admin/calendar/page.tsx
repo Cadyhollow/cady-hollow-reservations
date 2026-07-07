@@ -96,12 +96,14 @@ export default function CalendarPage() {
   // handle, mouse and touch unified; touch-action:none on the handle stops iOS
   // scroll). React owns ALL rendering; moves update state once per animation frame. ──
   const pendingX = useRef<number | null>(null)
+  const grabTime = useRef(0)
   const rafId = useRef<number | null>(null)
 
   function beginDrag(r: Reservation, side: 'L' | 'R', clientX: number) {
     if (r.checked_in && side === 'L') return
     touchStart.current = null // disarm the grid axis-locker — this gesture is ours
     dbgLog('PD ' + side + ' scrollL=' + Math.round(gridRef.current?.scrollLeft || 0))
+    grabTime.current = Date.now()
     const prev = dragRef.current
     // Re-grabbing a parked adjustment continues from its ghost dates, not the originals
     const regrab = prev && !prev.active && prev.resId === r.id
@@ -172,7 +174,7 @@ export default function CalendarPage() {
   // chasing the cursor in a feedback loop.
   useEffect(() => {
     if (!drag?.active) return
-    const up = () => { if (dragRef.current?.active) endDrag('WINDOW') }
+    const up = () => { if (dragRef.current?.active && Date.now() - grabTime.current > 150) endDrag('WINDOW') }
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
     window.addEventListener('blur', up)
