@@ -139,11 +139,9 @@ export default function CalendarPage() {
     const minPx = side === 'R' ? (1 - nights) * DAY_W : diffDays(baseArrival, minArrival) * DAY_W
     const maxPx = side === 'R' ? diffDays(baseDeparture, maxDeparture) * DAY_W : (nights - 1) * DAY_W
 
-    // Geometry handoff — seed inline styles from the element's ACTUAL position
+    // React owns ALL geometry; we only record where the bar sits for reference
     const grabLeft = el.offsetLeft
     const grabWidth = el.offsetWidth
-    el.style.left = grabLeft + 'px'
-    el.style.width = grabWidth + 'px'
     const origOffL = diffDays(baseArrival, origArrival) * DAY_W
     const origOffR = grabWidth + diffDays(baseDeparture, origDeparture) * DAY_W
 
@@ -189,25 +187,11 @@ export default function CalendarPage() {
     if (livePx < g.minPx) { livePx = g.minPx; blocked = true }
     if (livePx > g.maxPx) { livePx = g.maxPx; blocked = true }
     g.livePx = livePx
-    if (d.side === 'R') {
-      g.el.style.width = Math.max(g.grabWidth + livePx, 20) + 'px'
-    } else {
-      g.el.style.left = (g.grabLeft + livePx) + 'px'
-      g.el.style.width = Math.max(g.grabWidth - livePx, 20) + 'px'
-    }
     const snap = Math.round(livePx / DAY_W)
-    const gA = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
-    const gD = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
-    const dN = diffDays(gA, gD) - diffDays(d.origArrival, d.origDeparture)
-    const tip = g.el.querySelector('[data-drag-tooltip]') as HTMLElement | null
-    if (tip) {
-      tip.textContent = blocked ? 'No availability' : dN === 0 ? 'No change'
-        : (dN > 0 ? '+' + dN : String(dN)) + ' night' + (Math.abs(dN) !== 1 ? 's' : '') +
-          (d.side === 'R' ? ' · thru ' + fmtMD(gD) : ' · from ' + fmtMD(gA))
-      tip.style.background = blocked ? '#dc2626' : '#111827'
-    }
-    const mk = g.el.querySelector('[data-drag-marker]') as HTMLElement | null
-    if (mk) mk.style.left = ((d.side === 'L' ? g.origOffL - livePx : g.origOffR) - 1) + 'px'
+    const ghostArrival = d.side === 'L' ? ymd(addDays(new Date(d.baseArrival + 'T12:00:00'), snap)) : d.baseArrival
+    const ghostDeparture = d.side === 'R' ? ymd(addDays(new Date(d.baseDeparture + 'T12:00:00'), snap)) : d.baseDeparture
+    // One state update per animation frame — React renders bar, tooltip, marker.
+    setDrag({ ...d, livePx, ghostArrival, ghostDeparture, blocked })
   }
 
   function finishDrag(reason: string) {
@@ -465,13 +449,17 @@ export default function CalendarPage() {
             <div key={r.id} className="absolute" style={(() => {
               const isGhosting = drag && drag.resId === r.id
               let dLeft = left, dRight = left + Math.max(width, 20)
-              if (isGhosting && !drag.active) {
-                dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
-                dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W)
+              if (isGhosting) {
+                if (drag.active) {
+                  const bL = (diffDays(startStr, drag.baseArrival) + 0.5) * DAY_W
+                  const bR = (diffDays(startStr, drag.baseDeparture) + 0.5) * DAY_W
+                  dLeft = Math.max(0, drag.side === 'L' ? bL + drag.livePx : bL)
+                  dRight = Math.min(DAYS * DAY_W, drag.side === 'R' ? bR + drag.livePx : bR)
+                } else {
+                  dLeft = Math.max(0, (diffDays(startStr, drag.ghostArrival) + 0.5) * DAY_W)
+                  dRight = Math.min(DAYS * DAY_W, (diffDays(startStr, drag.ghostDeparture) + 0.5) * DAY_W)
+                }
               }
-              // OWNERSHIP HANDOFF: while THIS bar is actively dragging, React emits
-              // NO left/width — applyMove's inline writes own the geometry unopposed.
-              // endDrag clears the inline styles and React resumes with parked dates.
               return { left: dLeft, width: Math.max(dRight - dLeft, 20),
               top: focusId === r.id ? -6 : 7,
               height: focusId === r.id ? ROW_H + 12 : ROW_H - 14,
