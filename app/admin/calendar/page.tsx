@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { ymd } from '@/lib/transactions'
+import { ymd, allPaymentMethods } from '@/lib/transactions'
 import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
 
 type Reservation = {
@@ -247,6 +247,20 @@ export default function CalendarPage() {
   const [adjChildren, setAdjChildren] = useState(0)
   const [adjSaving, setAdjSaving] = useState(false)
   const [adjError, setAdjError] = useState('')
+  // ── Adjust-dates step machine + Collect-payment step (reuses the guest folio's
+  //    payment pattern: dynamic methods, card surcharge, folio_payments insert). ──
+  const [adjStep, setAdjStep] = useState<'review' | 'choice' | 'payment'>('review')
+  const [adjFolioId, setAdjFolioId] = useState<string | null>(null)
+  const [payMethod, setPayMethod] = useState('cash')
+  const [payAmount, setPayAmount] = useState('')      // dollars string, editable
+  const [cashTendered, setCashTendered] = useState('')
+  const [waiveFee, setWaiveFee] = useState(false)
+  const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  const [terminalStatus, setTerminalStatus] = useState<'idle' | 'waiting' | 'error'>('idle')
+  const [payNote, setPayNote] = useState('')
+  const [paySaving, setPaySaving] = useState(false)
+  const [payError, setPayError] = useState('')        // small inline validation
+  const [payFailed, setPayFailed] = useState('')      // prominent "dates saved, money NOT collected" banner
   const [drag, setDragState] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   function setDrag(d: DragState | null) { dragRef.current = d; setDragState(d) }
@@ -866,14 +880,19 @@ export default function CalendarPage() {
               </div>
               <button onClick={() => setDrag(null)}
                 className="px-4 py-2 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={() => { setAdjAdults(r.num_adults); setAdjChildren(r.num_children); setAdjError(''); setAdjustModal({ r, ghostArrival: drag.ghostArrival, ghostDeparture: drag.ghostDeparture }) }}
+              <button onClick={() => { setAdjAdults(r.num_adults); setAdjChildren(r.num_children); setAdjError('')
+                  setAdjStep('review'); setAdjFolioId(null); setPayMethod('cash'); setPayAmount(''); setCashTendered('')
+                  setWaiveFee(false); setCardEntryMode('terminal'); setTerminalStatus('idle'); setPayNote(''); setPayError(''); setPayFailed('')
+                  setAdjustModal({ r, ghostArrival: drag.ghostArrival, ghostDeparture: drag.ghostDeparture }) }}
                 className="px-5 py-2 rounded-xl text-sm font-bold text-white" style={{ background: '#16a34a' }}>Continue →</button>
             </div>
           </div>
         )
       })()}
 
-      {/* ── Confirmation modal: real pricing, editable party size, nothing mutates until Confirm ── */}
+      {/* ── Adjust-dates modal: review → (collect?) → payment. Dates commit on
+             Confirm; payment is a SEPARATE operation, so a failed payment never
+             rolls back the extension. ── */}
       {adjustModal && pricingData.settings && (() => {
         const { r, ghostArrival, ghostDeparture } = adjustModal
         const site = sites.find(s => s.id === r.site_id)
@@ -886,20 +905,109 @@ export default function CalendarPage() {
         const dN = next.nights - orig.nights
         const newTotal = (r.total_price || 0) + delta
         const paid = r.total_paid ?? r.amount_paid ?? 0
-        const newBalance = newTotal - paid
-        async function confirmAdjust() {
+        const priorBalance = (r.total_price || 0) - paid   // owed before the extension
+        const newBalance = newTotal - paid                 // = priorBalance + delta
+        const needsPayment = delta > 0 && newBalance > 0
+
+        // Payment settings (already in memory from settings.select('*'))
+        const S: any = pricingData.settings
+        const cardSurcharge = Number(S?.card_surcharge_percent) || 0
+        const customMethods: string[] = S?.custom_payment_methods || []
+        const terminalDeviceId: string = S?.square_terminal_device_id || ''
+
+        // Live math from the editable amount field
+        const payBaseCents = Math.round(parseFloat(payAmount || '0') * 100) || 0
+        const surchargeCents = payMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+        const totalWithSurcharge = payBaseCents + surchargeCents
+        const paymentFailed = !!payFailed || terminalStatus === 'error'
+        const fmtUSD = (c: number) => (c < 0 ? '−' : '') + '$' + (Math.abs(c) / 100).toFixed(2)
+
+        function finishAdjust() {
+          setAdjustModal(null); setAdjStep('review'); setAdjFolioId(null)
+          setDrag(null); setFocusId(null); setSelected(null)
+          fetchData()
+        }
+        async function commitDates(): Promise<boolean> {
           setAdjSaving(true); setAdjError('')
-          // Last-second conflict re-check against the live database
           const { data: clash } = await supabase.from('reservations').select('id')
             .eq('site_id', r.site_id).neq('id', r.id).neq('status', 'cancelled')
             .lt('arrival_date', ghostDeparture).gt('departure_date', ghostArrival)
-          if (clash && clash.length > 0) { setAdjError('Another reservation now overlaps these dates. Please re-check the calendar.'); setAdjSaving(false); return }
+          if (clash && clash.length > 0) { setAdjError('Another reservation now overlaps these dates. Please re-check the calendar.'); setAdjSaving(false); return false }
           const { error } = await supabase.from('reservations')
             .update({ arrival_date: ghostArrival, departure_date: ghostDeparture, total_price: newTotal })
             .eq('id', r.id)
-          if (error) { setAdjError(error.message); setAdjSaving(false); return }
-          setAdjSaving(false); setAdjustModal(null); setDrag(null); setFocusId(null); setSelected(null)
-          fetchData()
+          if (error) { setAdjError(error.message); setAdjSaving(false); return false }
+          setAdjSaving(false); return true
+        }
+        async function confirmAdjust() {
+          const ok = await commitDates()
+          if (!ok) return
+          // Dates are SAVED from here on. Payment is a separate step.
+          if (needsPayment) {
+            setPayAmount((newBalance / 100).toFixed(2))
+            setCashTendered(''); setPayMethod('cash'); setWaiveFee(false)
+            setCardEntryMode(terminalDeviceId ? 'terminal' : 'manual'); setTerminalStatus('idle')
+            setPayNote(''); setPayError(''); setPayFailed(''); setAdjStep('choice')
+          } else {
+            finishAdjust()
+          }
+        }
+        async function ensureFolio(): Promise<string | null> {
+          if (adjFolioId) return adjFolioId
+          const { data: existing } = await supabase.from('folios').select('id').eq('reservation_id', r.id).maybeSingle()
+          if (existing?.id) { setAdjFolioId(existing.id); return existing.id }
+          const { data: created } = await supabase.from('folios').insert({
+            reservation_id: r.id, guest_name: r.guest_name, guest_email: r.guest_email || '',
+            folio_type: 'reservation', status: 'open',
+          }).select('id').single()
+          if (created?.id) { setAdjFolioId(created.id); return created.id }
+          return null
+        }
+        async function goCollect() {
+          setPaySaving(true); setPayError(''); setPayFailed('')
+          const fid = await ensureFolio()
+          setPaySaving(false)
+          if (!fid) setPayFailed('Could not open a folio for this reservation.')
+          setAdjStep('payment')
+        }
+        async function recordPayment() {
+          const fid = adjFolioId || await ensureFolio()
+          if (!fid) { setPayFailed('No folio to record this payment against.'); return }
+          const isCash = payMethod === 'cash'
+          const baseAmount = isCash && cashTendered !== ''
+            ? Math.min(Math.round(parseFloat(cashTendered) * 100), payBaseCents)
+            : payBaseCents
+          if (!baseAmount || baseAmount <= 0) { setPayError('Enter an amount greater than zero.'); return }
+          const surcharge = payMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+          const totalAmount = baseAmount + surcharge
+          setPaySaving(true); setPayError('')
+          const { error } = await supabase.from('folio_payments').insert({
+            folio_id: fid, method: payMethod, amount: totalAmount, surcharge_amount: surcharge, status: 'completed',
+            note: (payNote || 'Date extension') + (surcharge > 0 ? ' (incl. ' + cardSurcharge + '% card fee: $' + (surcharge / 100).toFixed(2) + ')' : ''),
+          })
+          setPaySaving(false)
+          if (error) { setPayFailed(error.message || 'The payment could not be recorded.'); return }
+          finishAdjust()
+        }
+        async function sendToTerminal() {
+          const fid = adjFolioId || await ensureFolio()
+          if (!fid) { setPayFailed('No folio to charge against.'); return }
+          if (!payBaseCents || payBaseCents <= 0) { setPayError('Enter an amount greater than zero.'); return }
+          const surcharge = cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+          const totalCharge = payBaseCents + surcharge
+          setTerminalStatus('waiting'); setPayError('')
+          try {
+            const res = await fetch('/api/terminal/charge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ amount: totalCharge, folioId: fid, note: payNote || 'Date extension', surchargeAmount: surcharge }) })
+            const data = await res.json()
+            if (!data.checkoutId) { setTerminalStatus('error'); return }
+            const poll = setInterval(async () => {
+              const pr = await fetch('/api/terminal/charge?checkoutId=' + data.checkoutId)
+              const pd = await pr.json()
+              if (pd.status === 'COMPLETED') { clearInterval(poll); setTerminalStatus('idle'); finishAdjust() }
+              else if (pd.status === 'CANCELED' || pd.status === 'CANCEL_REQUESTED') { clearInterval(poll); setTerminalStatus('error') }
+            }, 2000)
+          } catch { setTerminalStatus('error') }
         }
         const Stepper = ({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) => (
           <div className="flex items-center justify-between">
@@ -911,62 +1019,227 @@ export default function CalendarPage() {
             </div>
           </div>
         )
+        // Shared itemized breakdown: prior balance + added nights = total due
+        const breakdown = (
+          <div className="space-y-1.5">
+            {priorBalance !== 0 && (
+              <div className="flex justify-between text-sm"><span className="text-gray-600">Prior balance</span><span className="font-medium text-gray-900">{fmtUSD(priorBalance)}</span></div>
+            )}
+            <div className="flex justify-between text-sm"><span className="text-gray-600">Added nights ({dN})</span><span className="font-medium text-gray-900">{fmtUSD(delta)}</span></div>
+            <div className="flex justify-between text-base font-bold border-t border-gray-100 pt-2"><span className="text-gray-900">Total due</span><span className="text-gray-900">{fmtUSD(newBalance)}</span></div>
+          </div>
+        )
+        const title = adjStep === 'review' ? (dN > 0 ? 'Extend stay' : 'Adjust dates') : adjStep === 'choice' ? 'Collect payment?' : 'Collect payment'
         return (
           <>
-            <div className="fixed inset-0 bg-black/50 z-50" onClick={() => !adjSaving && setAdjustModal(null)} />
+            <div className="fixed inset-0 bg-black/50 z-50" onClick={() => {
+              if (adjSaving || paySaving || terminalStatus === 'waiting') return
+              if (adjStep === 'review') setAdjustModal(null); else finishAdjust()
+            }} />
             <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[420px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100">
-                <h3 className="text-lg font-bold text-gray-900">{dN > 0 ? 'Extend stay' : 'Adjust dates'}</h3>
+                <h3 className="text-lg font-bold text-gray-900">{title}</h3>
                 <p className="text-sm text-gray-500 mt-0.5">{r.guest_name} · Site {r.sites?.site_number}</p>
               </div>
-              <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
-                <div className="flex items-center justify-between text-sm">
-                  <div className="text-gray-500">
-                    <div className="line-through">{r.arrival_date} → {r.departure_date}</div>
-                    <div className="font-semibold text-gray-900">{ghostArrival} → {ghostDeparture}</div>
+
+              {/* ── STEP: review ── */}
+              {adjStep === 'review' && (<>
+                <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="text-gray-500">
+                      <div className="line-through">{r.arrival_date} → {r.departure_date}</div>
+                      <div className="font-semibold text-gray-900">{ghostArrival} → {ghostDeparture}</div>
+                    </div>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: '#f0fdf4', color: '#166534' }}>
+                      {dN > 0 ? '+' + dN : dN} night{Math.abs(dN) !== 1 ? 's' : ''}
+                    </span>
                   </div>
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: '#f0fdf4', color: '#166534' }}>
-                    {dN > 0 ? '+' + dN : dN} night{Math.abs(dN) !== 1 ? 's' : ''}
-                  </span>
+                  <div className="space-y-2 border-t border-gray-100 pt-3">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Party for added nights</p>
+                    <Stepper label="Adults" value={adjAdults} onChange={setAdjAdults} />
+                    <Stepper label="Children" value={adjChildren} onChange={setAdjChildren} />
+                  </div>
+                  <div className="border-t border-gray-100 pt-3 space-y-1.5">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Price change</p>
+                    {next.lines.map((ln, i) => {
+                      const oLn = orig.lines.find(o => o.label.replace(/^\d+ nights? × /, '') === ln.label.replace(/^\d+ nights? × /, ''))
+                      const diff = ln.amount - (oLn?.amount || 0)
+                      if (diff === 0) return null
+                      return (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-gray-600">{ln.label}</span>
+                          <span className="font-medium text-gray-900">{diff > 0 ? '+' : '−'}${(Math.abs(diff) / 100).toFixed(2)}</span>
+                        </div>
+                      )
+                    })}
+                    <div className="flex justify-between text-sm font-bold border-t border-gray-100 pt-2">
+                      <span className="text-gray-900">Added charges</span>
+                      <span style={{ color: delta >= 0 ? '#166534' : '#dc2626' }}>{delta >= 0 ? '+' : '−'}${(Math.abs(delta) / 100).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm"><span className="text-gray-500">New reservation total</span><span className="font-semibold text-gray-900">${(newTotal / 100).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-gray-500">Paid so far</span><span className="font-medium text-gray-700">${(paid / 100).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm font-bold"><span className="text-gray-900">Balance due</span>
+                      <span style={{ color: newBalance > 0 ? '#d97706' : '#16a34a' }}>${(Math.max(newBalance, 0) / 100).toFixed(2)}</span></div>
+                  </div>
+                  {adjError && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{adjError}</div>}
+                  <p className="text-xs text-gray-400">{needsPayment ? "After confirming, you'll be able to collect the balance now or add it to the folio." : "Balance can be collected on the guest's folio by cash, card, or any payment method."}</p>
                 </div>
-                <div className="space-y-2 border-t border-gray-100 pt-3">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Party for added nights</p>
-                  <Stepper label="Adults" value={adjAdults} onChange={setAdjAdults} />
-                  <Stepper label="Children" value={adjChildren} onChange={setAdjChildren} />
+                <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+                  <button onClick={() => setAdjustModal(null)} disabled={adjSaving}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Go back</button>
+                  <button onClick={confirmAdjust} disabled={adjSaving}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#16a34a' }}>
+                    {adjSaving ? 'Saving…' : 'Confirm change'}
+                  </button>
                 </div>
-                <div className="border-t border-gray-100 pt-3 space-y-1.5">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Price change</p>
-                  {next.lines.map((ln, i) => {
-                    const oLn = orig.lines.find(o => o.label.replace(/^\d+ nights? × /, '') === ln.label.replace(/^\d+ nights? × /, ''))
-                    const diff = ln.amount - (oLn?.amount || 0)
-                    if (diff === 0) return null
-                    return (
-                      <div key={i} className="flex justify-between text-sm">
-                        <span className="text-gray-600">{ln.label}</span>
-                        <span className="font-medium text-gray-900">{diff > 0 ? '+' : '−'}${(Math.abs(diff) / 100).toFixed(2)}</span>
+              </>)}
+
+              {/* ── STEP: choice (dates already saved) ── */}
+              {adjStep === 'choice' && (<>
+                <div className="px-6 py-5 space-y-4">
+                  <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
+                    <div className="text-sm font-bold text-green-800">✓ Dates updated</div>
+                    <div className="text-sm text-green-700 mt-0.5">{ghostArrival} → {ghostDeparture} · {dN > 0 ? '+' + dN : dN} night{Math.abs(dN) !== 1 ? 's' : ''}</div>
+                  </div>
+                  {breakdown}
+                </div>
+                <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+                  <button onClick={finishAdjust} disabled={paySaving}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Add to balance</button>
+                  <button onClick={goCollect} disabled={paySaving}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#16a34a' }}>
+                    {paySaving ? 'Opening…' : 'Collect now'}
+                  </button>
+                </div>
+              </>)}
+
+              {/* ── STEP: payment ── */}
+              {adjStep === 'payment' && paymentFailed && (<>
+                <div className="px-6 py-5">
+                  <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4">
+                    <div className="flex items-center gap-2 text-red-700 font-extrabold text-base">⚠️ Dates extended — payment NOT collected</div>
+                    <p className="text-sm text-red-700 mt-2">The stay is now <b>{fmtMD(ghostArrival)} → {fmtMD(ghostDeparture)}</b>, but <b>no money was collected.</b></p>
+                    <p className="text-sm text-red-800 font-bold mt-2">{fmtUSD(newBalance)} is still owed — collect it from {r.guest_name}'s folio when ready.</p>
+                    {payFailed && <p className="text-xs text-red-600 mt-2">Details: {payFailed}</p>}
+                  </div>
+                </div>
+                <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+                  <button onClick={() => { setPayFailed(''); setPayError(''); setTerminalStatus('idle') }}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-700 hover:bg-gray-50">Try payment again</button>
+                  <button onClick={finishAdjust}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white" style={{ background: '#dc2626' }}>Done — collect later</button>
+                </div>
+              </>)}
+
+              {adjStep === 'payment' && !paymentFailed && (<>
+                <div className="px-6 py-4 space-y-4 max-h-[68vh] overflow-y-auto">
+                  <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-3">{breakdown}</div>
+
+                  <div>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Payment method</p>
+                    <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))' }}>
+                      {allPaymentMethods(customMethods).map(m => (
+                        <button key={m} onClick={() => setPayMethod(m)} className="py-2.5 rounded-lg text-sm font-semibold capitalize border-2"
+                          style={payMethod === m ? { borderColor: '#2E6B8A', background: '#e8f2f7', color: '#2E6B8A' } : { borderColor: '#e5e7eb', background: '#fff', color: '#374151' }}>{m}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {payMethod === 'card' && terminalDeviceId && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => setCardEntryMode('terminal')} className="py-2.5 rounded-lg text-sm font-semibold border-2"
+                        style={cardEntryMode === 'terminal' ? { borderColor: '#2E6B8A', background: '#e8f2f7', color: '#2E6B8A' } : { borderColor: '#e5e7eb', background: '#fff', color: '#374151' }}>Use Terminal</button>
+                      <button onClick={() => setCardEntryMode('manual')} className="py-2.5 rounded-lg text-sm font-semibold border-2"
+                        style={cardEntryMode === 'manual' ? { borderColor: '#2E6B8A', background: '#e8f2f7', color: '#2E6B8A' } : { borderColor: '#e5e7eb', background: '#fff', color: '#374151' }}>Enter Manually</button>
+                    </div>
+                  )}
+
+                  {payMethod === 'card' && cardSurcharge > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border" style={{ background: waiveFee ? '#f0fdf4' : '#fffbeb', borderColor: waiveFee ? '#bbf7d0' : '#fde68a' }}>
+                      <div>
+                        <div className="text-sm font-semibold text-gray-700">Card fee ({cardSurcharge}%)</div>
+                        <div className="text-xs text-gray-500">{waiveFee ? 'Fee waived for this payment' : 'Applied to card payments'}</div>
                       </div>
-                    )
-                  })}
-                  <div className="flex justify-between text-sm font-bold border-t border-gray-100 pt-2">
-                    <span className="text-gray-900">Added charges</span>
-                    <span style={{ color: delta >= 0 ? '#166534' : '#dc2626' }}>{delta >= 0 ? '+' : '−'}${(Math.abs(delta) / 100).toFixed(2)}</span>
+                      <button onClick={() => setWaiveFee(!waiveFee)} className="relative rounded-full shrink-0" style={{ width: 40, height: 22, background: waiveFee ? '#15803d' : '#d1d5db' }}>
+                        <span className="absolute rounded-full bg-white" style={{ top: 3, left: waiveFee ? 21 : 3, width: 16, height: 16, transition: 'left 0.2s' }} />
+                      </button>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{payMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg">$</span>
+                      <input type="number" step="0.01" value={payAmount} onChange={e => setPayAmount(e.target.value)}
+                        className="w-full rounded-lg border border-gray-200 pl-8 pr-3 font-bold text-gray-900" style={{ height: 52, fontSize: 22 }} />
+                    </div>
                   </div>
-                  <div className="flex justify-between text-sm"><span className="text-gray-500">New reservation total</span><span className="font-semibold text-gray-900">${(newTotal / 100).toFixed(2)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-gray-500">Paid so far</span><span className="font-medium text-gray-700">${(paid / 100).toFixed(2)}</span></div>
-                  <div className="flex justify-between text-sm font-bold"><span className="text-gray-900">Balance due</span>
-                    <span style={{ color: newBalance > 0 ? '#d97706' : '#16a34a' }}>${(Math.max(newBalance, 0) / 100).toFixed(2)}</span></div>
+
+                  {payMethod === 'cash' && (
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Cash tendered</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg">$</span>
+                        <input type="number" step="0.01" value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder="0.00"
+                          className="w-full rounded-lg border border-gray-200 pl-8 pr-3 font-bold text-gray-900" style={{ height: 52, fontSize: 22 }} />
+                      </div>
+                      {parseFloat(cashTendered) > 0 && parseFloat(payAmount) > 0 && (
+                        <div className="mt-2 flex justify-between items-center rounded-lg px-3 py-2 border"
+                          style={{ background: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#f0fdf4' : '#fef2f2', borderColor: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#bbf7d0' : '#fecaca' }}>
+                          <span className="text-sm font-semibold" style={{ color: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#15803d' : '#dc2626' }}>
+                            {parseFloat(cashTendered) >= parseFloat(payAmount) ? 'Change due' : 'Amount short'}
+                          </span>
+                          <span className="text-lg font-extrabold" style={{ color: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#15803d' : '#dc2626' }}>
+                            ${Math.abs(parseFloat(cashTendered) - parseFloat(payAmount)).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {payMethod === 'card' && cardSurcharge > 0 && payBaseCents > 0 && !waiveFee && (
+                    <div className="rounded-lg border px-3 py-2 text-sm" style={{ background: '#fffbeb', borderColor: '#fde68a' }}>
+                      <div className="flex justify-between"><span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span><span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargeCents / 100).toFixed(2)}</span></div>
+                      <div className="flex justify-between font-bold mt-0.5"><span style={{ color: '#92400e' }}>Total charged to card</span><span style={{ color: '#92400e' }}>${(totalWithSurcharge / 100).toFixed(2)}</span></div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Note (optional)</label>
+                    <input value={payNote} onChange={e => setPayNote(e.target.value)} placeholder="e.g. extension paid at desk"
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+                  </div>
+
+                  {payError && <div className="text-sm text-red-600 font-medium">{payError}</div>}
+
+                  {payMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId ? (
+                    terminalStatus === 'waiting' ? (
+                      <div className="rounded-xl border text-center px-4 py-6" style={{ background: '#f0f9ff', borderColor: '#bae6fd' }}>
+                        <div className="text-3xl mb-2">🖥</div>
+                        <div className="font-bold text-sm" style={{ color: '#0369a1' }}>Waiting for Terminal…</div>
+                        <div className="text-xs mt-1" style={{ color: '#0284c7' }}>Have guest tap, swipe, or insert card</div>
+                      </div>
+                    ) : (
+                      <button onClick={sendToTerminal} disabled={!payBaseCents}
+                        className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#2E6B8A' }}>
+                        Send to Terminal · ${(totalWithSurcharge / 100).toFixed(2)} →
+                      </button>
+                    )
+                  ) : (
+                    <button onClick={recordPayment} disabled={paySaving}
+                      className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#16a34a' }}>
+                      {paySaving ? 'Recording…'
+                        : payMethod === 'card' && surchargeCents > 0 ? 'Charge card · $' + (totalWithSurcharge / 100).toFixed(2)
+                        : payMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered) || 0, parseFloat(payAmount) || 0).toFixed(2)
+                        : 'Record ' + payMethod + ' · $' + (parseFloat(payAmount) || 0).toFixed(2)}
+                    </button>
+                  )}
                 </div>
-                {adjError && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{adjError}</div>}
-                <p className="text-xs text-gray-400">Balance can be collected on the guest's folio by cash, card, or any payment method.</p>
-              </div>
-              <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
-                <button onClick={() => setAdjustModal(null)} disabled={adjSaving}
-                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Go back</button>
-                <button onClick={confirmAdjust} disabled={adjSaving}
-                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#16a34a' }}>
-                  {adjSaving ? 'Saving…' : 'Confirm change'}
-                </button>
-              </div>
+                <div className="px-6 py-4 border-t border-gray-100">
+                  <button onClick={finishAdjust} disabled={paySaving || terminalStatus === 'waiting'}
+                    className="w-full py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Collect later — save to folio</button>
+                </div>
+              </>)}
             </div>
           </>
         )
