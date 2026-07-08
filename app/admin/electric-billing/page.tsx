@@ -393,6 +393,7 @@ export default function ElectricBillingPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         guestName: row.guest.name, guestEmail: emailToUse, siteNumber: row.guest.site_number,
+        folioId: row.folioId,
         billingMonth, emailMessage, electricAmount,
         newCharges: newLineItems, paymentsReceived: paymentsReceivedAmt,
         totalBalance: liveBalanceResend, balanceForward: balanceForwardResend,
@@ -479,6 +480,7 @@ export default function ElectricBillingPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
+        folioId,
         billingMonth, emailMessage, electricAmount: finalAmountCents,
         newCharges, paymentsReceived: paymentsReceivedAmount,
         totalBalance: liveBalance, balanceForward,
