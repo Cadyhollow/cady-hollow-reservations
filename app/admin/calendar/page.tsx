@@ -228,6 +228,7 @@ export default function CalendarPage() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Reservation | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [sheetIn, setSheetIn] = useState(false) // mobile bottom-sheet slide-up (enter animates; exit is instant)
 
   // ── Slice 2: drag-to-adjust engine ──
   type DragState = {
@@ -437,6 +438,15 @@ export default function CalendarPage() {
 
   useEffect(() => { fetchData() }, [startStr, monthFirstStr, viewMode])
 
+  // Mobile bottom sheet: mount at translate-y-full, then flip on next frame so it slides up.
+  // Exit is instant (sheet unmounts with `selected`) — no keep-mounted machinery.
+  useEffect(() => {
+    if (!selected) { setSheetIn(false); return }
+    setSheetIn(false)
+    const id = requestAnimationFrame(() => setSheetIn(true))
+    return () => cancelAnimationFrame(id)
+  }, [selected?.id])
+
   async function fetchData() {
     setLoading(true)
     const [{ data: resData }, { data: siteData }, { data: seasonalGuests }] = await Promise.all([
@@ -571,6 +581,58 @@ export default function CalendarPage() {
   const rangeLabel =
     windowStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
     addDays(windowStart, DAYS - 1).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+  // Shared detail-panel content, authored once and rendered in both the desktop
+  // sidebar and the mobile bottom sheet.
+  const renderPanelBody = () => selected && (
+    <>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h3 className="font-bold text-gray-900 text-lg">{selected.guest_name}</h3>
+          <p className="text-sm text-gray-500">{'#' + selected.id.slice(0, 8).toUpperCase()}</p>
+        </div>
+        <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">×</button>
+      </div>
+      <div className="mb-4">
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
+          style={{ backgroundColor: (selected.checked_in ? STATUS_BAR.checked_in : STATUS_BAR[selected.status] || STATUS_BAR.confirmed).bg }}>
+          {selected.checked_in ? 'Checked in' : selected.status.charAt(0).toUpperCase() + selected.status.slice(1)}
+        </span>
+      </div>
+      <div className="space-y-3 text-sm">
+        <div className="flex justify-between"><span className="text-gray-500">Site</span><span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span></div>
+        <div className="flex justify-between"><span className="text-gray-500">Arrival</span><span className="font-medium text-gray-900">{selected.arrival_date}</span></div>
+        <div className="flex justify-between"><span className="text-gray-500">Departure</span><span className="font-medium text-gray-900">{selected.departure_date}</span></div>
+        <div className="flex justify-between"><span className="text-gray-500">Guests</span><span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span></div>
+        <div className="border-t border-gray-100 pt-3">
+          <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
+          <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
+            <span className="font-medium" style={{ color: (selected.total_paid ?? selected.amount_paid) >= selected.total_price ? '#16a34a' : '#d97706' }}>
+              {'$' + ((selected.total_paid ?? selected.amount_paid) / 100).toFixed(2)}
+            </span>
+          </div>
+        </div>
+        <div className="border-t border-gray-100 pt-3">
+          <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="font-medium text-gray-900 text-right truncate max-w-36">{selected.guest_email}</span></div>
+          <div className="flex justify-between mt-1"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span></div>
+        </div>
+      </div>
+      {viewMode === 'timeline' && draggableStatus(selected) && (
+        <button onClick={() => setFocusId(focusId === selected.id ? null : selected.id)}
+          className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-semibold border-2 transition-colors"
+          style={focusId === selected.id
+            ? { borderColor: '#111827', background: '#111827', color: '#fff' }
+            : { borderColor: 'var(--accent-color)', color: 'var(--accent-color)', background: '#fff' }}>
+          {focusId === selected.id ? 'Done adjusting' : 'Adjust dates'}
+        </button>
+      )}
+      <a href={'/admin/reservations?id=' + selected.id}
+        className="mt-2 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
+        style={{ backgroundColor: 'var(--accent-color)' }}>
+        View Full Reservation
+      </a>
+    </>
+  )
 
   const renderRow = (site: Site) => {
     const resList = resBySite[site.id] || EMPTY_RES
@@ -754,59 +816,41 @@ export default function CalendarPage() {
         </div>
         )}
 
-        {/* Detail panel (unchanged behavior) */}
+        {/* Detail panel — desktop right sidebar (≥1024px), unchanged behavior */}
         {selected && (
-          <div className="w-72 shrink-0">
+          <div className="hidden lg:block w-72 shrink-0">
             <div className="bg-white rounded-xl border border-gray-100 p-5 sticky top-6">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="font-bold text-gray-900 text-lg">{selected.guest_name}</h3>
-                  <p className="text-sm text-gray-500">{'#' + selected.id.slice(0, 8).toUpperCase()}</p>
-                </div>
-                <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">×</button>
-              </div>
-              <div className="mb-4">
-                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
-                  style={{ backgroundColor: (selected.checked_in ? STATUS_BAR.checked_in : STATUS_BAR[selected.status] || STATUS_BAR.confirmed).bg }}>
-                  {selected.checked_in ? 'Checked in' : selected.status.charAt(0).toUpperCase() + selected.status.slice(1)}
-                </span>
-              </div>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between"><span className="text-gray-500">Site</span><span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Arrival</span><span className="font-medium text-gray-900">{selected.arrival_date}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Departure</span><span className="font-medium text-gray-900">{selected.departure_date}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Guests</span><span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span></div>
-                <div className="border-t border-gray-100 pt-3">
-                  <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
-                  <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
-                    <span className="font-medium" style={{ color: (selected.total_paid ?? selected.amount_paid) >= selected.total_price ? '#16a34a' : '#d97706' }}>
-                      {'$' + ((selected.total_paid ?? selected.amount_paid) / 100).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                <div className="border-t border-gray-100 pt-3">
-                  <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="font-medium text-gray-900 text-right truncate max-w-36">{selected.guest_email}</span></div>
-                  <div className="flex justify-between mt-1"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span></div>
-                </div>
-              </div>
-              {viewMode === 'timeline' && draggableStatus(selected) && (
-                <button onClick={() => setFocusId(focusId === selected.id ? null : selected.id)}
-                  className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-semibold border-2 transition-colors"
-                  style={focusId === selected.id
-                    ? { borderColor: '#111827', background: '#111827', color: '#fff' }
-                    : { borderColor: 'var(--accent-color)', color: 'var(--accent-color)', background: '#fff' }}>
-                  {focusId === selected.id ? 'Done adjusting' : 'Adjust dates'}
-                </button>
-              )}
-              <a href={'/admin/reservations?id=' + selected.id}
-                className="mt-2 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
-                style={{ backgroundColor: 'var(--accent-color)' }}>
-                View Full Reservation
-              </a>
+              {renderPanelBody()}
             </div>
           </div>
         )}
       </div>
+
+      {/* Detail panel — mobile bottom sheet (<1024px). Non-modal, no backdrop.
+          Full sheet when a reservation is selected; slim strip during focus mode
+          (hidden while a drag is parked — the action bar owns the bottom then). */}
+      {selected && (
+        <div className={`lg:hidden fixed inset-x-0 bottom-0 z-40 transition-transform duration-300 ${sheetIn ? 'translate-y-0' : 'translate-y-full'}`}>
+          {focusId === selected.id ? (
+            !(drag && !drag.active && (drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture)) && (
+              <div className="bg-white border-t border-gray-200 shadow-2xl flex items-center justify-between px-4 py-2.5">
+                <span className="text-sm font-semibold text-gray-900 truncate">Adjusting {selected.guest_name}</span>
+                <button onClick={() => setFocusId(null)}
+                  className="shrink-0 px-4 py-1.5 rounded-lg text-sm font-semibold text-white" style={{ background: '#111827' }}>Done</button>
+              </div>
+            )
+          ) : (
+            <div className="bg-white rounded-t-2xl shadow-2xl border-t border-gray-200">
+              <div className="flex justify-center pt-2 pb-1">
+                <div className="w-10 h-1.5 rounded-full bg-gray-300" />
+              </div>
+              <div className="px-5 pb-6 max-h-[75vh] overflow-y-auto">
+                {renderPanelBody()}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Parked-drag action bar: always visible, can't hide behind panels ── */}
       {drag && !drag.active && !adjustModal && (drag.ghostArrival !== drag.origArrival || drag.ghostDeparture !== drag.origDeparture) && (() => {
