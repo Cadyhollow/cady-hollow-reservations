@@ -3,7 +3,9 @@ import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement } from '@/lib/ledger'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+// Lazy so `next build` (which has no RESEND_API_KEY) doesn't construct — and
+// throw — at import time. The client is built at request time instead.
+function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -185,7 +187,7 @@ ${statementHtml}
 </body>
 </html>`
 
-    await resend.emails.send({
+    await getResend().emails.send({
       from: `${campgroundName} <${fromEmail}>`,
       replyTo: replyToEmail,
       to: guestEmail,
