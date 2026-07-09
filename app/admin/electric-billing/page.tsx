@@ -3,6 +3,7 @@ import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { planAtLeast } from '@/lib/plan'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -102,7 +103,7 @@ export default function ElectricBillingPage() {
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled, seasonal_enabled, custom_payment_methods').single().then(({ data }) => {
       setCustomMethods((data as any)?.custom_payment_methods || [])
-      if (data?.plan !== 'summit' || !data?.seasonal_enabled) router.replace('/admin')
+      if (!planAtLeast(data?.plan, 'summit') || !data?.seasonal_enabled) router.replace('/admin')
     })
   }, [])
 

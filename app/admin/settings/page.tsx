@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { planAtLeast, normalizePlan } from '@/lib/plan'
 import toast, { Toaster } from 'react-hot-toast'
 import Image from 'next/image'
 
@@ -77,7 +78,7 @@ export default function SettingsPage() {
     const { data } = await supabase.from('settings').select('*').limit(1).single()
     if (data) {
       setSettingsId(data.id)
-      setPlan(data.plan || 'trailhead')
+      setPlan(normalizePlan(data.plan))
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -283,14 +284,14 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Name</label><p className="text-xs text-gray-400 mb-1">Name guests see in their inbox</p><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Cady Hollow Campground" value={form.sender_name} onChange={e => setForm({ ...form, sender_name: e.target.value })} /></div>
 
             {/* Sender Email — Summit only */}
-            {plan === 'summit' && (
+            {planAtLeast(plan, 'summit') && (
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@cadyhollow.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
             )}
 
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Reply-To Email</label><p className="text-xs text-gray-400 mb-1">Where guest replies go</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. hello@cadyhollow.com" value={form.reply_to_email} onChange={e => setForm({ ...form, reply_to_email: e.target.value })} /></div>
 
             {/* Use Custom Sender — Summit only */}
-            {plan === 'summit' && (
+            {planAtLeast(plan, 'summit') && (
               <div className="md:col-span-2 flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
                 <div>
                   <p className="text-sm font-medium text-gray-900">Use Custom Sender</p>
@@ -309,7 +310,7 @@ export default function SettingsPage() {
           </div>
 
           {/* Show Site Map — Ridgeline and Summit only */}
-          {['ridgeline', 'summit'].includes(plan) && (
+          {planAtLeast(plan, 'ridgeline') && (
             <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-700">Show Site Map</p>

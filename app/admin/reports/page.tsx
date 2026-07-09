@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { fetchUnifiedTransactions, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
+import { planAtLeast } from '@/lib/plan'
 
 type Reservation = {
   id: string
@@ -56,7 +57,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled, seasonal_enabled').single().then(({ data }) => {
-      if (data?.plan && !['ridgeline','summit'].includes(data.plan)) router.replace('/admin')
+      if (!planAtLeast(data?.plan, 'ridgeline')) router.replace('/admin')
       if (data?.pos_enabled) setPosEnabled(true)
       if (data?.seasonal_enabled) setSeasonalEnabled(true)
     })

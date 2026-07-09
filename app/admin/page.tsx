@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd } from '@/lib/transactions'
+import { planAtLeast, normalizePlan } from '@/lib/plan'
 import Image from 'next/image'
 import Link from 'next/link'
 
@@ -39,7 +40,7 @@ export default function AdminDashboard() {
   const [upcomingReservations, setUpcomingReservations] = useState<any[]>([])
   const [totalActiveSites, setTotalActiveSites] = useState(0)
   const [occupancyTonight, setOccupancyTonight] = useState({ arriving: 0, occupied: 0, departing: 0 })
-  const [plan, setPlan] = useState<string>('summit')
+  const [plan, setPlan] = useState<string>('trailhead') // fail closed — lowest tier until settings load
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
   const [arrivalsDate, setArrivalsDate] = useState<string>(() => ymd(new Date()))
   const [loading, setLoading] = useState(true)
@@ -114,7 +115,7 @@ export default function AdminDashboard() {
     setDeparturesToday(todayDepartures || [])
     if (settingsData) {
       setSettings(settingsData)
-      if (settingsData.plan) setPlan(settingsData.plan)
+      setPlan(normalizePlan(settingsData.plan))
     }
 
     if (resData) {
@@ -391,7 +392,7 @@ export default function AdminDashboard() {
           ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' }] : []),
           { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
-          ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
+          ...(settings && planAtLeast(plan, 'ridgeline') ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
           { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
           { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
         ].map(link => (

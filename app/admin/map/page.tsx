@@ -2,6 +2,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { planAtLeast } from '@/lib/plan'
 import CampgroundMap from '@/app/components/CampgroundMap'
 
 type Site = {
@@ -40,6 +41,14 @@ function todayLocal() {
 
 function AdminMapInner() {
   const router = useRouter()
+
+  // ── Plan gate — Park Map requires Ridgeline+ (fail closed on unknown plan) ──
+  useEffect(() => {
+    supabase.from('settings').select('plan').single().then(({ data }) => {
+      if (!planAtLeast(data?.plan, 'ridgeline')) router.replace('/admin')
+    })
+  }, [])
+
   const [sites, setSites] = useState<Site[]>([])
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [selectedDate, setSelectedDate] = useState(todayLocal())

@@ -2,6 +2,7 @@
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { planAtLeast } from '@/lib/plan'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -26,7 +27,7 @@ export default function SendEmailPage() {
 
   useEffect(() => {
     supabase.from('settings').select('plan').single().then(({ data }) => {
-      if (!['ridgeline', 'summit'].includes(data?.plan)) router.replace('/admin')
+      if (!planAtLeast(data?.plan, 'ridgeline')) router.replace('/admin')
     })
   }, [])
 

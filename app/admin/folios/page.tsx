@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
+import { planAtLeast } from '@/lib/plan'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,7 +37,7 @@ export default function FoliosPage() {
   // ── Plan/feature gate — redirect if not authorized ──────────────────────
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
-      if (data?.plan !== 'summit') router.replace('/admin')
+      if (!planAtLeast(data?.plan, 'summit')) router.replace('/admin')
     })
   }, [])
 
