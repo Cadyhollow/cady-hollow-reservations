@@ -33,3 +33,20 @@ export function originOf(request: NextRequest): string {
   return request.headers.get('origin')
     || (request.headers.get('host') ? `https://${request.headers.get('host')}` : '')
 }
+
+// The packet invitation email. Used by both /send and /resend so a resent email
+// is byte-identical and always points at the same frozen packet.
+export function packetEmailHtml(campgroundName: string, guestName: string, year: number, packetUrl: string): string {
+  return `
+    <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; color: #374151;">
+      <h2 style="color:#15803d; margin-bottom: 8px;">${campgroundName}</h2>
+      <p>Hi ${guestName},</p>
+      <p>Your ${year} seasonal packet is ready. There are <strong>two documents</strong> to review and sign — your seasonal admission agreement and the liability waiver. You can do both from your phone in a couple of minutes.</p>
+      <p style="text-align:center; margin: 28px 0;">
+        <a href="${packetUrl}" style="background:#15803d; color:#fff; text-decoration:none; padding:14px 28px; border-radius:8px; font-weight:700; display:inline-block;">Review &amp; Sign Packet</a>
+      </p>
+      <p style="font-size:13px; color:#6b7280;">Or paste this link into your browser:<br><span style="color:#2E6B8A;">${packetUrl}</span></p>
+      <p style="font-size:13px; color:#6b7280;">Thank you!<br>${campgroundName}</p>
+    </div>
+  `
+}

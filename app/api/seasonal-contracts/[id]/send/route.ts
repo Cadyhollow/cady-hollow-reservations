@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomBytes, randomUUID } from 'crypto'
-import { svc, isSummit, getResend, originOf } from '@/lib/contract-server'
+import { svc, isSummit, getResend, originOf, packetEmailHtml } from '@/lib/contract-server'
 import { renderTemplate, buildContractVars } from '@/lib/contracts'
 
 // POST /api/seasonal-contracts/[id]/send  — THE FREEZE
 // Renders both documents from the template NOW, snapshots them onto two signatures
-// rows (a shared packet_id), snapshots guest fields onto the contract, marks it
-// 'sent', and emails one packet link. supabase-js has no multi-statement
-// transaction, so this uses compensation-on-failure to avoid orphaned rows:
-// any failure deletes what was written and leaves the contract as a clean draft.
+// rows (a shared packet_id), snapshots the guest's current rig + site onto the
+// contract, marks it 'sent', and emails one packet link.
+//
+// supabase-js has no multi-statement transaction, so we use compensation-on-
+// failure for the DB writes: if either signatures insert or the contract update
+// fails, we delete what was written and leave a clean draft. The EMAIL is
+// deliberately NOT compensated — once the rows + contract are committed the packet
+// is real and its tokens may already be reachable, so an email failure returns
+// { ok: true, emailed: false } and leaves everything intact for a resend.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     if (!(await isSummit())) {
@@ -31,8 +36,21 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .select('park_name, park_email, contract_text, waiver_text')
       .limit(1).single()
 
-    // Render NOW — these bytes are what the camper will see and what we freeze.
-    const vars = buildContractVars(guest, contract, settings as any)
+    // The guest record is current truth; the contract is a frozen copy. Snapshot
+    // ALL SIX rig fields + site_number from the guest, and render from that.
+    // (Occupants, season dates, and total_due stay as the staff-edited draft.)
+    const snapshot = {
+      site_number: guest.site_number || contract.site_number || '',
+      camper_type: guest.camper_type ?? null,
+      camper_length: guest.camper_length ?? null,
+      camper_amperage: guest.camper_amperage ?? null,
+      camper_make: guest.camper_make ?? null,
+      camper_model: guest.camper_model ?? null,
+      camper_year: guest.camper_year ?? null,
+    }
+
+    // Render NOW — these bytes are what the camper sees and what we freeze.
+    const vars = buildContractVars(guest, { ...contract, ...snapshot }, settings as any)
     const contractText = renderTemplate((settings as any)?.contract_text || '', vars)
     const waiverText = (settings as any)?.waiver_text || '' // no merge fields today; rendered as-is
     const contractTitle = `${contract.season_year} Seasonal Admission Agreement`
@@ -60,16 +78,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: eB?.message || 'Could not create waiver document.' }, { status: 500 })
     }
 
-    // Snapshot guest-sourced fields onto the contract + link + mark sent.
+    // Snapshot onto the contract + link + mark sent. On failure this is genuine
+    // corruption (rows without a linked contract) → roll the rows back.
     const { error: eC } = await svc.from('seasonal_contracts').update({
       status: 'sent',
       packet_id,
       contract_signature_id: rowA.id,
       waiver_signature_id: rowB.id,
-      site_number: guest.site_number || contract.site_number || '',
-      camper_make: guest.camper_make ?? contract.camper_make ?? null,
-      camper_model: guest.camper_model ?? contract.camper_model ?? null,
-      camper_year: guest.camper_year ?? contract.camper_year ?? null,
+      ...snapshot,
       sent_at: new Date().toISOString(),
     }).eq('id', id).eq('status', 'draft')
     if (eC) {
@@ -77,41 +93,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: eC.message }, { status: 500 })
     }
 
-    // Email last. On failure, fully compensate → clean draft, so retry is safe.
+    // Email last — NOT compensated. The packet is committed and real.
     const origin = originOf(request)
     const packetUrl = `${origin}/packet/${packet_id}`
     const campgroundName = (settings as any)?.park_name || 'Campground'
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
     const replyToEmail = (settings as any)?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
+    let emailError: string | null = null
     try {
       const { error: sendErr } = await getResend().emails.send({
         from: `${campgroundName} <${fromEmail}>`,
         replyTo: replyToEmail,
         to: guest.email,
         subject: `Your ${contract.season_year} seasonal packet — ${campgroundName}`,
-        html: `
-          <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; color: #374151;">
-            <h2 style="color:#15803d; margin-bottom: 8px;">${campgroundName}</h2>
-            <p>Hi ${guest.name || 'there'},</p>
-            <p>Your ${contract.season_year} seasonal packet is ready. There are <strong>two documents</strong> to review and sign — your seasonal admission agreement and the liability waiver. You can do both from your phone in a couple of minutes.</p>
-            <p style="text-align:center; margin: 28px 0;">
-              <a href="${packetUrl}" style="background:#15803d; color:#fff; text-decoration:none; padding:14px 28px; border-radius:8px; font-weight:700; display:inline-block;">Review &amp; Sign Packet</a>
-            </p>
-            <p style="font-size:13px; color:#6b7280;">Or paste this link into your browser:<br><span style="color:#2E6B8A;">${packetUrl}</span></p>
-            <p style="font-size:13px; color:#6b7280;">Thank you!<br>${campgroundName}</p>
-          </div>
-        `,
+        html: packetEmailHtml(campgroundName, guest.name || 'there', contract.season_year, packetUrl),
       })
-      if (sendErr) throw new Error((sendErr as any)?.message || 'Email failed to send')
+      if (sendErr) emailError = (sendErr as any)?.message || 'Email failed to send'
     } catch (e: any) {
-      await svc.from('signatures').delete().in('id', [rowA.id, rowB.id])
-      await svc.from('seasonal_contracts').update({
-        status: 'draft', packet_id: null, contract_signature_id: null, waiver_signature_id: null, sent_at: null,
-      }).eq('id', id)
-      return NextResponse.json({ error: 'Could not send the packet email — nothing was changed. Please try again.' }, { status: 502 })
+      emailError = e?.message || 'Email failed to send'
     }
 
-    return NextResponse.json({ success: true, packet_id, packetUrl })
+    return NextResponse.json({ ok: true, packet_id, packetUrl, emailed: !emailError, error: emailError })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Something went wrong' }, { status: 500 })
   }

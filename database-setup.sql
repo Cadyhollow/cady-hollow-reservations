@@ -294,7 +294,10 @@ CREATE TABLE IF NOT EXISTS guests (
   electric_billing_enabled boolean DEFAULT false,
   camper_make text,
   camper_model text,
-  camper_year integer
+  camper_year integer,
+  camper_type text,
+  camper_length integer,
+  camper_amperage text
 );
 
 -- Signatures (waiver / contract e-signatures).
