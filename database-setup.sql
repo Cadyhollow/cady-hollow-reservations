@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS settings (
   use_custom_sender boolean DEFAULT false,
   waiver_enabled boolean DEFAULT true,
   waiver_text text DEFAULT '',
+  contract_text text DEFAULT '',
   plan text DEFAULT 'ridgeline',
   pos_enabled boolean DEFAULT false,
   card_surcharge_percent numeric DEFAULT 0,
@@ -290,7 +291,10 @@ CREATE TABLE IF NOT EXISTS guests (
   last_visit date,
   email_opt_out boolean DEFAULT false,
   is_monthly boolean DEFAULT false,
-  electric_billing_enabled boolean DEFAULT false
+  electric_billing_enabled boolean DEFAULT false,
+  camper_make text,
+  camper_model text,
+  camper_year integer
 );
 
 -- Signatures (waiver / contract e-signatures).
@@ -313,12 +317,53 @@ CREATE TABLE IF NOT EXISTS signatures (
   signed_at timestamptz,
   ip_address text,
   user_agent text,
-  notes text
+  notes text,
+  document_title text,
+  document_text text,
+  packet_id uuid,
+  sign_order integer
 );
 CREATE INDEX IF NOT EXISTS idx_signatures_reservation ON signatures(reservation_id);
 CREATE INDEX IF NOT EXISTS idx_signatures_guest ON signatures(guest_id);
 CREATE INDEX IF NOT EXISTS idx_signatures_token ON signatures(sign_token);
 CREATE INDEX IF NOT EXISTS idx_signatures_status ON signatures(doc_type, status);
+CREATE INDEX IF NOT EXISTS idx_signatures_packet ON signatures(packet_id);
+
+-- Seasonal contracts (Summit tier). One per guest per season; fields snapshotted
+-- at send from the guest record. Service-role only: RLS enabled, zero policies
+-- (matches signatures — access is server routes with the service-role key).
+CREATE TABLE IF NOT EXISTS seasonal_contracts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  guest_id uuid NOT NULL REFERENCES guests(id) ON DELETE CASCADE,
+  season_year integer NOT NULL,
+  status text NOT NULL DEFAULT 'draft',          -- draft|sent|signed|void
+  packet_id uuid,
+  contract_signature_id uuid REFERENCES signatures(id) ON DELETE SET NULL,
+  waiver_signature_id   uuid REFERENCES signatures(id) ON DELETE SET NULL,
+  site_number text, season_opens date, season_closes date,
+  occupants jsonb NOT NULL DEFAULT '[]'::jsonb,  -- [{name, kind:'adult'|'child'}]
+  camper_type text, camper_length integer, camper_amperage text,
+  camper_make text, camper_model text, camper_year integer,
+  total_due_cents integer,                       -- integer cents, display only
+  staff_notes text,
+  sent_at timestamptz, signed_at timestamptz,
+  UNIQUE (guest_id, season_year)
+);
+CREATE INDEX IF NOT EXISTS idx_seasonal_contracts_guest ON seasonal_contracts(guest_id);
+CREATE INDEX IF NOT EXISTS idx_seasonal_contracts_year  ON seasonal_contracts(season_year, status);
+ALTER TABLE seasonal_contracts ENABLE ROW LEVEL SECURITY;
+
+-- Guest notes (append-only trail alongside the existing guests.notes column).
+CREATE TABLE IF NOT EXISTS guest_notes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  guest_id uuid NOT NULL REFERENCES guests(id) ON DELETE CASCADE,
+  author text NOT NULL,
+  body text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_guest_notes_guest ON guest_notes(guest_id, created_at DESC);
+ALTER TABLE guest_notes ENABLE ROW LEVEL SECURITY;
 
 
 -- Folios (running charge accounts)
