@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { computePricing } from '@/lib/pricing'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -98,6 +99,7 @@ function ReservationsPageInner() {
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
   const [pricingRules, setPricingRules] = useState<any[]>([])
+  const [settings, setSettings] = useState<any>(null)
   const [overrideTotal, setOverrideTotal] = useState(false)
   const [overrideTotalValue, setOverrideTotalValue] = useState('')
   const [showResRefund, setShowResRefund] = useState(false)
@@ -173,6 +175,8 @@ function ReservationsPageInner() {
     setFees(data || [])
     const { data: rulesData } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
     setPricingRules(rulesData || [])
+    const { data: settingsData } = await supabase.from('settings').select('*').limit(1).single()
+    setSettings(settingsData || null)
   }
 
   async function fetchBookedSites(arrival: string, departure: string, excludeReservationId: string) {
@@ -251,33 +255,10 @@ function ReservationsPageInner() {
     if (!selected) return
     setSaving(true)
 
-    const site = allSites.find(s => s.id === editForm.site_id)
-    const nights = Math.round(
-      (new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24)
-    )
-    const applicable = site ? pricingRules.filter(rule => {
-      const withinDates = rule.start_date <= editForm.departure_date && rule.end_date >= editForm.arrival_date
-      if (!withinDates) return false
-      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
-      if (rule.site_id) return rule.site_id === site.id
-      if (rule.site_type) return rule.site_type === site.site_type
-      return false
-    }) : []
-    const bestRule = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
-    const nightlyRate = site ? (bestRule ? bestRule.nightly_rate : site.base_rate) : 0
-    const basePrice = site ? nightlyRate * nights : selected.total_price
-    const addonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
-      const addon = availableAddons.find(a => a.id === id)
-      return sum + (addon ? addon.price * qty : 0)
-    }, 0)
-    const applicableFees = site ? fees.filter(f => {
-      if (f.applies_to === 'all') return true
-      const targets = f.applies_to.split(',').map(s => s.trim())
-      return targets.includes(site.site_type)
-    }) : []
-    const feesTotal = applicableFees.reduce((sum, f) =>
-      sum + (f.type === 'percentage' ? (basePrice / 100) * f.amount / 100 : f.amount) * 100, 0)
-    const newTotal = basePrice + addonTotal + feesTotal
+    // Canonical total from the shared pricing engine (rounds fees, includes
+    // extra-guest fees, excludes card-only fees) — same as new-reservation. Falls
+    // back to the stored total if pricing can't be computed (no site/settings).
+    const newTotal = editPricing ? editPricing.cashTotal : selected.total_price
 
     const oldSite = selected.sites
     const auditNote = `[Edited ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Was: ${oldSite ? `Site ${oldSite.site_number}` : 'unknown site'}, ${selected.arrival_date} → ${selected.departure_date}, ${selected.num_adults} adults, ${selected.num_children} children`
@@ -306,7 +287,7 @@ function ReservationsPageInner() {
       guest_phone: editForm.guest_phone,
     }).eq('id', selected.id)
 
-    if (error) { toast.error('Error saving changes.'); setSaving(false); return }
+    if (error) { toast.error('Error saving changes: ' + error.message); setSaving(false); return }
 
     await supabase.from('reservation_addons').delete().eq('reservation_id', selected.id)
     const addonItems = Object.entries(editAddons).filter(([_, qty]) => qty > 0)
@@ -446,19 +427,28 @@ function ReservationsPageInner() {
     const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
     return best ? best.nightly_rate : editSite.base_rate
   })()
-  const editBasePrice = editNightlyRate * editNights
-  const editAddonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
-    const addon = availableAddons.find(a => a.id === id)
-    return sum + (addon ? addon.price * qty : 0)
-  }, 0)
-  const editApplicableFees = editSite ? fees.filter(f => {
-    if (f.applies_to === 'all') return true
-    const targets = f.applies_to.split(',').map(s => s.trim())
-    return targets.includes(editSite.site_type)
-  }) : []
-  const editFeesTotal = editApplicableFees.reduce((sum, f) =>
-    sum + (f.type === 'percentage' ? (editBasePrice / 100) * f.amount / 100 : f.amount) * 100, 0)
-  const editTotal = editBasePrice + editAddonTotal + editFeesTotal
+  // Canonical pricing — one source of truth (same engine as new-reservation and the
+  // calendar). Rounds every fee, includes extra-guest fees, and excludes card-only
+  // fees from the stored cash total. Replaces the un-rounded inline math.
+  const editPricing = (settings && editSite && editNights > 0)
+    ? computePricing({
+        site: editSite as any,
+        arrival_date: editForm.arrival_date,
+        departure_date: editForm.departure_date,
+        num_adults: editForm.num_adults,
+        num_children: editForm.num_children,
+        settings: settings as any,
+        fees: fees as any,
+        addons: Object.entries(editAddons)
+          .filter(([, qty]) => (qty as number) > 0)
+          .map(([id, qty]) => {
+            const ad = availableAddons.find(a => a.id === id)
+            return { name: ad?.name, price: ad?.price || 0, quantity: qty as number }
+          }),
+        pricingRules: pricingRules as any,
+      })
+    : null
+  const editTotal = editPricing?.cashTotal ?? 0
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -920,22 +910,12 @@ function ReservationsPageInner() {
                     value={editForm.amount_paid} onChange={e => setEditForm({ ...editForm, amount_paid: e.target.value })} />
                 </div>
 
-                {editNights > 0 && editSite && (
+                {editNights > 0 && editSite && editPricing && (
                   <div className="bg-green-50 border border-green-100 rounded-lg p-3">
-                    <div className="flex justify-between text-sm text-gray-600">
-                      <span>Site ({editNights} nights)</span>
-                      <span>${(editBasePrice / 100).toFixed(2)}</span>
-                    </div>
-                    {editAddonTotal > 0 && (
-                      <div className="flex justify-between text-sm text-gray-600 mt-1">
-                        <span>Add-ons</span>
-                        <span>${(editAddonTotal / 100).toFixed(2)}</span>
-                      </div>
-                    )}
-                    {editApplicableFees.map((fee, i) => (
-                      <div key={i} className="flex justify-between text-sm text-gray-600 mt-1">
-                        <span>{fee.name}</span>
-                        <span>${(fee.type === 'percentage' ? (editBasePrice / 100) * fee.amount / 100 : fee.amount / 100).toFixed(2)}</span>
+                    {editPricing.lines.map((ln, i) => (
+                      <div key={i} className="flex justify-between text-sm text-gray-600 mt-1 first:mt-0">
+                        <span>{ln.label}</span>
+                        <span>${(ln.amount / 100).toFixed(2)}</span>
                       </div>
                     ))}
                     <div className="flex justify-between font-bold text-gray-900 border-t border-green-200 pt-2 mt-2">
