@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS settings (
   electric_bill_message text DEFAULT '',
   square_terminal_device_id text DEFAULT '',
   square_terminal_name text DEFAULT '',
-  seasonal_enabled boolean DEFAULT false,
   total_sites integer DEFAULT 0,
   total_cabins integer DEFAULT 0,
   max_credit_amount integer DEFAULT 0,

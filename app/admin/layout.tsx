@@ -87,7 +87,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settings, setSettings] = useState<any>(null)
   const [posEnabled, setPosEnabled] = useState(false)
-  const [seasonalEnabled, setSeasonalEnabled] = useState(false)
   const [settingsLoaded, setSettingsLoaded] = useState(false) // gate plan-dependent nav until first fetch resolves
 
   // Find which group contains the active page and open only that one
@@ -131,14 +130,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     supabase
       .from('settings')
-      .select('park_name, logo_url, logo_shape, plan, pos_enabled, seasonal_enabled')
+      .select('park_name, logo_url, logo_shape, plan, pos_enabled')
       .limit(1)
       .single()
       .then(({ data }) => {
         if (data) {
           setSettings(data)
           setPosEnabled(!!data.pos_enabled)
-          setSeasonalEnabled(!!data.seasonal_enabled)
           setPlan(normalizePlan(data.plan))
         }
         setSettingsLoaded(true) // resolve even on null/failed fetch so the nav never sticks on skeleton
@@ -164,7 +162,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     .map(g => ({
       ...g,
       items: g.items.filter(item => {
-        if (item.href === '/admin/electric-billing') return seasonalEnabled && planAtLeast(plan, 'summit')
+        if (item.href === '/admin/electric-billing') return planAtLeast(plan, 'summit')
         // minPlan is always enforced; POS (an add-on) governs only posOnly groups, never plan gates
         return !item.minPlan || planAtLeast(plan, item.minPlan)
       })
