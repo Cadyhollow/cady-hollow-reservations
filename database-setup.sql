@@ -115,7 +115,10 @@ CREATE TABLE IF NOT EXISTS reservations (
   notes text DEFAULT '',
   confirmation_number text,
   discount_code text,
-  checked_in boolean DEFAULT false
+  checked_in boolean DEFAULT false,
+  camper_type text DEFAULT '',
+  camper_length integer DEFAULT 0,
+  camper_amperage text DEFAULT ''
 );
 
 
@@ -271,16 +274,51 @@ CREATE TABLE IF NOT EXISTS products (
 
 
 -- Guests (seasonal camper directory)
+-- Reconciled to live production (Cady dmqyuujhdflfydfhigvn, July 2026): uses
+-- name/site_number, NOT first_name/last_name/site_id.
 CREATE TABLE IF NOT EXISTS guests (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  first_name text,
-  last_name text,
-  email text,
-  phone text,
-  site_id uuid REFERENCES sites(id) ON DELETE SET NULL,
+  created_at timestamptz DEFAULT now(),
+  name text NOT NULL,
+  email text DEFAULT '',
+  phone text DEFAULT '',
+  site_number text DEFAULT '',
+  is_seasonal boolean DEFAULT false,
+  season_start date,
+  season_end date,
+  notes text DEFAULT '',
+  last_visit date,
   email_opt_out boolean DEFAULT false,
-  created_at timestamptz DEFAULT now()
+  is_monthly boolean DEFAULT false,
+  electric_billing_enabled boolean DEFAULT false
 );
+
+-- Signatures (waiver / contract e-signatures).
+-- Created out-of-band in production; mirrored here so the repo reflects reality.
+-- All access is service-role via server routes (RLS enabled, no policies in prod).
+CREATE TABLE IF NOT EXISTS signatures (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  doc_type text NOT NULL DEFAULT 'booking_waiver',
+  reservation_id uuid REFERENCES reservations(id) ON DELETE CASCADE,
+  guest_id uuid REFERENCES guests(id) ON DELETE SET NULL,
+  signer_name text,
+  signer_email text,
+  sign_token text NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'pending',
+  sent_at timestamptz DEFAULT now(),
+  agreed boolean NOT NULL DEFAULT false,
+  signed_name text,
+  signed_text_snapshot text,
+  signed_at timestamptz,
+  ip_address text,
+  user_agent text,
+  notes text
+);
+CREATE INDEX IF NOT EXISTS idx_signatures_reservation ON signatures(reservation_id);
+CREATE INDEX IF NOT EXISTS idx_signatures_guest ON signatures(guest_id);
+CREATE INDEX IF NOT EXISTS idx_signatures_token ON signatures(sign_token);
+CREATE INDEX IF NOT EXISTS idx_signatures_status ON signatures(doc_type, status);
 
 
 -- Folios (running charge accounts)
