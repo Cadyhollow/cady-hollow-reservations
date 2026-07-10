@@ -8,6 +8,12 @@ import { computePricing } from '@/lib/pricing'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
+// Stable key of the edit add-on map — for detecting whether add-ons changed vs the
+// snapshot taken when the edit form opened.
+function addonKeyOf(m: { [id: string]: number }): string {
+  return Object.entries(m).filter(([, q]) => (q as number) > 0).map(([id, q]) => `${id}:${q}`).sort().join(',')
+}
+
 type Addon = {
   name: string
   quantity: number
@@ -101,6 +107,8 @@ function ReservationsPageInner() {
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
   const [pricingRules, setPricingRules] = useState<any[]>([])
   const [settings, setSettings] = useState<any>(null)
+  const [origInputs, setOrigInputs] = useState<null | { site_id: string; arrival_date: string; departure_date: string; num_adults: number; num_children: number; addonKey: string }>(null)
+  const [repriceModal, setRepriceModal] = useState<null | { oldTotal: number; newTotal: number }>(null)
   const [overrideTotal, setOverrideTotal] = useState(false)
   const [overrideTotalValue, setOverrideTotalValue] = useState('')
   const [showResRefund, setShowResRefund] = useState(false)
@@ -211,18 +219,15 @@ function ReservationsPageInner() {
     })))
   }
 
-  async function fetchAddonsForEdit(reservationId: string) {
+  async function fetchAddonsForEdit(reservationId: string): Promise<{ [id: string]: number }> {
     const { data } = await supabase
       .from('reservation_addons')
       .select('quantity, addon_id')
       .eq('reservation_id', reservationId)
-    if (data) {
-      const map: { [id: string]: number } = {}
-      data.forEach((row: any) => { if (row.addon_id) map[row.addon_id] = row.quantity })
-      setEditAddons(map)
-    } else {
-      setEditAddons({})
-    }
+    const map: { [id: string]: number } = {}
+    if (data) data.forEach((row: any) => { if (row.addon_id) map[row.addon_id] = row.quantity })
+    setEditAddons(map)
+    return map
   }
 
   function selectReservation(res: Reservation) {
@@ -243,7 +248,18 @@ function ReservationsPageInner() {
       guest_email: res.guest_email || '',
       guest_phone: res.guest_phone || '',
     })
-    fetchAddonsForEdit(res.id)
+    fetchAddonsForEdit(res.id).then(addonMap => {
+      // Baseline of the pricing-relevant inputs as loaded — used to detect whether
+      // dates/site/occupancy/add-ons actually changed before re-pricing on save.
+      setOrigInputs({
+        site_id: res.site_id || '',
+        arrival_date: res.arrival_date,
+        departure_date: res.departure_date,
+        num_adults: res.num_adults,
+        num_children: res.num_children,
+        addonKey: addonKeyOf(addonMap),
+      })
+    })
     if (res.arrival_date && res.departure_date) {
       fetchBookedSites(res.arrival_date, res.departure_date, res.id)
     }
@@ -252,28 +268,42 @@ function ReservationsPageInner() {
     setEditing(true)
   }
 
-  async function handleSaveEdit() {
+  // Decide whether saving needs to re-price. Only re-price when a pricing input
+  // (dates, site, occupancy, or add-ons) actually changed; when re-pricing moves
+  // the total, require an explicit confirm. Override always wins.
+  function handleSaveEdit() {
+    if (!selected) return
+    if (overrideTotal && overrideTotalValue) {
+      commitSave(Math.round(parseFloat(overrideTotalValue) * 100), 'override')
+      return
+    }
+    if (!pricingInputsChanged) {
+      // Nothing that affects price changed → keep the stored total untouched.
+      commitSave(selected.total_price, 'unchanged')
+      return
+    }
+    const newTotal = editPricing ? editPricing.cashTotal : selected.total_price
+    if (newTotal === selected.total_price) {
+      commitSave(newTotal, 'unchanged')
+      return
+    }
+    // Pricing inputs changed AND the total moved → confirm before writing.
+    setRepriceModal({ oldTotal: selected.total_price, newTotal })
+  }
+
+  async function commitSave(finalTotal: number, mode: 'override' | 'unchanged' | 'reprice' | 'keep') {
     if (!selected) return
     setSaving(true)
 
-    // Canonical total from the shared pricing engine (rounds fees, includes
-    // extra-guest fees, excludes card-only fees) — same as new-reservation. Falls
-    // back to the stored total if pricing can't be computed (no site/settings).
-    const newTotal = editPricing ? editPricing.cashTotal : selected.total_price
-
     const oldSite = selected.sites
-    const auditNote = `[Edited ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Was: ${oldSite ? `Site ${oldSite.site_number}` : 'unknown site'}, ${selected.arrival_date} → ${selected.departure_date}, ${selected.num_adults} adults, ${selected.num_children} children`
+    const nowLabel = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const auditNote = `[Edited ${nowLabel}] Was: ${oldSite ? `Site ${oldSite.site_number}` : 'unknown site'}, ${selected.arrival_date} → ${selected.departure_date}, ${selected.num_adults} adults, ${selected.num_children} children`
+    let totalNote = ''
+    if (mode === 'override') totalNote = `\n[Total overridden ${nowLabel}] Previous: $${(selected.total_price/100).toFixed(2)} → New: $${(finalTotal/100).toFixed(2)}`
+    else if (mode === 'reprice') totalNote = `\n[Repriced ${nowLabel}] Total: $${(selected.total_price/100).toFixed(2)} → $${(finalTotal/100).toFixed(2)}`
+    else if (mode === 'keep') totalNote = `\n[Kept booked total ${nowLabel}] Inputs changed; total held at $${(finalTotal/100).toFixed(2)}`
     const existingNotes = selected.notes || ''
-    const updatedNotes = existingNotes ? `${existingNotes}\n${auditNote}` : auditNote
-
-    const finalTotal = overrideTotal && overrideTotalValue
-      ? Math.round(parseFloat(overrideTotalValue) * 100)
-      : newTotal
-
-    const prevTotal = newTotal > 0 ? newTotal : selected.total_price
-    const overrideNote = overrideTotal && overrideTotalValue
-      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Previous total: $${(prevTotal/100).toFixed(2)} → New total: $${parseFloat(overrideTotalValue).toFixed(2)}`
-      : ''
+    const updatedNotes = (existingNotes ? `${existingNotes}\n${auditNote}` : auditNote) + totalNote
 
     const { error } = await supabase.from('reservations').update({
       site_id: editForm.site_id,
@@ -283,7 +313,7 @@ function ReservationsPageInner() {
       num_children: editForm.num_children,
       total_price: finalTotal,
       amount_paid: Math.round(parseFloat(editForm.amount_paid) * 100),
-      notes: updatedNotes + overrideNote,
+      notes: updatedNotes,
       guest_email: editForm.guest_email,
       guest_phone: editForm.guest_phone,
     }).eq('id', selected.id)
@@ -304,6 +334,7 @@ function ReservationsPageInner() {
     toast.success('Reservation updated!')
     setSaving(false)
     setEditing(false)
+    setRepriceModal(null)
     setNotes(updatedNotes)
     await fetchReservations()
     const { data } = await supabase.from('reservations').select('*, sites(site_number, site_type)').eq('id', selected.id).single()
@@ -450,6 +481,16 @@ function ReservationsPageInner() {
       })
     : null
   const editTotal = editPricing?.cashTotal ?? 0
+
+  // Did anything that affects price change vs. what was loaded into the form?
+  const pricingInputsChanged = !!origInputs && (
+       editForm.site_id !== origInputs.site_id
+    || editForm.arrival_date !== origInputs.arrival_date
+    || editForm.departure_date !== origInputs.departure_date
+    || Number(editForm.num_adults) !== origInputs.num_adults
+    || Number(editForm.num_children) !== origInputs.num_children
+    || addonKeyOf(editAddons) !== origInputs.addonKey
+  )
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -983,6 +1024,65 @@ function ReservationsPageInner() {
           </div>
         )}
       </div>
+
+      {/* Re-price confirmation — only shown when a pricing input changed AND the total moved */}
+      {repriceModal && (() => {
+        const { oldTotal, newTotal } = repriceModal
+        const delta = newTotal - oldTotal
+        const paidCents = Math.round(parseFloat(editForm.amount_paid || '0') * 100) || 0
+        const newBalance = newTotal - paidCents
+        const wasPaidInFull = paidCents >= oldTotal
+        const oldSiteNum = allSites.find(s => s.id === origInputs?.site_id)?.site_number
+        const newSiteNum = allSites.find(s => s.id === editForm.site_id)?.site_number
+        const changed: [string, string][] = []
+        if (origInputs && editForm.site_id !== origInputs.site_id) changed.push(['Site', `${oldSiteNum || '—'} → ${newSiteNum || '—'}`])
+        if (origInputs && (editForm.arrival_date !== origInputs.arrival_date || editForm.departure_date !== origInputs.departure_date))
+          changed.push(['Dates', `${origInputs.arrival_date}→${origInputs.departure_date}  →  ${editForm.arrival_date}→${editForm.departure_date}`])
+        if (origInputs && (Number(editForm.num_adults) !== origInputs.num_adults || Number(editForm.num_children) !== origInputs.num_children))
+          changed.push(['Guests', `${origInputs.num_adults}a/${origInputs.num_children}c → ${editForm.num_adults}a/${editForm.num_children}c`])
+        if (origInputs && addonKeyOf(editAddons) !== origInputs.addonKey) changed.push(['Add-ons', 'changed'])
+        return (
+          <>
+            <div className="fixed inset-0 bg-black/50 z-50" onClick={() => !saving && setRepriceModal(null)} />
+            <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[440px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900">The price changed — confirm before saving</h3>
+              </div>
+              <div className="px-6 py-4 space-y-3 text-sm">
+                {changed.length > 0 && (
+                  <div>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">What changed</p>
+                    {changed.map(([label, val], i) => (
+                      <div key={i} className="flex justify-between gap-3"><span className="text-gray-500 shrink-0">{label}</span><span className="text-gray-800 text-right">{val}</span></div>
+                    ))}
+                  </div>
+                )}
+                <div className="border-t border-gray-100 pt-3 space-y-1">
+                  <div className="flex justify-between"><span className="text-gray-500">Old total</span><span className="font-medium text-gray-900">${(oldTotal / 100).toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">New total</span><span className="font-medium text-gray-900">${(newTotal / 100).toFixed(2)}</span></div>
+                  <div className="flex justify-between font-bold"><span className="text-gray-900">Change</span><span style={{ color: delta >= 0 ? '#b45309' : '#15803d' }}>{delta >= 0 ? '+' : '−'}${(Math.abs(delta) / 100).toFixed(2)}</span></div>
+                </div>
+                <div className="border-t border-gray-100 pt-3 space-y-1">
+                  <div className="flex justify-between"><span className="text-gray-500">Paid so far</span><span className="font-medium text-gray-900">${(paidCents / 100).toFixed(2)}</span></div>
+                  <div className="flex justify-between font-bold"><span className="text-gray-900">New balance</span>
+                    <span style={{ color: newBalance > 0 ? '#b45309' : '#15803d' }}>{newBalance < 0 ? 'Credit ' : ''}${(Math.abs(newBalance) / 100).toFixed(2)}{newBalance > 0 ? ' due' : ''}</span></div>
+                  {wasPaidInFull && newBalance > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded px-2 py-1.5 text-xs mt-1">⚠ This reservation was paid in full — the new total leaves ${(newBalance / 100).toFixed(2)} owed.</div>
+                  )}
+                  {newBalance < 0 && (
+                    <div className="bg-green-50 border border-green-200 text-green-800 rounded px-2 py-1.5 text-xs mt-1">This leaves a ${(Math.abs(newBalance) / 100).toFixed(2)} credit on the reservation.</div>
+                  )}
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 flex gap-2">
+                <button onClick={() => setRepriceModal(null)} disabled={saving} className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Back to editing</button>
+                <button onClick={() => commitSave(oldTotal, 'keep')} disabled={saving} className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">Keep ${(oldTotal / 100).toFixed(2)}</button>
+                <button onClick={() => commitSave(newTotal, 'reprice')} disabled={saving} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{saving ? '…' : `Use $${(newTotal / 100).toFixed(2)}`}</button>
+              </div>
+            </div>
+          </>
+        )
+      })()}
     </div>
   )
 }
