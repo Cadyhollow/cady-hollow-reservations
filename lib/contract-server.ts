@@ -53,6 +53,30 @@ export function packetEmailHtml(campgroundName: string, guestName: string, year:
   `
 }
 
+// The after-sign RECEIPT email — the camper's COPY of the signed documents (a
+// receipt, NOT a sign-invite). Embeds each frozen document's text plus who signed
+// and when. Sent for both in-person and remote signing; skipped if no email. All
+// interpolated values are HTML-escaped (the document text is arbitrary staff input).
+export function packetReceiptHtml(
+  campgroundName: string, guestName: string, year: number,
+  signedName: string, signedAtLabel: string,
+  docs: { title: string; text: string }[],
+): string {
+  const esc = (s: string) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const docsHtml = docs.map(d => `
+      <h3 style="font-size:15px; color:#111827; margin:22px 0 6px;">${esc(d.title)}</h3>
+      <div style="background:#FBF8F1; border:1px solid #F3EEE2; border-radius:8px; padding:12px; font-size:12.5px; line-height:1.5; color:#374151; white-space:pre-wrap;">${esc(d.text)}</div>`).join('')
+  return `
+    <div style="font-family: sans-serif; max-width: 620px; margin: 0 auto; color: #374151;">
+      <h2 style="color:#15803d; margin-bottom: 8px;">${esc(campgroundName)}</h2>
+      <p>Hi ${esc(guestName)},</p>
+      <p>Thank you — your <strong>${year}</strong> seasonal packet is signed. This email is your copy for your records. Signed by <strong>${esc(signedName)}</strong> on ${esc(signedAtLabel)}.</p>
+      ${docsHtml}
+      <p style="font-size:13px; color:#6b7280; margin-top:24px;">Please keep this email for your records.<br>${esc(campgroundName)}</p>
+    </div>
+  `
+}
+
 // THE FREEZE — the single place a draft becomes a signable packet. Renders both
 // documents from settings, runs the empty-doc GUARD (so EVERY caller inherits it),
 // snapshots the guest's rig/site onto the contract, inserts the two signature rows

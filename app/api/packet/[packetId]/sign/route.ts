@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, clientIp } from '@/lib/contract-server'
+import { svc, clientIp, getResend, packetReceiptHtml } from '@/lib/contract-server'
 
 // POST /api/packet/[packetId]/sign — public. body: { signedName, agreed: true }
 // One submit signs ALL pending rows in the packet. Each row's signed_text_snapshot
 // is a copy of ITS OWN document_text (never re-fetched), plus IP + user-agent.
+// After signing, emails the camper a COPY of the signed documents (a receipt) — for
+// BOTH in-person and remote — skipped if no email, and never allowed to fail the sign.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ packetId: string }> }) {
   try {
     const { packetId } = await params
@@ -18,7 +20,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const { data: rows, error } = await svc
       .from('signatures')
-      .select('id, status, document_text')
+      .select('id, status, document_text, document_title, sign_order, guest_id')
       .eq('packet_id', packetId)
     if (error || !rows || rows.length === 0) {
       return NextResponse.json({ error: 'This signing link is no longer valid.' }, { status: 404 })
@@ -51,6 +53,39 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .update({ status: 'signed', signed_at: now })
       .eq('packet_id', packetId)
       .neq('status', 'signed')
+
+    // Receipt email — the camper's signed COPY, for BOTH in-person and remote. NOT
+    // compensated and fully best-effort: the packet is signed and real, so a missing
+    // email or a send failure must never fail the signing.
+    try {
+      const guestId = rows.find(r => r.guest_id)?.guest_id
+      if (guestId) {
+        const [{ data: guest }, { data: settings }, { data: contract }] = await Promise.all([
+          svc.from('guests').select('name, email').eq('id', guestId).single(),
+          svc.from('settings').select('park_name, park_email').limit(1).single(),
+          svc.from('seasonal_contracts').select('season_year').eq('packet_id', packetId).maybeSingle(),
+        ])
+        if (guest?.email) {
+          const campgroundName = settings?.park_name || 'Campground'
+          const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
+          const replyToEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
+          const year = contract?.season_year || new Date(now).getFullYear()
+          const docs = [...rows]
+            .sort((a, b) => (a.sign_order || 0) - (b.sign_order || 0))
+            .map(r => ({ title: r.document_title || 'Document', text: r.document_text || '' }))
+          const signedAtLabel = new Date(now).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' })
+          await getResend().emails.send({
+            from: `${campgroundName} <${fromEmail}>`,
+            replyTo: replyToEmail,
+            to: guest.email,
+            subject: `Your signed ${year} seasonal packet — ${campgroundName}`,
+            html: packetReceiptHtml(campgroundName, guest.name || 'there', year, signedName, signedAtLabel, docs),
+          })
+        }
+      }
+    } catch {
+      // best-effort receipt; swallow — signing already succeeded
+    }
 
     return NextResponse.json({ success: true })
   } catch (e: any) {
