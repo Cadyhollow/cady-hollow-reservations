@@ -6,6 +6,9 @@ import { supabase } from '@/lib/supabase'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
 import SeasonalSections from '../SeasonalSections'
+import AddressEditor from '../AddressEditor'
+import RigEditor from '../RigEditor'
+import PartyEditor from '../PartyEditor'
 import toast, { Toaster } from 'react-hot-toast'
 
 type Occupant = { name: string; kind: 'adult' | 'child' }
@@ -224,14 +227,9 @@ export default function SeasonalCamperPage() {
           <button onClick={() => setRigOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{rigOpen ? 'Cancel' : 'Edit'}</button>
         </div>
         {rigOpen && (
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            {[['camper_type', 'Type', 'text'], ['camper_length', 'Length (ft)', 'number'], ['camper_amperage', 'Amperage', 'text'], ['camper_make', 'Make', 'text'], ['camper_model', 'Model', 'text'], ['camper_year', 'Year', 'number']].map(([k, label, type]) => (
-              <div key={k}>
-                <label className="block text-xs text-gray-500 mb-1">{label}</label>
-                <input type={type as string} value={rig[k as string] ?? ''} onChange={e => setRig({ ...rig, [k as string]: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-              </div>
-            ))}
-            <div className="col-span-2">
+          <div className="mt-3">
+            <RigEditor value={rig} onChange={setRig} />
+            <div className="mt-3">
               <button onClick={saveRig} disabled={savingRig} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingRig ? 'Saving…' : 'Save rig'}</button>
             </div>
           </div>
@@ -254,26 +252,9 @@ export default function SeasonalCamperPage() {
           </p>
         )}
         {addrOpen && (
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <div className="col-span-2">
-              <label className="block text-xs text-gray-500 mb-1">Street <span className="text-red-500">*</span></label>
-              <input value={addr.home_street ?? ''} onChange={e => setAddr({ ...addr, home_street: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">City <span className="text-red-500">*</span></label>
-              <input value={addr.home_city ?? ''} onChange={e => setAddr({ ...addr, home_city: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">State <span className="text-red-500">*</span></label>
-                <input value={addr.home_state ?? ''} onChange={e => setAddr({ ...addr, home_state: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">ZIP <span className="text-red-500">*</span></label>
-                <input value={addr.home_zip ?? ''} onChange={e => setAddr({ ...addr, home_zip: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="col-span-2">
+          <div className="mt-3">
+            <AddressEditor value={addr} onChange={setAddr} required />
+            <div className="mt-3">
               <button onClick={saveAddr} disabled={savingAddr} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingAddr ? 'Saving…' : 'Save address'}</button>
             </div>
           </div>
@@ -297,22 +278,7 @@ export default function SeasonalCamperPage() {
               <p className="text-sm text-gray-500 mt-0.5">{data?.guest?.name} · reviewed before sending</p>
             </div>
             <div className="px-6 py-4 space-y-4 max-h-[65vh] overflow-y-auto">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Party</p>
-                  <button onClick={() => setOccupants([...occupants, { name: '', kind: 'adult' }])} className="text-xs font-semibold" style={{ color: '#2E6B8A' }}>+ Add person</button>
-                </div>
-                {occupants.length === 0 && <p className="text-xs text-gray-400">No one added yet.</p>}
-                {occupants.map((o, i) => (
-                  <div key={i} className="flex items-center gap-2 mb-2">
-                    <input value={o.name} onChange={e => { const n = [...occupants]; n[i] = { ...o, name: e.target.value }; setOccupants(n) }} placeholder="Full name" className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                    <select value={o.kind} onChange={e => { const n = [...occupants]; n[i] = { ...o, kind: e.target.value as any }; setOccupants(n) }} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
-                      <option value="adult">Adult</option><option value="child">Child</option>
-                    </select>
-                    <button onClick={() => setOccupants(occupants.filter((_, j) => j !== i))} className="text-gray-400 hover:text-red-600 text-lg">×</button>
-                  </div>
-                ))}
-              </div>
+              <PartyEditor value={occupants} onChange={setOccupants} />
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Season opens</label>
