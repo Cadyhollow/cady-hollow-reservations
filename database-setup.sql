@@ -297,7 +297,11 @@ CREATE TABLE IF NOT EXISTS guests (
   camper_year integer,
   camper_type text,
   camper_length integer,
-  camper_amperage text
+  camper_amperage text,
+  home_street text,
+  home_city text,
+  home_state text,
+  home_zip text
 );
 
 -- Signatures (waiver / contract e-signatures).

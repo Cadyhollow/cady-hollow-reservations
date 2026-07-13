@@ -47,6 +47,10 @@ type GuestLike = {
   camper_make?: string | null
   camper_model?: string | null
   camper_year?: number | null
+  home_street?: string | null
+  home_city?: string | null
+  home_state?: string | null
+  home_zip?: string | null
 }
 type OccupantLike = { name?: string | null; kind?: string | null }
 type ContractLike = {
@@ -80,6 +84,17 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     pick(contract.camper_model, guest.camper_model),
   ].filter(Boolean).join(' ')
 
+  // Home address — structured on the guest, composed into a clean block with NO
+  // stray commas or empty lines when parts are missing. filter(Boolean) drops any
+  // null/'' part. Renders as multi-line in the packet's white-space:pre-wrap body.
+  //   full            -> "158 Cady Hollow Rd\nDuluth, PA 19023"
+  //   no state        -> "158 Cady Hollow Rd\nDuluth 19023"   (never "Duluth, , PA")
+  //   city only       -> "Duluth"
+  //   nothing on file -> ""
+  const cityState = [guest.home_city, guest.home_state].filter(Boolean).join(', ')
+  const cityStateZip = [cityState, guest.home_zip].filter(Boolean).join(' ')
+  const home_address = [guest.home_street, cityStateZip].filter(Boolean).join('\n')
+
   return {
     name: pick(guest.name),
     site_number: pick(contract.site_number, guest.site_number),
@@ -89,5 +104,6 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     party_names,
     camper_make_year,
     total_due: formatCents(contract.total_due_cents),
+    home_address,
   }
 }

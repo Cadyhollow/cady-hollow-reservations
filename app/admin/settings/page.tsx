@@ -546,6 +546,7 @@ export default function SettingsPage() {
                   ['{{party_names}}', 'occupants, comma-separated'],
                   ['{{camper_make_year}}', 'year make model'],
                   ['{{total_due}}', 'amount due'],
+                  ['{{home_address}}', 'home mailing address'],
                 ].map(([tok, desc]) => (
                   <span key={tok} className="whitespace-nowrap">
                     <code className="text-[11px] bg-white border border-gray-200 rounded px-1 py-0.5 text-gray-800">{tok}</code>

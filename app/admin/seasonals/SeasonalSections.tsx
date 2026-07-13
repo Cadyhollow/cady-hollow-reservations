@@ -36,6 +36,11 @@ const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
 
 export default function SeasonalSections({ data, mode }: { data: any; mode: Mode }) {
   const g = data.guest || {}
+  // Single-line home address, gap-safe (no stray commas): "Street, City, ST ZIP".
+  const homeAddressLine = [
+    g.home_street,
+    [[g.home_city, g.home_state].filter(Boolean).join(', '), g.home_zip].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ')
   const admin = mode === 'admin'
   const current = data.currentContract
   const prior = (data.contracts || []).filter((c: any) => c !== current)
@@ -51,6 +56,7 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
         <Row label="Email" value={g.email || '—'} />
         <Row label="Phone" value={g.phone || '—'} />
         <Row label="Site" value={g.site_number || '—'} />
+        <Row label="Home address" value={homeAddressLine || '—'} />
         <Row label="Seasonal since" value={fmtDate(g.season_start)} />
       </Section>
 

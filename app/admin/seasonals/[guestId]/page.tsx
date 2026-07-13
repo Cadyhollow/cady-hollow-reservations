@@ -23,6 +23,11 @@ export default function SeasonalCamperPage() {
   const [rig, setRig] = useState<any>({})
   const [savingRig, setSavingRig] = useState(false)
 
+  // Home address editor (writes to guests). Required for seasonal campers.
+  const [addrOpen, setAddrOpen] = useState(false)
+  const [addr, setAddr] = useState<any>({})
+  const [savingAddr, setSavingAddr] = useState(false)
+
   // Notes
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
@@ -49,7 +54,7 @@ export default function SeasonalCamperPage() {
       const res = await fetch(`/api/seasonals/guest/${guestId}?year=${year}`)
       const d = await res.json()
       if (!res.ok) setErr(d.error || 'Could not load camper.')
-      else { setData(d); setRig({ ...d.guest }) }
+      else { setData(d); setRig({ ...d.guest }); setAddr({ ...d.guest }) }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
   }
@@ -66,6 +71,17 @@ export default function SeasonalCamperPage() {
       camper_year: rig.camper_year ? parseInt(rig.camper_year) : null,
     }).eq('id', guestId)
     setSavingRig(false); setRigOpen(false); await load()
+  }
+
+  async function saveAddr() {
+    setSavingAddr(true)
+    await supabase.from('guests').update({
+      home_street: addr.home_street?.trim() || null,
+      home_city: addr.home_city?.trim() || null,
+      home_state: addr.home_state?.trim() || null,
+      home_zip: addr.home_zip?.trim() || null,
+    }).eq('id', guestId)
+    setSavingAddr(false); setAddrOpen(false); await load()
   }
 
   async function addNote() {
@@ -134,6 +150,8 @@ export default function SeasonalCamperPage() {
 
   const current = data?.currentContract
   const status = current?.status || 'none'
+  const g = data?.guest || {}
+  const hasAddress = !!(g.home_street && g.home_city && g.home_state && g.home_zip)
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
@@ -158,6 +176,12 @@ export default function SeasonalCamperPage() {
         </div>
       )}
 
+      {data && !hasAddress && (
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+          ⚠ Home address required for seasonal campers — add it below. It prints on the contract and is the mailing fallback if email delivery fails.
+        </div>
+      )}
+
       {data && <SeasonalSections data={data} mode="admin" />}
 
       {/* Rig editor (writes to guests) */}
@@ -176,6 +200,48 @@ export default function SeasonalCamperPage() {
             ))}
             <div className="col-span-2">
               <button onClick={saveRig} disabled={savingRig} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingRig ? 'Saving…' : 'Save rig'}</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Home address editor (writes to guests) — required for seasonal campers */}
+      <div className="bg-white rounded-xl border p-5 mb-4" style={{ borderColor: hasAddress ? '#f3f4f6' : '#fde68a' }}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold uppercase tracking-wide" style={{ color: hasAddress ? '#9ca3af' : '#b45309' }}>
+            Home address {hasAddress ? '(saved to the camper record)' : '· required'}
+          </h3>
+          <button onClick={() => setAddrOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{addrOpen ? 'Cancel' : 'Edit'}</button>
+        </div>
+        {!addrOpen && (
+          <p className="text-sm mt-2" style={{ color: hasAddress ? '#374151' : '#9ca3af' }}>
+            {hasAddress
+              ? <>{g.home_street}<br />{[[g.home_city, g.home_state].filter(Boolean).join(', '), g.home_zip].filter(Boolean).join(' ')}</>
+              : 'No address on file.'}
+          </p>
+        )}
+        {addrOpen && (
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <div className="col-span-2">
+              <label className="block text-xs text-gray-500 mb-1">Street <span className="text-red-500">*</span></label>
+              <input value={addr.home_street ?? ''} onChange={e => setAddr({ ...addr, home_street: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">City <span className="text-red-500">*</span></label>
+              <input value={addr.home_city ?? ''} onChange={e => setAddr({ ...addr, home_city: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">State <span className="text-red-500">*</span></label>
+                <input value={addr.home_state ?? ''} onChange={e => setAddr({ ...addr, home_state: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">ZIP <span className="text-red-500">*</span></label>
+                <input value={addr.home_zip ?? ''} onChange={e => setAddr({ ...addr, home_zip: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+            </div>
+            <div className="col-span-2">
+              <button onClick={saveAddr} disabled={savingAddr} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingAddr ? 'Saving…' : 'Save address'}</button>
             </div>
           </div>
         )}
