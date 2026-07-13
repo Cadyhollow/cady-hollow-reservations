@@ -55,6 +55,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const waiverText = (settings as any)?.waiver_text || '' // no merge fields today; rendered as-is
     const contractTitle = `${contract.season_year} Seasonal Admission Agreement`
 
+    // Never freeze an empty legal document. If either body renders empty or
+    // whitespace-only, block the send BEFORE any rows are written — the draft is
+    // left untouched. (This is why an early send once froze an empty contract.)
+    if (!contractText.trim()) {
+      return NextResponse.json({ error: 'Contract text is empty — set the seasonal contract body in Settings before sending.' }, { status: 400 })
+    }
+    if (!waiverText.trim()) {
+      return NextResponse.json({ error: 'Waiver text is empty — set the liability waiver in Settings before sending.' }, { status: 400 })
+    }
+
     const packet_id = randomUUID()
 
     // Row A — the contract (sign_order 1)
