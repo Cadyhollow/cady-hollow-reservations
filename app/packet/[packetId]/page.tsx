@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 
 type Doc = {
   id: string
@@ -15,6 +15,7 @@ type View = 'loading' | 'not_found' | 'error' | 'ready' | 'signed'
 
 export default function PacketPage() {
   const params = useParams()
+  const router = useRouter()
   const packetId = params.packetId as string
 
   const [view, setView] = useState<View>('loading')
@@ -52,7 +53,16 @@ export default function PacketPage() {
         body: JSON.stringify({ signedName: typedName.trim(), agreed: true }),
       })
       const d = await res.json()
-      if (d.success) { await load() } // re-fetch → signed view with dates
+      if (d.success) {
+        // In-person kiosk (admin iPad): return to admin and drop the sign URL from
+        // history instead of showing the camper-facing confirmation. Remote campers
+        // (no kiosk flag) get the normal signed view.
+        if (new URLSearchParams(window.location.search).get('kiosk') === '1') {
+          router.replace('/admin/seasonals')
+          return
+        }
+        await load() // re-fetch → signed view with dates
+      }
       else { setSubmitError(d.error || 'Could not record your signature.') }
     } catch {
       setSubmitError('Something went wrong. Please try again.')

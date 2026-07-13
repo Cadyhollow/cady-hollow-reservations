@@ -122,9 +122,31 @@ export default function NewSeasonalCamperPage() {
     return id
   }
 
-  // Stubbed end actions — wired in Phase 3.
-  function onSignNow() { toast('Sign now is wired in Phase 3.') }
-  function onSendPacket() { toast('Send packet is wired in Phase 3.') }
+  // Sign in person: freeze (no email), then hand the iPad to the camper on the
+  // signing page. kiosk=1 tells the packet page to return here after signing
+  // instead of leaving the sign URL in the shared browser (bearer-secret hygiene).
+  async function onSignNow() {
+    if (!draftId) return
+    setSaving(true)
+    const res = await fetch(`/api/seasonal-contracts/${draftId}/sign-now`, { method: 'POST' })
+    const d = await res.json()
+    setSaving(false)
+    if (!res.ok || !d.packet_id) { toast.error(d.error || 'Could not open the signing page.'); return }
+    router.push(`/packet/${d.packet_id}?kiosk=1`)
+  }
+
+  // Send the remote packet via the existing send flow (freeze + invite email).
+  async function onSendPacket() {
+    if (!draftId) return
+    setSaving(true)
+    const res = await fetch(`/api/seasonal-contracts/${draftId}/send`, { method: 'POST' })
+    const d = await res.json()
+    setSaving(false)
+    if (!res.ok || !d.ok) { toast.error(d.error || 'Could not send the packet.'); return }
+    if (d.emailed) toast.success('Packet emailed to the camper.')
+    else toast('Packet created, but the email did not send — resend from the camper page.', { icon: '⚠️' })
+    router.push('/admin/seasonals')
+  }
 
   const cardCls = 'bg-white rounded-xl border border-gray-100 p-5 mb-4'
   const inp = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm'
