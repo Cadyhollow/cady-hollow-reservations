@@ -271,7 +271,7 @@ function BookingForm() {
       try {
         const payments = (window as any).Square.payments(
           process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          'L42H3PRBWB5CJ'
+          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!
         )
         squareRef.current = payments
         const card = await payments.card()
