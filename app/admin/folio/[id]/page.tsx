@@ -1,8 +1,9 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -122,9 +123,8 @@ export default function FolioPage() {
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
   const [cardEntryMode, setCardEntryMode] = useState<'terminal' | 'manual'>('terminal')
-  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
-  const [squareCardRef, setSquareCardRef] = useState<any>(null)
-  const [squareInstanceRef, setSquareInstanceRef] = useState<any>(null)
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [chargingCard, setChargingCard] = useState(false)
   const [showRefund, setShowRefund] = useState(false)
   const [refundPayment, setRefundPayment] = useState<any>(null)
@@ -199,34 +199,12 @@ export default function FolioPage() {
     setLoading(false)
   }
 
-  async function loadSquareCard() {
-    if (squareCardLoaded) return
-    const existing = document.getElementById('admin-square-card-container')
-    if (!existing) return
-    try {
-      let sq = squareInstanceRef
-      if (!sq) {
-        const script = document.createElement('script')
-        script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-          ? 'https://web.squarecdn.com/v1/square.js'
-          : 'https://sandbox.web.squarecdn.com/v1/square.js'
-        await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
-        setSquareInstanceRef(sq)
-      }
-      const card = await sq.card()
-      await card.attach('#admin-square-card-container')
-      setSquareCardRef(card)
-      setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e) }
-  }
-
   async function chargeManualCard() {
-    if (!squareCardRef || !folio) return
+    if (!folio) return
     setChargingCard(true)
     try {
-      const result = await squareCardRef.tokenize()
-      if (result.status !== 'OK') {
+      const tok = await cardRef.current?.tokenize()
+      if (!tok?.ok) {
         setChargingCard(false)
         return
       }
@@ -240,7 +218,7 @@ export default function FolioPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceId: result.token,
+          sourceId: tok.token,
           folioId: folio.id,
           amount: totalAmount,
           surchargeAmount,
@@ -254,8 +232,7 @@ export default function FolioPage() {
         setPaymentAmount('')
         setPaymentNote('')
         setCardEntryMode('terminal')
-        setSquareCardLoaded(false)
-        setSquareCardRef(null)
+        setCardReady(false)
         await loadFolioData(folio.id)
       } else {
         alert(data.error || 'Card payment failed')
@@ -971,7 +948,7 @@ export default function FolioPage() {
                       💳 Use Terminal
                     </button>
                   )}
-                  <button onClick={() => { setCardEntryMode('manual'); setTimeout(loadSquareCard, 100) }}
+                  <button onClick={() => setCardEntryMode('manual')}
                     style={{ padding: '10px', border: '2px solid', borderColor: cardEntryMode === 'manual' ? '#2E6B8A' : '#e5e7eb', borderRadius: 8, background: cardEntryMode === 'manual' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'manual' ? '#2E6B8A' : '#374151', gridColumn: terminalDeviceId ? 'auto' : '1 / -1' }}>
                     ⌨️ Enter Card Manually
                   </button>
@@ -1056,8 +1033,7 @@ export default function FolioPage() {
             {paymentMethod === 'card' && cardEntryMode === 'manual' && (
               <div style={{ marginBottom: 16 }}>
                 <label style={ml}>Card Details</label>
-                <div id='admin-square-card-container' style={{ minHeight: 89, border: '1px solid #d1d5db', borderRadius: 8, padding: 4 }} />
-                {!squareCardLoaded && <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Loading card form...</p>}
+                <SquareCardField ref={cardRef} onReady={setCardReady} />
                 {cardSurcharge > 0 && !waiveFee && (
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginTop: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1070,8 +1046,8 @@ export default function FolioPage() {
                 <input style={{ ...si, marginBottom: 12 }} placeholder='e.g. phone reservation' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
                 <button
                   onClick={chargeManualCard}
-                  disabled={chargingCard || !squareCardLoaded || !paymentAmount}
-                  style={{ width: '100%', background: chargingCard || !squareCardLoaded || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+                  disabled={chargingCard || !cardReady || !paymentAmount}
+                  style={{ width: '100%', background: chargingCard || !cardReady || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
                 >
                   {chargingCard ? 'Processing...' : `Charge Card · $${paymentAmount || '0.00'}`}
                 </button>

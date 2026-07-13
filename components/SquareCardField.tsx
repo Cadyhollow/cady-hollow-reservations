@@ -85,11 +85,12 @@ export function useSquareCard(containerId: string) {
 //   const r = await cardRef.current?.tokenize()  // then charge r.token yourself
 export type SquareCardHandle = { tokenize: () => Promise<SquareTokenResult>; ready: boolean }
 
-const SquareCardField = forwardRef<SquareCardHandle, { className?: string }>(
-  function SquareCardField({ className }, ref) {
+const SquareCardField = forwardRef<SquareCardHandle, { className?: string; onReady?: (ready: boolean) => void }>(
+  function SquareCardField({ className, onReady }, ref) {
     const containerId = 'sq-card-' + useId().replace(/[^a-zA-Z0-9_-]/g, '')
     const { ready, error, tokenize } = useSquareCard(containerId)
     useImperativeHandle(ref, () => ({ tokenize, ready }), [ready])
+    useEffect(() => { onReady?.(ready) }, [ready, onReady]) // let the parent gate its charge button
     return (
       <div className={className}>
         <div id={containerId} style={{ minHeight: 89, border: '1px solid #d1d5db', borderRadius: 8, padding: 4 }} />
