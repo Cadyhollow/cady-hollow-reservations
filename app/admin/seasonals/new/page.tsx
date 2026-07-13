@@ -38,6 +38,8 @@ export default function NewSeasonalCamperPage() {
 
   const [draftId, setDraftId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [existingId, setExistingId] = useState<string | null>(null)   // set when renewing an existing seasonal
+  const [alreadyStatus, setAlreadyStatus] = useState<string | null>(null) // 'sent'|'signed' if one exists this year
 
   // Summit gate on the freshly-loaded plan; also grab the templates for the preview.
   useEffect(() => {
@@ -47,9 +49,32 @@ export default function NewSeasonalCamperPage() {
     })
   }, [])
 
+  // Existing seasonal (?guestId=…): prefill from the guest record; clone LAST YEAR's
+  // contract party forward (always editable). Read from window.location so we don't
+  // pull in useSearchParams (which would force a Suspense boundary).
+  useEffect(() => {
+    const gid = new URLSearchParams(window.location.search).get('guestId')
+    if (!gid) return
+    setExistingId(gid)
+    fetch(`/api/seasonals/guest/${gid}?year=${cy}`)
+      .then(r => r.json())
+      .then(d => {
+        const g = d?.guest
+        if (!g) return
+        setName(g.name || ''); setEmail(g.email || ''); setPhone(g.phone || ''); setSiteNumber(g.site_number || '')
+        setAddr({ home_street: g.home_street, home_city: g.home_city, home_state: g.home_state, home_zip: g.home_zip })
+        setRig({ camper_type: g.camper_type, camper_length: g.camper_length, camper_amperage: g.camper_amperage, camper_make: g.camper_make, camper_model: g.camper_model, camper_year: g.camper_year })
+        if (g.season_start) setSeasonOpens(String(g.season_start).slice(0, 10))
+        if (g.season_end) setSeasonCloses(String(g.season_end).slice(0, 10))
+        const lastYear = (d.contracts || []).find((c: any) => c.season_year === cy - 1)
+        if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants)
+      })
+      .catch(() => {})
+  }, [])
+
   // If any contract-relevant field changes after a draft was prepared, the draft is
   // stale — force a re-save before the action buttons re-enable.
-  function invalidateDraft() { if (draftId) setDraftId(null) }
+  function invalidateDraft() { if (draftId) setDraftId(null); if (alreadyStatus) setAlreadyStatus(null) }
 
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null
 
@@ -87,6 +112,7 @@ export default function NewSeasonalCamperPage() {
     const gRes = await fetch('/api/seasonals/guest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        id: existingId || undefined,   // update the existing guest, don't create a duplicate
         name, email, phone, site_number: siteNumber,
         season_start: seasonOpens || null, season_end: seasonCloses || null,
         ...addr, ...rig,
@@ -103,6 +129,14 @@ export default function NewSeasonalCamperPage() {
     })
     const cData = await cRes.json()
     if (!cRes.ok || !cData.contract) { setSaving(false); toast.error(cData.error || 'Could not create the contract draft.'); return null }
+    // Idempotent create returns an existing row — if it's already sent/signed this
+    // year, we can't re-freeze it. Surface that instead of erroring.
+    if (cData.contract.status !== 'draft') {
+      setSaving(false)
+      setAlreadyStatus(cData.contract.status)
+      toast(`This camper already has a ${cData.contract.status} ${seasonYear} contract.`)
+      return null
+    }
     const id = cData.contract.id
 
     const pRes = await fetch(`/api/seasonal-contracts/${id}`, {
@@ -157,9 +191,21 @@ export default function NewSeasonalCamperPage() {
       <Toaster />
       <div className="mb-4">
         <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
-        <h2 className="text-2xl font-bold text-gray-900">New Seasonal Camper</h2>
+        <h2 className="text-2xl font-bold text-gray-900">{existingId ? 'Seasonal Camper' : 'New Seasonal Camper'}</h2>
         <p className="text-sm text-gray-500">One form — enter their details, then sign in person or email the packet.</p>
       </div>
+
+      {existingId && (
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+          Renewing an existing seasonal — details pre-filled from their record, party carried over from last year. Review and adjust as needed.
+        </div>
+      )}
+      {alreadyStatus && (
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+          This camper already has a <strong>{alreadyStatus}</strong> {seasonYear} contract.{' '}
+          {existingId && <Link href={`/admin/seasonals/${existingId}`} className="underline font-semibold">View it</Link>} — or pick a different season year above.
+        </div>
+      )}
 
       {/* WHO */}
       <div className={cardCls}>

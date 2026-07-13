@@ -193,6 +193,7 @@ export default function SeasonalCamperPage() {
           <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {year} season</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href={`/admin/seasonals/new?guestId=${guestId}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
           <label className="text-xs font-medium text-gray-500">Season</label>
           <select value={year} onChange={e => setYear(parseInt(e.target.value))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900">
