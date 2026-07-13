@@ -34,6 +34,8 @@ export default function SeasonalCamperPage() {
   const [addr, setAddr] = useState<any>({})
   const [savingAddr, setSavingAddr] = useState(false)
 
+  const [removing, setRemoving] = useState(false)
+
   // Notes
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
@@ -92,6 +94,20 @@ export default function SeasonalCamperPage() {
     setSavingAddr(false)
     if (error) { toast.error('Could not save address: ' + error.message); return } // keep the editor open
     setAddrOpen(false); await load()
+  }
+
+  // Remove from the Seasonals roster — just unchecks is_seasonal. Keeps the guest
+  // and ALL their records (contracts, signatures, billing); reversible from the
+  // guest directory. Not a delete.
+  async function removeFromSeasonals() {
+    const who = data?.guest?.name || 'this camper'
+    if (!confirm(`Remove ${who} from the Seasonals list?\n\nThis only unchecks “Seasonal” — all their records (contracts, signatures, billing) are kept, and you can re-add them anytime from the guest directory.`)) return
+    setRemoving(true)
+    const { error } = await supabase.from('guests').update({ is_seasonal: false }).eq('id', guestId)
+    setRemoving(false)
+    if (error) { toast.error('Could not remove: ' + error.message); return }
+    toast.success(`${who} removed from seasonals.`)
+    router.push('/admin/seasonals')
   }
 
   async function addNote() {
@@ -267,6 +283,15 @@ export default function SeasonalCamperPage() {
         <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-2">Add a note</h3>
         <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Add a note (append-only — can't be edited or deleted)" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
         <div className="mt-2"><button onClick={addNote} disabled={savingNote || !note.trim()} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{savingNote ? 'Adding…' : 'Add note'}</button></div>
+      </div>
+
+      {/* Remove from seasonals — unchecks is_seasonal; keeps all records, reversible */}
+      <div className="mb-4 flex justify-end">
+        <button onClick={removeFromSeasonals} disabled={removing}
+          className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
+          style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
+          {removing ? 'Removing…' : 'Remove from seasonals'}
+        </button>
       </div>
 
       {/* Send-packet modal */}
