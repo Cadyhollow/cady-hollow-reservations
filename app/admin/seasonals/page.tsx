@@ -110,6 +110,11 @@ export default function SeasonalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Link href="/admin/seasonals/new"
+            className="px-3 py-2 text-xs font-bold rounded-lg text-white"
+            style={{ background: '#2E6B8A' }}>
+            + New Seasonal Camper
+          </Link>
           <select value={year} onChange={e => setYear(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
             {[year + 1, year, year - 1, year - 2].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
