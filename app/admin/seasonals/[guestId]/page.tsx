@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
 import SeasonalSections from '../SeasonalSections'
+import toast, { Toaster } from 'react-hot-toast'
 
 type Occupant = { name: string; kind: 'adult' | 'child' }
 
@@ -64,7 +65,7 @@ export default function SeasonalCamperPage() {
 
   async function saveRig() {
     setSavingRig(true)
-    await supabase.from('guests').update({
+    const { error } = await supabase.from('guests').update({
       camper_type: rig.camper_type || null,
       camper_length: rig.camper_length ? parseInt(rig.camper_length) : null,
       camper_amperage: rig.camper_amperage || null,
@@ -72,18 +73,22 @@ export default function SeasonalCamperPage() {
       camper_model: rig.camper_model || null,
       camper_year: rig.camper_year ? parseInt(rig.camper_year) : null,
     }).eq('id', guestId)
-    setSavingRig(false); setRigOpen(false); await load()
+    setSavingRig(false)
+    if (error) { toast.error('Could not save rig: ' + error.message); return } // keep the editor open
+    setRigOpen(false); await load()
   }
 
   async function saveAddr() {
     setSavingAddr(true)
-    await supabase.from('guests').update({
+    const { error } = await supabase.from('guests').update({
       home_street: addr.home_street?.trim() || null,
       home_city: addr.home_city?.trim() || null,
       home_state: addr.home_state?.trim() || null,
       home_zip: addr.home_zip?.trim() || null,
     }).eq('id', guestId)
-    setSavingAddr(false); setAddrOpen(false); await load()
+    setSavingAddr(false)
+    if (error) { toast.error('Could not save address: ' + error.message); return } // keep the editor open
+    setAddrOpen(false); await load()
   }
 
   async function addNote() {
@@ -160,6 +165,7 @@ export default function SeasonalCamperPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
+      <Toaster />
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
           <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
