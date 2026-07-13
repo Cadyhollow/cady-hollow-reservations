@@ -8,7 +8,7 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } f
 // public book → /api/payment) and its own post-charge flow. App ID + location ID come
 // from env (NEXT_PUBLIC_SQUARE_APP_ID / NEXT_PUBLIC_SQUARE_LOCATION_ID) — no hardcode.
 
-// Load the Web Payments SDK exactly once per page (idempotent across all fields).
+// Load the Web Payments SDK exactly once per page.
 let sdkPromise: Promise<void> | null = null
 function loadSquareSdk(): Promise<void> {
   if (typeof window !== 'undefined' && (window as any).Square) return Promise.resolve()
@@ -25,11 +25,33 @@ function loadSquareSdk(): Promise<void> {
   return sdkPromise
 }
 
+// ONE payments instance for the page. Square allows a single card per location at a
+// time; reusing one instance (rather than newing it per mount) keeps card create/
+// destroy well-defined.
+let paymentsInstance: any = null
+async function getPayments(): Promise<any> {
+  await loadSquareSdk()
+  if (!paymentsInstance) {
+    paymentsInstance = (window as any).Square.payments(
+      process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
+      process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!,
+    )
+  }
+  return paymentsInstance
+}
+
+// Serialize every attach/destroy across ALL mounts. This is the fix for the
+// mount→destroy→remount bug: switching Cash→Card→Cash→Card unmounts/remounts the
+// field, and an un-serialized destroy() from the old mount would still be in flight
+// when the new mount's attach() runs — Square then leaves the new container EMPTY.
+// Chaining guarantees the previous card is fully destroyed before the next attaches.
+let cardOpQueue: Promise<void> = Promise.resolve()
+
 export type SquareTokenResult = { ok: true; token: string } | { ok: false; error: string }
 
-// Hook: owns the SDK load + card lifecycle for a container (by id). Returns ready
-// state, any load error, and tokenize(). Destroys the card on unmount so the Square
-// iframe never leaks (the source of the earlier folio→Back hang).
+// Hook: owns the card lifecycle for a container (by id). Returns ready state, any
+// load error, and tokenize(). Destroys the card on unmount so the Square iframe never
+// leaks — serialized so the next mount re-attaches cleanly.
 export function useSquareCard(containerId: string) {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,29 +59,32 @@ export function useSquareCard(containerId: string) {
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+
+    cardOpQueue = cardOpQueue.then(async () => {
+      if (cancelled) return
       try {
-        await loadSquareSdk()
+        const payments = await getPayments()
         if (cancelled || !document.getElementById(containerId)) return
-        const payments = (window as any).Square.payments(
-          process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!,
-        )
         const card = await payments.card()
-        if (cancelled) { try { await card.destroy() } catch { /* noop */ } ; return }
+        // Component may have unmounted while awaiting — destroy and bail so we don't
+        // attach an orphan or setState after unmount.
+        if (cancelled) { await card.destroy().catch(() => {}); return }
         await card.attach('#' + containerId)
+        if (cancelled) { await card.destroy().catch(() => {}); return }
         cardRef.current = card
         setReady(true)
       } catch (e: any) {
         if (!cancelled) setError(e?.message || 'Could not load the card form.')
       }
-    })()
+    }).catch(() => {})
+
     return () => {
       cancelled = true
+      setReady(false)
       const c = cardRef.current
       cardRef.current = null
-      setReady(false)
-      if (c) { try { c.destroy() } catch { /* noop */ } } // tear down the iframe on unmount
+      // Chain the destroy so the NEXT mount's attach waits for it to finish.
+      if (c) cardOpQueue = cardOpQueue.then(() => c.destroy().catch(() => {}))
     }
   }, [containerId])
 
@@ -81,7 +106,7 @@ export function useSquareCard(containerId: string) {
 // two fields on one page can't collide) and exposes tokenize()/ready to the parent
 // via ref. Usage:
 //   const cardRef = useRef<SquareCardHandle>(null)
-//   {mode === 'manual' && <SquareCardField ref={cardRef} />}
+//   {mode === 'manual' && <SquareCardField ref={cardRef} onReady={setCardReady} />}
 //   const r = await cardRef.current?.tokenize()  // then charge r.token yourself
 export type SquareCardHandle = { tokenize: () => Promise<SquareTokenResult>; ready: boolean }
 
