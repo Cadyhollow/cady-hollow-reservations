@@ -94,11 +94,18 @@ export default function SeasonalCamperPage() {
   async function addNote() {
     if (!note.trim()) return
     setSavingNote(true)
-    await fetch('/api/guest-notes', {
+    const res = await fetch('/api/guest-notes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ guest_id: guestId, body: note.trim() }),
     })
-    setNote(''); setSavingNote(false); await load()
+    setSavingNote(false)
+    if (!res.ok) {
+      let msg = 'Could not add note.'
+      try { const e = await res.json(); if (e?.error) msg = 'Could not add note: ' + e.error } catch {}
+      toast.error(msg + ' Your note was kept — try again.') // note text deliberately NOT cleared
+      return
+    }
+    setNote(''); await load()
   }
 
   async function openSendModal() {
@@ -125,8 +132,10 @@ export default function SeasonalCamperPage() {
   async function saveAndSend() {
     if (!draft) return
     setWorking(true); setSendResult(null)
-    // Save the staff-edited fields first (draft-only).
-    await fetch(`/api/seasonal-contracts/${draft.id}`, {
+    // 1) Persist the staff-edited fields FIRST. Send FREEZES the contract into a
+    // legal document, so if this save fails we ABORT — never send on top of unsaved
+    // edits (that would freeze wrong data). Editor stays open; nothing is sent.
+    const saveRes = await fetch(`/api/seasonal-contracts/${draft.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         occupants,
@@ -135,6 +144,14 @@ export default function SeasonalCamperPage() {
         season_closes: closes || null,
       }),
     })
+    if (!saveRes.ok) {
+      let msg = 'Could not save the edits — packet NOT sent.'
+      try { const e = await saveRes.json(); if (e?.error) msg = `Could not save the edits (${e.error}) — packet NOT sent.` } catch {}
+      setWorking(false)
+      toast.error(msg)
+      return
+    }
+    // 2) Edits are confirmed saved → only now freeze + send.
     const res = await fetch(`/api/seasonal-contracts/${draft.id}/send`, { method: 'POST' })
     const d = await res.json()
     setWorking(false)
