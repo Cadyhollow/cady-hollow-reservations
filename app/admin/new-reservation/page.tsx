@@ -141,7 +141,7 @@ export default function NewReservationWizard() {
             : 'https://sandbox.web.squarecdn.com/v1/square.js'
           await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
         }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
         setSquareInstance(sq)
       }
       const card = await sq.card()
