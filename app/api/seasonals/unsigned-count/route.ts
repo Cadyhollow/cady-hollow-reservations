@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { currentSeasonYear } from '@/lib/season'
 
 // GET /api/seasonals/unsigned-count?year=YYYY — summit-gated (fail closed).
 //
@@ -17,7 +18,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
   }
   const url = new URL(request.url)
-  const year = parseInt(url.searchParams.get('year') || '', 10) || new Date().getFullYear()
+  const year = parseInt(url.searchParams.get('year') || '', 10) || currentSeasonYear()
 
   const [{ count: total }, { count: signed }] = await Promise.all([
     svc.from('guests').select('*', { count: 'exact', head: true }).eq('is_seasonal', true),

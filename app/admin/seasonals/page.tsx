@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { planAtLeast } from '@/lib/plan'
+import { currentSeasonYear } from '@/lib/season'
 
 type Row = {
   guest_id: string
@@ -34,7 +35,7 @@ export default function SeasonalsPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<Row[]>([])
-  const [year, setYear] = useState<number>(new Date().getFullYear())
+  const [year, setYear] = useState<number>(currentSeasonYear())
   const [signed, setSigned] = useState(0)
   const [total, setTotal] = useState(0)
   const [unsignedOnly, setUnsignedOnly] = useState(false)
@@ -184,6 +185,9 @@ export default function SeasonalsPage() {
                   <>
                     <p>Create <strong>{clonePreview.would_create}</strong> new draft{clonePreview.would_create === 1 ? '' : 's'} for <strong>{clonePreview.to_year}</strong> from <strong>{clonePreview.from_year}</strong>’s seasonal campers.</p>
                     {clonePreview.would_skip > 0 && <p className="text-gray-500">{clonePreview.would_skip} already have a {clonePreview.to_year} contract and will be skipped.</p>}
+                    {clonePreview.to_year !== currentSeasonYear() && (
+                      <p className="bg-amber-50 border border-amber-200 text-amber-800 rounded px-2 py-1.5 text-xs">⚠ You&rsquo;re creating <strong>{clonePreview.to_year}</strong> contracts, but the current season is <strong>{currentSeasonYear()}</strong>. Double-check the year.</p>
+                    )}
                     <p className="text-xs text-gray-500">Drafts only — occupants and amount due carry over; site and rig are refreshed from each guest. Nothing is sent.</p>
                   </>
                 ) : null

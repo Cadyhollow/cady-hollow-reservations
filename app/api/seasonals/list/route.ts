@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { currentSeasonYear } from '@/lib/season'
 
 // GET /api/seasonals/list?year=YYYY — summit-gated. One aggregated payload for the
 // /admin/seasonals list (seasonal_contracts + guest_notes are RLS-zero-policy, so
@@ -8,7 +9,7 @@ export async function GET(request: NextRequest) {
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
 
   const url = new URL(request.url)
-  const year = parseInt(url.searchParams.get('year') || '', 10) || new Date().getFullYear()
+  const year = parseInt(url.searchParams.get('year') || '', 10) || currentSeasonYear()
 
   const { data: guests } = await svc.from('guests')
     .select('id, name, site_number')

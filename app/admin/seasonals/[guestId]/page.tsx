@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { planAtLeast } from '@/lib/plan'
+import { currentSeasonYear } from '@/lib/season'
 import SeasonalSections from '../SeasonalSections'
 
 type Occupant = { name: string; kind: 'adult' | 'child' }
@@ -12,7 +13,8 @@ export default function SeasonalCamperPage() {
   const params = useParams()
   const router = useRouter()
   const guestId = params.guestId as string
-  const year = new Date().getFullYear()
+  const cy = currentSeasonYear()
+  const [year, setYear] = useState(cy)   // the season being viewed/acted on — a forced, visible choice
 
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -58,7 +60,7 @@ export default function SeasonalCamperPage() {
     } catch { setErr('Could not load camper.') }
     setLoading(false)
   }
-  useEffect(() => { load() }, [guestId])
+  useEffect(() => { load() }, [guestId, year])
 
   async function saveRig() {
     setSavingRig(true)
@@ -95,6 +97,9 @@ export default function SeasonalCamperPage() {
   }
 
   async function openSendModal() {
+    // Backstop against an off-year send: the year is already visible in the picker
+    // and the button, but confirm if it deviates from the computed current season.
+    if (year !== cy && !window.confirm(`Creating a ${year} contract — the current season is ${cy}. Is that right?`)) return
     setWorking(true); setSendResult(null)
     const res = await fetch('/api/seasonal-contracts/create', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -162,11 +167,16 @@ export default function SeasonalCamperPage() {
           <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {year} season</p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="text-xs font-medium text-gray-500">Season</label>
+          <select value={year} onChange={e => setYear(parseInt(e.target.value))}
+            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900">
+            {[cy - 1, cy, cy + 1].map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
           {status === 'signed'
             ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f0fdf4', color: '#15803d' }}>✓ Packet signed</span>
             : status === 'sent'
               ? <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{working ? '…' : '↻ Resend email'}</button>
-              : <button onClick={openSendModal} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : '✉ Send Packet'}</button>}
+              : <button onClick={openSendModal} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Send ${year} packet`}</button>}
         </div>
       </div>
 
