@@ -50,6 +50,7 @@ const defaultSettings = {
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
   waiver_enabled: true,
   waiver_text: '',
+  contract_text: '',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
@@ -122,6 +123,7 @@ export default function SettingsPage() {
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
         waiver_enabled: data.waiver_enabled !== false,
         waiver_text: data.waiver_text || '',
+        contract_text: data.contract_text || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         deposit_type: data.deposit_type || 'first_night',
@@ -196,6 +198,7 @@ export default function SettingsPage() {
       closed_season_message: form.closed_season_message,
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
+      contract_text: form.contract_text,
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
@@ -523,6 +526,41 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {/* Seasonal Contract — summit only */}
+        {planAtLeast(plan, 'summit') && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Seasonal Contract</h3>
+            <p className="text-sm text-gray-500 mb-4">The body of the seasonal admission agreement sent to seasonal campers. Insert the merge fields below where each camper&rsquo;s details should appear — they&rsquo;re filled in when the packet is generated.</p>
+            {/* Merge fields — exactly the tokens buildContractVars() in lib/contracts.ts produces.
+                Keep this list in sync with that function; any other {{token}} renders blank. */}
+            <div className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Available merge fields</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-gray-600">
+                {[
+                  ['{{name}}', 'camper name'],
+                  ['{{site_number}}', 'site'],
+                  ['{{year}}', 'season year'],
+                  ['{{opens}}', 'season opens (date)'],
+                  ['{{closes}}', 'season closes (date)'],
+                  ['{{party_names}}', 'occupants, comma-separated'],
+                  ['{{camper_make_year}}', 'year make model'],
+                  ['{{total_due}}', 'amount due'],
+                ].map(([tok, desc]) => (
+                  <span key={tok} className="whitespace-nowrap">
+                    <code className="text-[11px] bg-white border border-gray-200 rounded px-1 py-0.5 text-gray-800">{tok}</code>
+                    <span className="text-gray-400 ml-1">{desc}</span>
+                  </span>
+                ))}
+              </div>
+              <p className="text-[11px] text-gray-400 mt-2">Any other <code className="bg-white border border-gray-200 rounded px-1">{'{{token}}'}</code> renders as blank.</p>
+            </div>
+            <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={16}
+              placeholder="Enter the seasonal admission agreement text. Use the merge fields above where each camper's details should appear..."
+              value={form.contract_text} onChange={e => setForm({ ...form, contract_text: e.target.value })} />
+            <p className="text-xs text-gray-400 mt-2">💡 Tip: Consult with a legal professional to ensure this agreement is appropriate for your property and jurisdiction.</p>
+          </div>
+        )}
 
         {/* Maintenance Mode */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">

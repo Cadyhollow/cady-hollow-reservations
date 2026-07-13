@@ -49,6 +49,7 @@ export default function AdminDashboard() {
   const [departuresToday, setDeparturesToday] = useState<any[]>([])
   const [walkinCountToday, setWalkinCountToday] = useState(0)
   const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
+  const [seasonalStats, setSeasonalStats] = useState<{ season_year: number; total: number; signed: number; unsigned: number } | null>(null)
 
   useEffect(() => {
     const stored = localStorage.getItem('resonation_dashboard_view')
@@ -65,6 +66,14 @@ export default function AdminDashboard() {
   useEffect(() => { fetchArrivalsFor(arrivalsDate) }, [arrivalsDate])
 
   async function fetchAll() {
+    // Owner seasonal-contracts card (summit only). Fired here so it runs in PARALLEL
+    // with the main dashboard load below and never blocks it — no await. 403s cheaply
+    // on non-summit; the card renders only for owner + summit once this resolves.
+    fetch('/api/seasonals/unsigned-count')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d) setSeasonalStats(d) })
+      .catch(() => {})
+
     const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const now = new Date()
     const today = ymd(now)
@@ -384,6 +393,29 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+
+      {/* Owner-only seasonal contracts card — summit-gated. Hidden for staff view,
+          non-summit plans, and when there are no seasonal campers. */}
+      {dashboardView === 'owner' && planAtLeast(plan, 'summit') && seasonalStats && seasonalStats.total > 0 && (
+        <Link href="/admin/seasonals" className="block mb-8">
+          <div className="rounded-xl border p-4 shadow-sm hover:shadow-md transition-all flex items-center justify-between"
+            style={{ background: seasonalStats.unsigned > 0 ? '#fffbeb' : '#f0fdf4', borderColor: seasonalStats.unsigned > 0 ? '#fde68a' : '#bbf7d0' }}>
+            <div>
+              <p className="text-xs font-semibold mb-1" style={{ color: seasonalStats.unsigned > 0 ? '#92400e' : '#14532d' }}>
+                Seasonal Contracts · {seasonalStats.season_year}
+              </p>
+              {seasonalStats.unsigned > 0 ? (
+                <p className="text-2xl font-bold" style={{ color: '#92400e' }}>
+                  {seasonalStats.unsigned} <span className="text-base font-semibold">of {seasonalStats.total} unsigned</span>
+                </p>
+              ) : (
+                <p className="text-2xl font-bold" style={{ color: '#14532d' }}>All {seasonalStats.total} signed 🎉</p>
+              )}
+            </div>
+            <span className="text-sm font-semibold" style={{ color: seasonalStats.unsigned > 0 ? '#b45309' : '#15803d' }}>Review →</span>
+          </div>
+        </Link>
+      )}
 
       {/* Quick links */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
