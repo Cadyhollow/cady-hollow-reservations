@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 type Addon = {
   id: string
@@ -136,8 +137,7 @@ function parseTime(timeStr: string): { hours: number; minutes: number } | null {
 
 function BookingForm() {
   const searchParams = useSearchParams()
-  const cardRef = useRef<any>(null)
-  const squareRef = useRef<any>(null)
+  const cardRef = useRef<SquareCardHandle>(null)
   const signatureCanvasRef = useRef<HTMLCanvasElement>(null)
   const isDrawing = useRef(false)
 
@@ -159,7 +159,7 @@ function BookingForm() {
   const [step, setStep] = useState(1)
   const [paymentLoading, setPaymentLoading] = useState(false)
   const [paymentError, setPaymentError] = useState('')
-  const [squareLoaded, setSquareLoaded] = useState(false)
+  const [cardReady, setCardReady] = useState(false)
   const [selectedPaymentType, setSelectedPaymentType] = useState<'deposit' | 'full' | null>(null)
   const [cancellationPolicy, setCancellationPolicy] = useState<any>(null)
   const [waiverSigned, setWaiverSigned] = useState(false)
@@ -187,7 +187,6 @@ function BookingForm() {
   const children = parseInt(searchParams.get('children') || '0')
 
   useEffect(() => { fetchAddons(); fetchSettings(); fetchFees() }, [])
-  useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
   async function fetchSettings() {
@@ -261,27 +260,6 @@ function BookingForm() {
     setCancellationPolicy(data.policy)
   }
 
-  async function loadSquare() {
-    if (squareLoaded) return
-    const script = document.createElement('script')
-    script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-      ? 'https://web.squarecdn.com/v1/square.js'
-      : 'https://sandbox.web.squarecdn.com/v1/square.js'
-    script.onload = async () => {
-      try {
-        const payments = (window as any).Square.payments(
-          process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!
-        )
-        squareRef.current = payments
-        const card = await payments.card()
-        await card.attach('#square-card-container')
-        cardRef.current = card
-        setSquareLoaded(true)
-      } catch (e) { console.error('Square load error:', e) }
-    }
-    document.head.appendChild(script)
-  }
 
   const waiverText = (settings?.waiver_text || '').replace(/\[CAMPGROUND NAME\]/g, settings?.park_name || 'the campground')
   const waiverEnabled = settings?.waiver_enabled !== false
@@ -460,14 +438,14 @@ function BookingForm() {
   }
 
   async function handlePayment(paymentType: 'deposit' | 'full') {
-    if (!cardRef.current) { setPaymentError('Payment form not ready. Please wait a moment and try again.'); return }
+    if (!cardRef.current?.ready) { setPaymentError('Payment form not ready. Please wait a moment and try again.'); return }
     setPaymentLoading(true)
     setPaymentError('')
     setSelectedPaymentType(paymentType)
 
     try {
       const result = await cardRef.current.tokenize()
-      if (result.status !== 'OK') { setPaymentError('Card details invalid. Please check and try again.'); setPaymentLoading(false); return }
+      if (!result.ok) { setPaymentError(result.error || 'Card details invalid. Please check and try again.'); setPaymentLoading(false); return }
 
       // Both deposit and full are already CASH values; surcharge is added below.
       const cashAmountToPay = paymentType === 'deposit' ? deposit : cashTotal
@@ -827,15 +805,14 @@ function BookingForm() {
               </div>
               <div className="mb-6">
                 <h3 className="text-white font-medium mb-3">Card Details</h3>
-                <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
-                {!squareLoaded && <p className="text-gray-400 text-sm mt-2">Loading payment form...</p>}
+                <SquareCardField ref={cardRef} onReady={setCardReady} />
               </div>
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
               <div className="space-y-3">
                 <h3 className="text-white font-medium">Choose Payment Option</h3>
                 {showDepositButton && (
                   <button
-                    disabled={paymentLoading || !squareLoaded}
+                    disabled={paymentLoading || !cardReady}
                     className="w-full py-3 rounded-xl font-semibold border-2 transition-colors disabled:opacity-50"
                     style={{ borderColor: 'var(--accent-color)', color: 'var(--accent-color)', backgroundColor: 'transparent' }}
                     onClick={() => handlePayment('deposit')}
@@ -845,7 +822,7 @@ function BookingForm() {
                   </button>
                 )}
                 <button
-                  disabled={paymentLoading || !squareLoaded}
+                  disabled={paymentLoading || !cardReady}
                   className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
                   style={{ backgroundColor: 'var(--accent-color)' }}
                   onClick={() => handlePayment('full')}
