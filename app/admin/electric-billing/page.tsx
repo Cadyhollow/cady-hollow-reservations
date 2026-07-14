@@ -467,20 +467,59 @@ export default function ElectricBillingPage() {
       if (newFolio) folioId = newFolio.id
     }
 
-    const { data: lineItem } = await supabase.from('folio_line_items').insert({
-      folio_id: folioId, product_id: null, description: billingMonth + ' Electric',
-      quantity: 1, unit_price: finalAmountCents, tax_amount: 0, line_total: finalAmountCents, category: 'Fees',
-    }).select().single()
-
-    await supabase.from('electric_readings').insert({
-      guest_id: row.guest.id, billing_month: billingMonth,
+    // Phase B: write the charge + reading ATOMICALLY in one transaction (RPC), so a
+    // mid-write failure can never leave an orphan charge or orphan reading. Also
+    // populates the Phase A period columns on the reading (new bills are now
+    // guard-visible); billing_month is still written in parallel.
+    const period = periodFromBillingMonth(billingMonth)
+    const readingFields = {
       previous_reading: parseFloat(row.previousReading) || 0,
       current_reading: parseFloat(row.currentReading) || 0,
-      kwh_used: row.kwhUsed, rate_per_kwh: parseFloat(ratePerKwh) || 0.27,
+      kwh_used: row.kwhUsed,
+      rate_per_kwh: parseFloat(ratePerKwh) || 0.27,
       minimum_charge: Math.round((parseFloat(minimumCharge) || 15) * 100),
-      calculated_amount: row.calculatedAmount, final_amount: finalAmountCents,
-      folio_line_item_id: lineItem?.id || null,
+      calculated_amount: row.calculatedAmount,
+      final_amount: finalAmountCents,
+    }
+    const { error: rpcErr } = await supabase.rpc('create_electric_bill', {
+      p_folio_id: folioId,
+      p_guest_id: row.guest.id,
+      p_billing_month: billingMonth,
+      p_period_start: period?.start ?? null,
+      p_period_end: period?.end ?? null,
+      p_description: billingMonth + ' Electric',
+      p_amount_cents: finalAmountCents,
+      p_previous_reading: readingFields.previous_reading,
+      p_current_reading: readingFields.current_reading,
+      p_kwh_used: readingFields.kwh_used,
+      p_rate_per_kwh: readingFields.rate_per_kwh,
+      p_minimum_charge: readingFields.minimum_charge,
+      p_calculated_amount: readingFields.calculated_amount,
+      p_final_amount: readingFields.final_amount,
     })
+    if (rpcErr) {
+      // Option A scoped fallback: ONLY when the function isn't deployed yet (code
+      // ships before schema). PostgREST reports a missing function as PGRST202,
+      // Postgres as 42883. Any OTHER error is a real failure — surface it, never
+      // silently fall back to the non-atomic path.
+      const missingFn = rpcErr.code === 'PGRST202' || rpcErr.code === '42883' ||
+        /could not find the function|does not exist/i.test(rpcErr.message || '')
+      if (!missingFn) {
+        setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: rpcErr.message || 'Could not create the bill.' }; return u })
+        return
+      }
+      console.warn('create_electric_bill RPC not deployed yet — falling back to non-atomic two-insert path.', rpcErr)
+      const { data: lineItem } = await supabase.from('folio_line_items').insert({
+        folio_id: folioId, product_id: null, description: billingMonth + ' Electric',
+        quantity: 1, unit_price: finalAmountCents, tax_amount: 0, line_total: finalAmountCents, category: 'Fees',
+      }).select().single()
+      await supabase.from('electric_readings').insert({
+        guest_id: row.guest.id, billing_month: billingMonth,
+        period_start: period?.start ?? null, period_end: period?.end ?? null,
+        ...readingFields,
+        folio_line_item_id: lineItem?.id || null,
+      })
+    }
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
