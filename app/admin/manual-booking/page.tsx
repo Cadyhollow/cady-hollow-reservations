@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 type Site = {
   id: string
@@ -44,10 +45,8 @@ function ManualBookingInner() {
   const [pricingRules, setPricingRules] = useState<any[]>([])
   const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
   const [balanceDue, setBalanceDue] = useState('')
-  const [squareCardRef, setSquareCardRef] = useState<any>(null)
-  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
-  const [squareInstance, setSquareInstance] = useState<any>(null)
-  const cardLoadingRef = useRef(false)
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -74,13 +73,6 @@ function ManualBookingInner() {
       setForm(prev => ({ ...prev, site_id: siteIdFromUrl }))
     }
   }, [searchParams, sites])
-
-  useEffect(() => {
-    if (form.payment_method === 'card') {
-      const timer = setTimeout(loadSquareCard, 500)
-      return () => clearTimeout(timer)
-    }
-  }, [form.payment_method])
 
   async function fetchPricingRules() {
     const { data } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
@@ -113,32 +105,6 @@ function ManualBookingInner() {
   async function fetchSettings() {
     const { data } = await supabase.from('settings').select('early_checkin_enabled, early_checkin_price, early_checkin_time, late_checkout_enabled, late_checkout_price, late_checkout_time').limit(1).single()
     setSettings(data || null)
-  }
-
-  async function loadSquareCard() {
-    if (cardLoadingRef.current) return
-    const container = document.getElementById('manual-booking-card')
-    if (!container) return
-    cardLoadingRef.current = true
-    container.innerHTML = ''
-    try {
-      let sq = squareInstance
-      if (!sq) {
-        if (!(window as any).Square) {
-          const script = document.createElement('script')
-          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-            ? 'https://web.squarecdn.com/v1/square.js'
-            : 'https://sandbox.web.squarecdn.com/v1/square.js'
-          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
-        setSquareInstance(sq)
-      }
-      const card = await sq.card()
-      await card.attach('#manual-booking-card')
-      setSquareCardRef(card)
-      setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e); cardLoadingRef.current = false }
   }
 
   async function fetchFees() {
@@ -232,14 +198,14 @@ function ManualBookingInner() {
     // If card payment, tokenize first before creating reservation
     let cardToken: string | null = null
     if (form.payment_method === 'card' && amountPaid > 0) {
-      if (!squareCardRef) {
+      if (!cardRef.current?.ready) {
         toast.error('Card form not ready. Please wait a moment.')
         setSaving(false)
         return
       }
-      const result = await squareCardRef.tokenize()
-      if (result.status !== 'OK') {
-        toast.error('Card details invalid. Please check and try again.')
+      const result = await cardRef.current.tokenize()
+      if (!result.ok) {
+        toast.error(result.error || 'Card details invalid. Please check and try again.')
         setSaving(false)
         return
       }
@@ -359,8 +325,7 @@ function ManualBookingInner() {
       toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
     }
     setSaving(false)
-    setSquareCardLoaded(false)
-    setSquareCardRef(null)
+    setCardReady(false)
     setForm({
       site_id: '',
       arrival_date: '',
@@ -639,10 +604,7 @@ function ManualBookingInner() {
               {form.payment_method === 'card' && (
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Card Details</label>
-                  <div id="manual-booking-card" className="border border-gray-200 rounded-lg p-2 min-h-[89px]"
-                    ref={el => { if (el && !squareCardLoaded) setTimeout(loadSquareCard, 100) }}
-                  />
-                  {!squareCardLoaded && <p className="text-xs text-gray-400 mt-1">Loading card form...</p>}
+                  <SquareCardField ref={cardRef} onReady={setCardReady} />
                 </div>
               )}
               <div>
@@ -663,12 +625,12 @@ function ManualBookingInner() {
               </div>
             </div>
           </div>
-          {form.payment_method === 'card' && !squareCardLoaded && (
+          {form.payment_method === 'card' && !cardReady && (
             <p className="text-center text-sm text-amber-600 font-medium mb-2">⏳ Waiting for card form to load — please wait before submitting.</p>
           )}
           <button
             onClick={handleSave}
-            disabled={saving || (form.payment_method === 'card' && parseFloat(form.amount_paid || '0') > 0 && !squareCardLoaded)}
+            disabled={saving || (form.payment_method === 'card' && parseFloat(form.amount_paid || '0') > 0 && !cardReady)}
             className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
