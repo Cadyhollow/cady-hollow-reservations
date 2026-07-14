@@ -1,8 +1,9 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,6 +83,8 @@ export default function WalkUpFolioPage() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [showCustomItem, setShowCustomItem] = useState(false)
   const [cashTendered, setCashTendered] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
@@ -199,6 +202,45 @@ export default function WalkUpFolioPage() {
     setCashTendered('')
     setWaiveFee(false)
     await loadFolioData(folio.id)
+  }
+
+  // Manual (keyed) card — tokenize in-browser then charge server-side via Square.
+  // The API records the folio_payment (with square_payment_id); we just reload.
+  async function chargeManualCard() {
+    if (!folio || !cardRef.current?.ready) return
+    const baseAmount = Math.round(parseFloat(paymentAmount || '0') * 100)
+    if (!baseAmount || baseAmount <= 0) return
+    setSavingPayment(true)
+    const result = await cardRef.current.tokenize()
+    if (!result.ok) { alert(result.error); setSavingPayment(false); return }
+    const surchargeAmount = cardSurcharge > 0 && !waiveFee ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+    const totalAmount = baseAmount + surchargeAmount
+    const res = await fetch('/api/admin-card-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceId: result.token,
+        folioId: folio.id,
+        amount: totalAmount,
+        surchargeAmount,
+        note: paymentNote,
+        guestName: folio.guest_name || '',
+      }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setShowPayment(false)
+      setPaymentAmount('')
+      setPaymentNote('')
+      setPaymentMethod('cash')
+      setCashTendered('')
+      setWaiveFee(false)
+      setCardReady(false)
+      await loadFolioData(folio.id)
+    } else {
+      alert(data.error || 'Card payment failed')
+      setSavingPayment(false)
+    }
   }
 
   const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
@@ -434,7 +476,7 @@ export default function WalkUpFolioPage() {
           <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
-              <button onClick={() => setShowPayment(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
+              <button onClick={() => { setShowPayment(false); setCardReady(false) }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginBottom: 16 }}>
@@ -497,9 +539,21 @@ export default function WalkUpFolioPage() {
             )}
             <label style={ml}>Note (optional)</label>
             <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. check #1042' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-            <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
-            </button>
+            {paymentMethod === 'card' ? (
+              <div>
+                <label style={ml}>Card details</label>
+                <div style={{ marginBottom: 12 }}>
+                  <SquareCardField ref={cardRef} onReady={setCardReady} />
+                </div>
+                <button onClick={chargeManualCard} disabled={savingPayment || !cardReady || !paymentAmountCents} style={{ width: '100%', background: savingPayment || !cardReady || !paymentAmountCents ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: savingPayment || !cardReady || !paymentAmountCents ? 'default' : 'pointer' }}>
+                  {savingPayment ? 'Processing...' : surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : 'Charge card · $' + (paymentAmount || '0.00')}
+                </button>
+              </div>
+            ) : (
+              <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
+                {savingPayment ? 'Recording...' : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+              </button>
+            )}
           </div>
         </div>
       )}
