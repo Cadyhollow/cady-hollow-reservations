@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd, allPaymentMethods } from '@/lib/transactions'
 import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 type Reservation = {
   id: string
@@ -256,6 +257,8 @@ export default function CalendarPage() {
   const [cashTendered, setCashTendered] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [terminalStatus, setTerminalStatus] = useState<'idle' | 'waiting' | 'error'>('idle')
   const [payNote, setPayNote] = useState('')
   const [paySaving, setPaySaving] = useState(false)
@@ -924,6 +927,7 @@ export default function CalendarPage() {
 
         function finishAdjust() {
           setAdjustModal(null); setAdjStep('review'); setAdjFolioId(null)
+          setCardReady(false)
           setDrag(null); setFocusId(null); setSelected(null)
           fetchData()
         }
@@ -1008,6 +1012,28 @@ export default function CalendarPage() {
               else if (pd.status === 'CANCELED' || pd.status === 'CANCEL_REQUESTED') { clearInterval(poll); setTerminalStatus('error') }
             }, 2000)
           } catch { setTerminalStatus('error') }
+        }
+        // Manual (keyed) card — tokenize in-browser then charge server-side via Square.
+        // The API records the folio_payment (with square_payment_id); we just finish.
+        async function chargeManualCard() {
+          if (!cardRef.current?.ready) return
+          if (!payBaseCents || payBaseCents <= 0) { setPayError('Enter an amount greater than zero.'); return }
+          const fid = adjFolioId || await ensureFolio()
+          if (!fid) { setPayFailed('No folio to charge against.'); return }
+          setPaySaving(true); setPayError('')
+          const result = await cardRef.current.tokenize()
+          if (!result.ok) { setPayError(result.error || 'Card was declined or incomplete.'); setPaySaving(false); return }
+          const surcharge = cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+          const totalCharge = payBaseCents + surcharge
+          try {
+            const res = await fetch('/api/admin-card-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sourceId: result.token, folioId: fid, amount: totalCharge, surchargeAmount: surcharge, note: payNote || 'Date extension', guestName: r.guest_name || '' }) })
+            const data = await res.json()
+            setPaySaving(false)
+            if (!data.success) { setPayFailed(data.error || 'The card could not be charged.'); return }
+            setCardReady(false)
+            finishAdjust()
+          } catch (e: any) { setPaySaving(false); setPayFailed(e?.message || 'The card could not be charged.') }
         }
         const Stepper = ({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) => (
           <div className="flex items-center justify-between">
@@ -1225,11 +1251,21 @@ export default function CalendarPage() {
                         Send to Terminal · ${(totalWithSurcharge / 100).toFixed(2)} →
                       </button>
                     )
+                  ) : payMethod === 'card' ? (
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Card details</label>
+                      <div className="mb-3">
+                        <SquareCardField ref={cardRef} onReady={setCardReady} />
+                      </div>
+                      <button onClick={chargeManualCard} disabled={paySaving || !cardReady || !payBaseCents}
+                        className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#16a34a' }}>
+                        {paySaving ? 'Processing…' : 'Charge card · $' + (totalWithSurcharge / 100).toFixed(2)}
+                      </button>
+                    </div>
                   ) : (
                     <button onClick={recordPayment} disabled={paySaving}
                       className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#16a34a' }}>
                       {paySaving ? 'Recording…'
-                        : payMethod === 'card' && surchargeCents > 0 ? 'Charge card · $' + (totalWithSurcharge / 100).toFixed(2)
                         : payMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered) || 0, parseFloat(payAmount) || 0).toFixed(2)
                         : 'Record ' + payMethod + ' · $' + (parseFloat(payAmount) || 0).toFixed(2)}
                     </button>
