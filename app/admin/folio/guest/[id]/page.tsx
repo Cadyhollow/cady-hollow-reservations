@@ -1,8 +1,9 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useParams, useRouter } from 'next/navigation'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 
@@ -89,6 +90,8 @@ export default function GuestAccountPage() {
   const [waiveFee, setWaiveFee] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [terminalStatus, setTerminalStatus] = useState('idle')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
@@ -287,6 +290,53 @@ export default function GuestAccountPage() {
     setPaymentMethod('cash')
     setWaiveFee(false)
     await loadFolioData(folio.id)
+  }
+
+  // Manual (keyed) card — tokenize in-browser then charge server-side via Square.
+  // The API records the folio_payment (with square_payment_id); we just reload.
+  async function chargeManualCard() {
+    if (!folio || !cardRef.current?.ready) return
+    const baseAmount = Math.round(parseFloat(paymentAmount || '0') * 100)
+    if (!baseAmount || baseAmount <= 0) return
+    // Prepayment onto a zero balance becomes credit — enforce the credit cap (warn, allow override).
+    const isPrepay = totalDue === 0
+    if (isPrepay && maxCreditAmount > 0 && baseAmount > maxCreditAmount) {
+      if (!confirm('This will add a credit of $' + (baseAmount/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
+        return
+      }
+    }
+    setSavingPayment(true)
+    const result = await cardRef.current.tokenize()
+    if (!result.ok) { alert(result.error); setSavingPayment(false); return }
+    const surchargeAmount = cardSurcharge > 0 && !waiveFee ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+    const totalAmount = baseAmount + surchargeAmount
+    const res = await fetch('/api/admin-card-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceId: result.token,
+        folioId: folio.id,
+        amount: totalAmount,
+        surchargeAmount,
+        note: paymentNote,
+        guestName: guest?.name || folio.guest_name || '',
+      }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setShowPayment(false)
+      setPaymentAmount('')
+      setCashTendered('')
+      setPaymentNote('')
+      setPaymentMethod('cash')
+      setWaiveFee(false)
+      setCardEntryMode('terminal')
+      setCardReady(false)
+      await loadFolioData(folio.id)
+    } else {
+      alert(data.error || 'Card payment failed')
+      setSavingPayment(false)
+    }
   }
 
   const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
@@ -521,7 +571,7 @@ export default function GuestAccountPage() {
           <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
-              <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
+              <button onClick={() => { setShowPayment(false); setCashTendered(''); setCardReady(false) }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginBottom: 16 }}>
@@ -654,9 +704,19 @@ export default function GuestAccountPage() {
                   </div>
                 )}
               </div>
+            ) : paymentMethod === 'card' ? (
+              <div>
+                <label style={ml}>Card details</label>
+                <div style={{ marginBottom: 12 }}>
+                  <SquareCardField ref={cardRef} onReady={setCardReady} />
+                </div>
+                <button onClick={chargeManualCard} disabled={savingPayment || !cardReady || !paymentAmountCents} style={{ width: '100%', background: savingPayment || !cardReady || !paymentAmountCents ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: savingPayment || !cardReady || !paymentAmountCents ? 'default' : 'pointer' }}>
+                  {savingPayment ? 'Processing...' : surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : 'Charge card · $' + (paymentAmount || '0.00')}
+                </button>
+              </div>
             ) : (
               <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+                {savingPayment ? 'Recording...' : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
               </button>
             )}
           </div>
