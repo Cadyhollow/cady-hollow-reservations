@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { methodLabel } from '@/lib/transactions'
 import { supabase } from '@/lib/supabase'
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
@@ -42,9 +43,8 @@ export default function NewReservationWizard() {
   const [waiverMsg, setWaiverMsg] = useState<string | null>(null)
   const [newFolioId, setNewFolioId] = useState<string | null>(null)
   const [terminalStatus, setTerminalStatus] = useState<'' | 'waiting' | 'timeout'>('')
-  const [squareCardRef, setSquareCardRef] = useState<any>(null)
-  const [squareInstance, setSquareInstance] = useState<any>(null)
-  const cardLoadingRef = useRef(false)
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
 
   const [sites, setSites] = useState<any[]>([])
   const [settings, setSettings] = useState<any>(null)
@@ -118,41 +118,6 @@ export default function NewReservationWizard() {
     })()
   }, [form.arrival_date, form.departure_date])
 
-  useEffect(() => {
-    if (step === 4 && form.payment_method === 'card') {
-      const t = setTimeout(loadSquareCard, 300)
-      return () => clearTimeout(t)
-    }
-  }, [step, form.payment_method])
-
-  async function loadSquareCard() {
-    if (cardLoadingRef.current) return
-    const container = document.getElementById('wizard-card')
-    if (!container) return
-    cardLoadingRef.current = true
-    container.innerHTML = ''
-    try {
-      let sq = squareInstance
-      if (!sq) {
-        if (!(window as any).Square) {
-          const script = document.createElement('script')
-          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-            ? 'https://web.squarecdn.com/v1/square.js'
-            : 'https://sandbox.web.squarecdn.com/v1/square.js'
-          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
-        setSquareInstance(sq)
-      }
-      const card = await sq.card()
-      await card.attach('#wizard-card')
-      setSquareCardRef(card)
-    } catch (e) {
-      console.error('Square card load error:', e)
-      cardLoadingRef.current = false
-    }
-  }
-
   const selectedSite = sites.find(s => s.id === form.site_id) || null
 
   const pricing = useMemo(() => {
@@ -223,13 +188,13 @@ export default function NewReservationWizard() {
     // Card: tokenize BEFORE creating any records, so an invalid card aborts cleanly.
     let cardToken: string | null = null
     if (form.payment_method === 'card' && paidCents > 0) {
-      if (!squareCardRef) {
+      if (!cardRef.current?.ready) {
         setError('Card form is still loading — give it a second and try again.')
         return
       }
-      const result = await squareCardRef.tokenize()
-      if (result.status !== 'OK') {
-        setError('Card details look invalid — please check them and try again.')
+      const result = await cardRef.current.tokenize()
+      if (!result.ok) {
+        setError(result.error || 'Card details look invalid — please check them and try again.')
         return
       }
       cardToken = result.token
@@ -478,12 +443,9 @@ export default function NewReservationWizard() {
   }
 
   function resetWizard() {
-    // Tear down the Square card so the next booking re-initializes cleanly.
-    // Without this, cardLoadingRef stays true from the prior booking and the
-    // payment step's loadSquareCard() bails at its guard -> blank card area.
-    if (squareCardRef) { try { squareCardRef.destroy() } catch {} }
-    setSquareCardRef(null)
-    cardLoadingRef.current = false
+    // <SquareCardField> destroys its own Square card on unmount (step→1 unmounts
+    // StepReview), so there's nothing to tear down here — just clear the ready flag.
+    setCardReady(false)
     setConfirmation(null)
     setNewReservationId(null)
     setNewFolioId(null)
@@ -583,11 +545,11 @@ export default function NewReservationWizard() {
               <StepAddons form={form} set={set} addons={addons} settings={settings} />
             )}
             {step === 4 && (
-              <StepReview form={form} set={set} pricing={pricing} settings={settings} effectiveTotal={effectiveTotal} grandTotal={grandTotal} products={products} productCategories={productCategories} posCart={posCart} setPosCart={setPosCart} showPOS={showPOS} setShowPOS={setShowPOS} />
+              <StepReview form={form} set={set} pricing={pricing} settings={settings} effectiveTotal={effectiveTotal} grandTotal={grandTotal} products={products} productCategories={productCategories} posCart={posCart} setPosCart={setPosCart} showPOS={showPOS} setShowPOS={setShowPOS} cardRef={cardRef} setCardReady={setCardReady} />
             )}
           </div>
 
-          <SummaryPanel pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} sendWaiver={sendWaiver} setSendWaiver={setSendWaiver} />
+          <SummaryPanel pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} sendWaiver={sendWaiver} setSendWaiver={setSendWaiver} cardReady={cardReady} />
         </div>
       </div>
     </div>
@@ -712,7 +674,7 @@ function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
   )
 }
 
-function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS, sendWaiver, setSendWaiver }: any) {
+function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS, sendWaiver, setSendWaiver, cardReady }: any) {
   const cash = pricing?.cashTotal || 0
   const fee = pricing ? pricing.cardSurcharge(cash) : 0
   const [editingTotal, setEditingTotal] = useState(false)
@@ -727,6 +689,8 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
   const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
   const due = Math.max(0, grandTotal - paidCents)
   const cardGated = form.payment_method === 'card' || form.payment_method === 'terminal'
+  // Keyed-card bookings can't complete until the Square field has loaded.
+  const cardBlocking = form.payment_method === 'card' && paidCents > 0 && !cardReady
 
   return (
     <div className="md:sticky md:top-3 self-start bg-gray-50 rounded-xl p-4">
@@ -807,10 +771,10 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
           )}
           <button
             onClick={() => { if (paidCents === 0) { setConfirmZero(true) } else { onComplete() } }}
-            disabled={saving}
+            disabled={saving || cardBlocking}
             className="w-full mt-4 px-5 py-2.5 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800 disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Complete booking'}
+            {saving ? 'Saving…' : cardBlocking ? 'Loading card…' : 'Complete booking'}
           </button>
           {settings?.pos_enabled && (
             <button
@@ -1061,7 +1025,7 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   )
 }
 
-function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, products, productCategories, posCart, setPosCart, showPOS, setShowPOS }: any) {
+function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, products, productCategories, posCart, setPosCart, showPOS, setShowPOS, cardRef, setCardReady }: any) {
   const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
   const setPaid = (cents: number) => set({ amount_paid: (cents / 100).toFixed(2) })
   const [activeCat, setActiveCat] = useState('')
@@ -1165,7 +1129,7 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
       </div>
       {form.payment_method === 'card' && (
         <div className="mb-3">
-          <div id="wizard-card" className="border border-gray-200 rounded-lg p-3 min-h-[44px]"></div>
+          <SquareCardField ref={cardRef} onReady={setCardReady} />
           {paidCents > 0 && (
             <div className="text-xs text-gray-500 mt-2">
               Card charge: {money(paidCents)} + {pricing.cardSurchargePercent}% ({money(pricing.cardSurcharge(paidCents))}) = <span className="font-medium text-gray-900">{money(paidCents + pricing.cardSurcharge(paidCents))}</span>
