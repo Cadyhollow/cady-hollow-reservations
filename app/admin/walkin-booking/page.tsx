@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
+import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -91,11 +92,9 @@ export default function WalkInBookingPage() {
   const [terminalStatus, setTerminalStatus] = useState('')
   const [sendingToTerminal, setSendingToTerminal] = useState(false)
   const [cardEntryMode, setCardEntryMode] = useState<'terminal'|'manual'>('terminal')
-  const [squareCardRef, setSquareCardRef] = useState<any>(null)
-  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
-  const [squareInstance, setSquareInstance] = useState<any>(null)
+  const cardRef = useRef<SquareCardHandle>(null)
+  const [cardReady, setCardReady] = useState(false)
   const [chargingCard, setChargingCard] = useState(false)
-  const cardLoadingRef = useRef(false)
   const [priceOverride, setPriceOverride] = useState('')
   const [adultsDisplay, setAdultsDisplay] = useState('2')
   const [childrenDisplay, setChildrenDisplay] = useState('')
@@ -287,38 +286,12 @@ export default function WalkInBookingPage() {
     await loadFolioData(folioId)
   }
 
-  async function loadSquareCard() {
-    if (cardLoadingRef.current) return
-    const container = document.getElementById('walkin-square-card')
-    if (!container) return
-    cardLoadingRef.current = true
-    container.innerHTML = ''
-    try {
-      let sq = squareInstance
-      if (!sq) {
-        if (!(window as any).Square) {
-          const script = document.createElement('script')
-          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-            ? 'https://web.squarecdn.com/v1/square.js'
-            : 'https://sandbox.web.squarecdn.com/v1/square.js'
-          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
-        setSquareInstance(sq)
-      }
-      const card = await sq.card()
-      await card.attach('#walkin-square-card')
-      setSquareCardRef(card)
-      setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e); cardLoadingRef.current = false }
-  }
-
   async function chargeManualCard() {
-    if (!squareCardRef || !folioId) return
+    if (!cardRef.current?.ready || !folioId) return
     setChargingCard(true)
     try {
-      const result = await squareCardRef.tokenize()
-      if (result.status !== 'OK') { setChargingCard(false); return }
+      const result = await cardRef.current.tokenize()
+      if (!result.ok) { alert(result.error); setChargingCard(false); return }
       const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
       const surchargeAmount = cardSurcharge > 0 && !waiveFee
         ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
@@ -340,9 +313,7 @@ export default function WalkInBookingPage() {
         setPaymentAmount('')
         setPaymentNote('')
         setCardEntryMode('terminal')
-        setSquareCardLoaded(false)
-        setSquareCardRef(null)
-        cardLoadingRef.current = false
+        setCardReady(false)
         await loadFolioData(folioId)
       } else {
         alert(data.error || 'Card payment failed')
@@ -775,7 +746,7 @@ export default function WalkInBookingPage() {
                       💳 Use Terminal
                     </button>
                   )}
-                  <button onClick={() => { setCardEntryMode('manual'); setTimeout(loadSquareCard, 100) }}
+                  <button onClick={() => setCardEntryMode('manual')}
                     style={{ padding: '10px', border: '2px solid', borderColor: cardEntryMode === 'manual' ? '#2E6B8A' : '#e5e7eb', borderRadius: 8, background: cardEntryMode === 'manual' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'manual' ? '#2E6B8A' : '#374151' }}>
                     ⌨️ Enter Card Manually
                   </button>
@@ -801,8 +772,9 @@ export default function WalkInBookingPage() {
             ) : paymentMethod === 'card' && cardEntryMode === 'manual' ? (
               <div style={{ marginBottom: 16 }}>
                 <label style={ml}>Card Details</label>
-                <div id='walkin-square-card' style={{ minHeight: 89, border: '1px solid #d1d5db', borderRadius: 8, padding: 4, marginBottom: 8 }} />
-                {!squareCardLoaded && <p style={{ fontSize: 12, color: '#9ca3af' }}>Loading card form...</p>}
+                <div style={{ marginBottom: 8 }}>
+                  <SquareCardField ref={cardRef} onReady={setCardReady} />
+                </div>
                 {cardSurcharge > 0 && !waiveFee && paymentAmount && (
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -813,8 +785,8 @@ export default function WalkInBookingPage() {
                 )}
                 <label style={ml}>Note (optional)</label>
                 <input style={{ ...si, marginBottom: 12 }} placeholder='e.g. phone reservation' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-                <button onClick={chargeManualCard} disabled={chargingCard || !squareCardLoaded || !paymentAmount}
-                  style={{ width: '100%', background: chargingCard || !squareCardLoaded || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
+                <button onClick={chargeManualCard} disabled={chargingCard || !cardReady || !paymentAmount}
+                  style={{ width: '100%', background: chargingCard || !cardReady || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
                   {chargingCard ? 'Processing...' : `Charge Card · $${paymentAmount || '0.00'}`}
                 </button>
               </div>
