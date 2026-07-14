@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { planAtLeast } from '@/lib/plan'
+import { periodFromBillingMonth, classifyPeriod, fmtMDY, type GuardResult } from '@/lib/electric-periods'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -71,6 +72,7 @@ type CamperRow = {
   editEmailMode: boolean
   editEmailValue: string
   showBillConfirm: boolean
+  billGuard: GuardResult | null
 }
 
 function generateMonthOptions(): string[] {
@@ -167,7 +169,7 @@ export default function ElectricBillingPage() {
         guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
-        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '', showBillConfirm: false,
+        showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '', showBillConfirm: false, billGuard: null,
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
       }
@@ -404,6 +406,50 @@ export default function ElectricBillingPage() {
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
+  // Warn-don't-block guard (Phase A). Runs BEFORE the bill confirm opens. Resolves
+  // the proposed period against the guest's ACTIVE bills, where "a bill" is
+  // authoritatively a NON-VOIDED CHARGE on the folio for that period — the reading is
+  // supporting data, never the authority. So an orphan reading (its charge deleted)
+  // is stale and must not fire the guard. Never blocks: on any error (e.g. the
+  // period/voided columns not deployed yet) the guard goes inert and billing flows.
+  async function prepareBill(index: number) {
+    const row = campers[index]
+    const proposed = periodFromBillingMonth(billingMonth)
+    let guard: GuardResult = { level: 'none', span: null, conflict: null }
+    if (proposed) {
+      try {
+        // Readings carry the period; keep only non-voided ones with a linked charge.
+        const { data: reads, error: rErr } = await supabase
+          .from('electric_readings')
+          .select('period_start, period_end, folio_line_item_id, voided')
+          .eq('guest_id', row.guest.id)
+        if (rErr) throw rErr
+        const candidates = (reads || []).filter((r: any) =>
+          r.period_start && r.period_end && r.voided !== true && r.folio_line_item_id)
+        // Authority check: the linked charge must still EXIST and be non-voided.
+        const chargeIds = candidates.map((r: any) => r.folio_line_item_id)
+        let activeChargeIds = new Set<string>()
+        if (chargeIds.length > 0) {
+          const { data: charges, error: cErr } = await supabase
+            .from('folio_line_items')
+            .select('id, voided')
+            .in('id', chargeIds)
+          if (cErr) throw cErr
+          activeChargeIds = new Set((charges || []).filter((c: any) => c.voided !== true).map((c: any) => c.id))
+        }
+        const activePeriods = candidates
+          .filter((r: any) => activeChargeIds.has(r.folio_line_item_id))
+          .map((r: any) => ({ start: r.period_start as string, end: r.period_end as string }))
+        guard = classifyPeriod(proposed, activePeriods)
+      } catch (e) {
+        // Columns not deployed yet, or read failure → guard inert. NEVER blocks.
+        console.warn('Electric bill guard inactive (period/voided columns not ready?):', e)
+        guard = { level: 'none', span: null, conflict: null }
+      }
+    }
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], billGuard: guard, showBillConfirm: true }; return u })
+  }
+
   async function sendBill(index: number) {
     const row = campers[index]
     if (row.skip || row.sent) return
@@ -584,7 +630,7 @@ export default function ElectricBillingPage() {
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                           {/* Bill Electric — the ONLY charge-creating action; once a month, with confirm */}
                           {!row.sent ? (
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
+                            <button onClick={() => prepareBill(i)}
                               disabled={row.sending || !row.finalAmount}
                               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
                               {row.sending ? 'Billing...' : '⚡ Bill Electric'}
@@ -650,26 +696,48 @@ export default function ElectricBillingPage() {
                         </div>
                       )}
 
-                      {row.showBillConfirm && (
-                        <div style={{ margin: '0 14px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 6 }}>
+                      {row.showBillConfirm && (() => {
+                        const level = row.billGuard?.level ?? 'none'
+                        const proposed = periodFromBillingMonth(billingMonth)
+                        const span = row.billGuard?.span
+                        // Palette by guard level: exact = red (fat-finger double-send),
+                        // overlap = amber (days may bill twice), none = the normal blue.
+                        const pal = level === 'exact'
+                          ? { bg: '#fef2f2', border: '#fecaca', head: '#b91c1c' }
+                          : level === 'overlap'
+                          ? { bg: '#fffbeb', border: '#fde68a', head: '#92400e' }
+                          : { bg: '#eff6ff', border: '#bfdbfe', head: '#1e40af' }
+                        return (
+                        <div style={{ margin: '0 14px 14px', background: pal.bg, border: `1px solid ${pal.border}`, borderRadius: 10, padding: '14px' }}>
+                          {level === 'exact' && proposed && (
+                            <div style={{ fontSize: 13, fontWeight: 700, color: pal.head, marginBottom: 6 }}>
+                              ⚠ You already billed this exact period ({fmtMDY(proposed.start)}–{fmtMDY(proposed.end)}). Sending again creates a second identical charge.
+                            </div>
+                          )}
+                          {level === 'overlap' && span && (
+                            <div style={{ fontSize: 13, fontWeight: 700, color: pal.head, marginBottom: 6 }}>
+                              ⚠ This overlaps {fmtMDY(span.start)}–{fmtMDY(span.end)} of an existing bill — those days may be billed twice.
+                            </div>
+                          )}
+                          <div style={{ fontSize: 13, fontWeight: 700, color: pal.head, marginBottom: 6 }}>
                             Bill electric to {row.guest.name}?
                           </div>
-                          <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
+                          <div style={{ fontSize: 13, color: '#374151', marginBottom: 12 }}>
                             This creates a <strong>{billingMonth} electric charge of ${row.finalAmount}</strong> on their account and emails their statement to <strong>{row.guest.email}</strong>.
                           </div>
                           <div style={{ display: 'flex', gap: 10 }}>
-                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); sendBill(i) }}
+                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false, billGuard: null }; return u }); sendBill(i) }}
                               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              Yes, Bill Electric
+                              {level === 'none' ? 'Yes, Bill Electric' : 'Bill anyway'}
                             </button>
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u })}
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false, billGuard: null }; return u })}
                               style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
                               Cancel
                             </button>
                           </div>
                         </div>
-                      )}
+                        )
+                      })()}
 
                       {row.showReceiptConfirm && row.lastPaymentRecorded && (
                         <div style={{ margin: '0 14px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px' }}>
