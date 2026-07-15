@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
-import { sumLineTotals } from '@/lib/ledger'
+import { sumLineTotals, buildLedger, buildStatement } from '@/lib/ledger'
+import { renderStatementHtml } from '@/lib/statement-html'
 import { createClient } from '@supabase/supabase-js'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
@@ -133,8 +134,42 @@ export async function POST(request: NextRequest) {
         subject: `Receipt — ${campgroundName}${reservation ? ' · ' + reservation.arrival_date : ''}`,
         html,
       })
+    } else if (receiptType === 'account') {
+      // ACCOUNT RECEIPT — running-ledger statement, same format as the electric email
+      // (shared renderStatementHtml). showNotes on so per-line payment/item notes show.
+      const stmt = buildStatement(buildLedger(lineItems || [], payments || []), Date.now(), 90)
+      const statementHtml = renderStatementHtml(stmt, { showNotes: true })
+      const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#1C1C1C;font-family:Arial,sans-serif;">
+<div style="max-width:600px;margin:0 auto;background-color:#1C1C1C;">
+  <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
+    <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${campgroundName}</h1>
+    <p style="color:#9CA3AF;margin:0;font-size:14px;">${campgroundLocation}</p>
+  </div>
+  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:32px;text-align:center;">
+    <div style="font-size:48px;margin-bottom:16px;">🧾</div>
+    <h2 style="color:#ffffff;margin:0 0 8px;font-size:26px;">Receipt for ${folio.guest_name}</h2>
+    <p style="color:#9CA3AF;margin:0;font-size:14px;">${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+  </div>
+${statementHtml}
+  <div style="padding:24px;text-align:center;">
+    <p style="color:#6B7280;font-size:12px;margin:0;">Thank you!</p>
+  </div>
+</div>
+</body>
+</html>`
+      const gmailFrom = process.env.RESEND_GMAIL_FROM || fromEmail
+      await resend.emails.send({
+        from: `${campgroundName} <${gmailFrom}>`,
+        replyTo: replyToEmail,
+        to: folio.guest_email,
+        subject: `Receipt — ${campgroundName} · ${new Date().toLocaleDateString()}`,
+        html,
+      })
     } else {
-      // PLAIN TEXT RECEIPT — for walk-up sales, seasonal accounts
+      // PLAIN TEXT RECEIPT — for walk-up sales
       const plainText = `Receipt from ${campgroundName}
 ${campgroundLocation}
 ${'─'.repeat(40)}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement } from '@/lib/ledger'
+import { renderStatementHtml } from '@/lib/statement-html'
 
 // Lazy so `next build` (which has no RESEND_API_KEY) doesn't construct — and
 // throw — at import time. The client is built at request time instead.
@@ -57,10 +58,8 @@ export async function POST(request: NextRequest) {
 
     // ── Account Statement: a running ledger — every charge AND payment/credit in
     //    true date order with a running balance per line. Pulls the COMPLETE folio
-    //    (electric, POS items, payments, credits), not just this month's electric. ──
-    const money = (c: number) => '$' + (Math.abs(c) / 100).toFixed(2)
-    const fmtDate = (ts: number) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-
+    //    (electric, POS items, payments, credits), not just this month's electric.
+    //    Rendered by the shared renderStatementHtml (also used by the account receipt). ──
     let statementHtml = ''
     let ledgerBuilt = false
     if (folioId) {
@@ -71,48 +70,7 @@ export async function POST(request: NextRequest) {
         ])
         const stmt = buildStatement(buildLedger(items || [], pmts || []), Date.now(), 90)
 
-        const fwd = stmt.balanceForward
-        const fwdColor = fwd < 0 ? '#4ADE80' : fwd === 0 ? '#9CA3AF' : '#FCD34D'
-        const fwdDisplay = (fwd < 0 ? '−' : '') + money(fwd)
-
-        const lineRows = stmt.lines.map((ev) => {
-          const isPay = ev.kind === 'payment'
-          const amtColor = isPay ? '#4ADE80' : '#ffffff'
-          const amtDisplay = (isPay ? '−' : '') + money(ev.amount)
-          const balDisplay = 'Bal ' + (ev.balanceAfter < 0 ? '−' + money(ev.balanceAfter) : money(ev.balanceAfter))
-          return `
-      <tr>
-        <td style="padding:10px 0;border-top:1px solid #374151;vertical-align:top;">
-          <div style="color:#ffffff;font-size:14px;line-height:1.3;">${ev.label}</div>
-          <div style="color:#6B7280;font-size:12px;margin-top:2px;">${fmtDate(ev.ts)}</div>
-        </td>
-        <td style="padding:10px 0;border-top:1px solid #374151;text-align:right;vertical-align:top;white-space:nowrap;">
-          <div style="color:${amtColor};font-size:14px;font-weight:bold;">${amtDisplay}</div>
-          <div style="color:#6B7280;font-size:12px;margin-top:2px;">${balDisplay}</div>
-        </td>
-      </tr>`
-        }).join('')
-
-        const cur = stmt.currentBalance
-        const curLabel = cur < 0 ? 'Credit on Account' : cur === 0 ? '✓ Paid in Full' : 'Current Balance'
-        const curColor = cur <= 0 ? '#4ADE80' : '#FCD34D'
-        const curDisplay = cur === 0 ? '' : money(cur)
-
-        statementHtml = `
-  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
-    <h3 style="color:#ffffff;margin:0 0 4px;font-size:16px;">Account Statement</h3>
-    <p style="color:#6B7280;margin:0 0 12px;font-size:12px;">Your running account — every charge and payment in date order.</p>
-    <table style="width:100%;border-collapse:collapse;">
-      <tr>
-        <td style="padding:2px 0 10px;color:#9CA3AF;font-size:14px;font-weight:bold;vertical-align:top;">Balance Forward</td>
-        <td style="padding:2px 0 10px;text-align:right;color:${fwdColor};font-size:14px;font-weight:bold;vertical-align:top;white-space:nowrap;">${fwdDisplay}</td>
-      </tr>${lineRows}
-      <tr>
-        <td style="padding:14px 0 0;border-top:2px solid #4B5563;color:#ffffff;font-size:16px;font-weight:bold;">${curLabel}</td>
-        <td style="padding:14px 0 0;border-top:2px solid #4B5563;text-align:right;color:${curColor};font-size:16px;font-weight:bold;white-space:nowrap;">${curDisplay}</td>
-      </tr>
-    </table>
-  </div>`
+        statementHtml = renderStatementHtml(stmt)
         ledgerBuilt = true
       } catch (e) {
         console.error('Ledger statement build failed; falling back to lump-sum:', e)

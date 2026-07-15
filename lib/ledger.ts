@@ -10,6 +10,7 @@ export type LedgerLineItem = {
   line_total: number
   charged_at?: string | null
   voided?: boolean | null
+  notes?: string | null
 }
 
 // Phase D — the single void-filter idiom, imported everywhere a folio balance is
@@ -30,6 +31,7 @@ export type LedgerPayment = {
   amount: number
   surcharge_amount?: number | null
   paid_at?: string | null
+  note?: string | null
 }
 
 export type LedgerEvent = {
@@ -40,6 +42,7 @@ export type LedgerEvent = {
   label: string
   amount: number        // charge: line_total; payment: amount net of card surcharge
   balanceAfter: number
+  note?: string | null  // charge: item notes; payment: payment note. Rendered only when the caller opts in (showNotes) — the electric statement leaves it off.
 }
 
 // Build the merged, date-sorted ledger with a running balance after every line.
@@ -57,6 +60,7 @@ export function buildLedger(lineItems: LedgerLineItem[], payments: LedgerPayment
       label: item.description + ((item.quantity && item.quantity > 1) ? ` ×${item.quantity}` : ''),
       amount: item.line_total,
       balanceAfter: 0,
+      note: item.notes ?? null,
     })
   }
   for (const p of payments || []) {
@@ -68,6 +72,7 @@ export function buildLedger(lineItems: LedgerLineItem[], payments: LedgerPayment
       label: p.method.charAt(0).toUpperCase() + p.method.slice(1),
       amount: p.amount - (p.surcharge_amount || 0),
       balanceAfter: 0,
+      note: p.note ?? null,
     })
   }
   events.sort((a, b) => a.ts - b.ts || a.order - b.order)
@@ -93,9 +98,14 @@ export function buildStatement(events: LedgerEvent[], nowMs: number, windowDays 
   if (events.length === 0) return { balanceForward: 0, lines: [], currentBalance: 0 }
   const cutoff = nowMs - windowDays * 86_400_000
 
-  // most recent index where the balance settled to ≤ 0
+  // Most recent index where the balance settled to ≤ 0 AND has at least one event
+  // after it. The `- 1` bound is the fix for the empty-statement bug: without it, any
+  // folio whose CURRENT balance is ≤ 0 (settled or in credit) picks the final event as
+  // the fold point → startIdx past the end → zero lines rendered. Excluding the last
+  // event means a just-settled folio folds to the prior zero point and still shows the
+  // latest cycle (Balance Forward → charges → payment → ✓ Paid in Full).
   let zeroIdx = -1
-  for (let i = 0; i < events.length; i++) if (events[i].balanceAfter <= 0) zeroIdx = i
+  for (let i = 0; i < events.length - 1; i++) if (events[i].balanceAfter <= 0) zeroIdx = i
 
   let startIdx: number
   let balanceForward: number
