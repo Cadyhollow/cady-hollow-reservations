@@ -545,6 +545,7 @@ export default function FolioPage() {
     payment?: Payment
     isOpening?: boolean
     balanceAfter: number
+    voided?: boolean
   }
   const LEDGER_OPENING_TS = -8640000000000000
   const ledgerEvents: LedgerEvent[] = []
@@ -557,8 +558,11 @@ export default function FolioPage() {
       ledgerEvents.push({ key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++, label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid, isOpening: true, balanceAfter: 0 })
     }
   }
-  activeItems.forEach((item) => {
-    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
+  // Phase C1 — DISPLAY iterates ALL line items so voided rows stay visible (admin
+  // audit trail, Decision 2d); the running balance below skips voided charges so the
+  // math is unchanged. Balance headline still uses activeItems. No-op today (0 voided).
+  lineItems.forEach((item) => {
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0, voided: item.voided === true })
   })
   payments.forEach((p) => {
     ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), payment: p, balanceAfter: 0 })
@@ -566,7 +570,7 @@ export default function FolioPage() {
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
   ledgerEvents.forEach(ev => {
-    if (ev.kind === 'charge') _lBal += ev.negative ? -ev.amount : ev.amount
+    if (ev.kind === 'charge') { if (!ev.voided) _lBal += ev.negative ? -ev.amount : ev.amount }
     else _lBal -= ev.amount
     ev.balanceAfter = _lBal
   })
@@ -678,24 +682,34 @@ export default function FolioPage() {
 
               {visibleLedger.map((ev) => {
                 const isPay = ev.kind === 'payment'
+                const isVoided = ev.voided === true
                 const balPositive = ev.balanceAfter > 0
                 const balZero = ev.balanceAfter === 0
                 const balText = balZero ? 'settled' : balPositive ? 'balance due' : (isGuestAcct ? 'credit' : 'change')
                 const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
                 return (
-                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #FBF8F1', background: isPay ? '#F4FBF6' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
+                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #FBF8F1', background: isVoided ? '#f9fafb' : isPay ? '#F4FBF6' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent', opacity: isVoided ? 0.6 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500, color: ev.negative ? '#15803d' : '#374151' }}>{ev.label}</div>
+                      <div style={{ fontSize: 14, fontWeight: 500, color: isVoided ? '#9ca3af' : (ev.negative ? '#15803d' : '#374151'), textDecoration: isVoided ? 'line-through' : 'none' }}>
+                        {ev.label}
+                        {isVoided && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 5px', textDecoration: 'none', verticalAlign: 'middle' }}>VOIDED</span>}
+                      </div>
                       <div style={{ fontSize: 11, color: isPay ? '#7BA88C' : '#A1937C' }}>{ev.sub}{ev.isOpening ? '' : (isPay ? ' · payment' : ' · charge')}</div>
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                     </div>
-                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827') }}>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isVoided ? '#9ca3af' : isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827'), textDecoration: isVoided ? 'line-through' : 'none' }}>
                       {(isPay || ev.negative) ? '−' : ''}${(ev.amount/100).toFixed(2)}
                     </div>
                     <div style={{ width: 92, textAlign: 'right' }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
-                      <div style={{ fontSize: 10, color: '#A1937C' }}>{balText}</div>
+                      {isVoided ? (
+                        <div style={{ fontSize: 10, color: '#A1937C' }}>not counted</div>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
+                          <div style={{ fontSize: 10, color: '#A1937C' }}>{balText}</div>
+                        </>
+                      )}
                     </div>
                     <div style={{ width: 78, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
                       {ev.itemId && (

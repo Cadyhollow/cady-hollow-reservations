@@ -365,11 +365,15 @@ export default function GuestAccountPage() {
     itemId?: string
     paymentId?: string
     balanceAfter: number
+    voided?: boolean
   }
   const ledgerEvents: LedgerEvent[] = []
   let _lOrder = 0
-  activeItems.forEach((item) => {
-    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
+  // Phase C1 — DISPLAY iterates ALL line items so voided rows stay visible (admin
+  // audit trail, Decision 2d); the running balance below skips voided charges so the
+  // math is unchanged. Balance headline still uses activeItems. No-op today (0 voided).
+  lineItems.forEach((item) => {
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0, voided: item.voided === true })
   })
   payments.forEach((p) => {
     ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, balanceAfter: 0 })
@@ -377,7 +381,7 @@ export default function GuestAccountPage() {
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
   ledgerEvents.forEach(ev => {
-    if (ev.kind === 'charge') _lBal += ev.amount
+    if (ev.kind === 'charge') { if (!ev.voided) _lBal += ev.amount }
     else _lBal -= ev.amount
     ev.balanceAfter = _lBal
   })
@@ -449,24 +453,34 @@ export default function GuestAccountPage() {
 
               {visibleLedger.map((ev) => {
                 const isPay = ev.kind === 'payment'
+                const isVoided = ev.voided === true
                 const balPositive = ev.balanceAfter > 0
                 const balZero = ev.balanceAfter === 0
                 const balText = balZero ? 'settled' : balPositive ? 'balance due' : 'credit'
                 const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
                 return (
-                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
+                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isVoided ? '#f9fafb' : isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent', opacity: isVoided ? 0.6 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ev.label}</div>
+                      <div style={{ fontSize: 14, fontWeight: 500, textDecoration: isVoided ? 'line-through' : 'none', color: isVoided ? '#9ca3af' : 'inherit' }}>
+                        {ev.label}
+                        {isVoided && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 5px', textDecoration: 'none', verticalAlign: 'middle' }}>VOIDED</span>}
+                      </div>
                       <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                     </div>
-                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isVoided ? '#9ca3af' : isPay ? '#15803d' : '#111827', textDecoration: isVoided ? 'line-through' : 'none' }}>
                       {isPay ? '−' : ''}${(ev.amount/100).toFixed(2)}
                     </div>
                     <div style={{ width: 92, textAlign: 'right' }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
-                      <div style={{ fontSize: 10, color: '#9ca3af' }}>{balText}</div>
+                      {isVoided ? (
+                        <div style={{ fontSize: 10, color: '#9ca3af' }}>not counted</div>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af' }}>{balText}</div>
+                        </>
+                      )}
                     </div>
                     <div style={{ width: 28, flexShrink: 0, textAlign: 'right' }}>
                       {ev.itemId && (
