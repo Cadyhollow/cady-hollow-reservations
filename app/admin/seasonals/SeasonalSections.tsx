@@ -118,16 +118,28 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
       </Section>
 
       <Section title="Electric" right={admin ? <Link href="/admin/electric-billing" className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Electric billing →</Link> : undefined}>
-        {(data.electric || []).length > 0 ? (
+        {(() => {
+          // Phase C2 — voided readings: admin sees them MARKED (audit trail); the
+          // camper view hides them entirely (Decision 2d). Component is shared
+          // (Mode admin|camper), so branch on `admin` rather than assume the surface.
+          const electricRows = (data.electric || []).filter((r: any) => admin || r.voided !== true)
+          return electricRows.length > 0 ? (
           <div className="text-sm">
-            {(data.electric || []).slice(0, 4).map((r: any) => (
-              <div key={r.id} className="flex justify-between py-1 border-b border-gray-50 last:border-0">
-                <span className="text-gray-600">{r.billing_month || fmtDate(r.created_at)}</span>
-                <span className="font-medium text-gray-900">{r.kwh_used != null ? `${r.kwh_used} kWh` : ''}{r.final_amount != null ? ` · ${fmtMoney(r.final_amount)}` : ''}</span>
+            {electricRows.slice(0, 4).map((r: any) => {
+              const isVoided = r.voided === true
+              return (
+              <div key={r.id} className="flex justify-between py-1 border-b border-gray-50 last:border-0" style={{ opacity: isVoided ? 0.6 : 1 }}>
+                <span className="text-gray-600" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>{r.billing_month || fmtDate(r.created_at)}</span>
+                <span className="font-medium text-gray-900" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>
+                  {r.kwh_used != null ? `${r.kwh_used} kWh` : ''}{r.final_amount != null ? ` · ${fmtMoney(r.final_amount)}` : ''}
+                  {isVoided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px' }}>VOIDED</span>}
+                </span>
               </div>
-            ))}
+              )
+            })}
           </div>
-        ) : <p className="text-sm text-gray-500">No electric readings yet.</p>}
+        ) : <p className="text-sm text-gray-500">No electric readings yet.</p>
+        })()}
       </Section>
 
       <Section title="Notes">

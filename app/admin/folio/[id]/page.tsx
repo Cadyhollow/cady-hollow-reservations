@@ -713,7 +713,11 @@ export default function FolioPage() {
                     </div>
                     <div style={{ width: 78, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
                       {ev.itemId && (
-                        <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+                        ev.label.toLowerCase().includes('electric') ? (
+                          <span title="Electric charges are voided from the Electric Billing page → View History, not deleted here." style={{ fontSize: 13, color: '#9ca3af', cursor: 'help' }}>⚡</span>
+                        ) : (
+                          <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+                        )
                       )}
                       {ev.payment && ev.payment.status === 'completed' && (
                         <>

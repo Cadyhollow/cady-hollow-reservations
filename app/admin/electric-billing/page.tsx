@@ -31,6 +31,11 @@ type ElectricReading = {
   final_amount: number
   created_at: string
   notes: string
+  folio_line_item_id?: string | null
+  voided?: boolean | null
+  voided_at?: string | null
+  voided_by?: string | null
+  reason?: string | null
 }
 
 type FolioPayment = {
@@ -119,6 +124,12 @@ export default function ElectricBillingPage() {
   const [billingMonth, setBillingMonth] = useState(getCurrentMonthOption)
   const [emailMessage, setEmailMessage] = useState("Please find your monthly electric statement below. If you have any questions, please don't hesitate to reach out.")
   const [sendingAll, setSendingAll] = useState(false)
+  // Phase C2 — void dialog state (electric History is the only void surface).
+  const [voidTarget, setVoidTarget] = useState<{ index: number; reading: ElectricReading } | null>(null)
+  const [voidReason, setVoidReason] = useState('')
+  const [voidBy, setVoidBy] = useState('')
+  const [voiding, setVoiding] = useState(false)
+  const [voidError, setVoidError] = useState('')
   const [autoPopulating, setAutoPopulating] = useState(false)
 
   const monthOptions = generateMonthOptions()
@@ -253,6 +264,50 @@ export default function ElectricBillingPage() {
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: data || [], historyLoaded: true, showHistory: true }; return u })
   }
 
+  // Phase C2 — void a bill from the History table. Opens the dialog for reason + name.
+  function openVoid(index: number, reading: ElectricReading) {
+    setVoidTarget({ index, reading })
+    setVoidReason('')
+    setVoidBy('')
+    setVoidError('')
+  }
+
+  async function performVoid() {
+    if (!voidTarget) return
+    if (!voidBy.trim()) { setVoidError('Enter your name or initials.'); return }
+    if (!voidReason.trim()) { setVoidError('Enter a reason.'); return }
+    setVoiding(true)
+    setVoidError('')
+    // Void both halves atomically (reading + its charge if it still exists).
+    const { error } = await supabase.rpc('void_electric_bill', {
+      p_reading_id: voidTarget.reading.id,
+      p_voided_by: voidBy.trim(),
+      p_reason: voidReason.trim(),
+    })
+    if (error) { setVoiding(false); setVoidError(error.message || 'Could not void the bill.'); return }
+    const index = voidTarget.index
+    await reloadRowAfterVoid(index)
+    setVoiding(false)
+    setVoidTarget(null)
+  }
+
+  // Refresh one camper's readings (history) + folio balance after a void.
+  async function reloadRowAfterVoid(index: number) {
+    const row = campers[index]
+    const { data: readings } = await supabase.from('electric_readings').select('*').eq('guest_id', row.guest.id).order('created_at', { ascending: false })
+    let newBalance = row.folioBalance
+    if (row.folioId) {
+      const [{ data: items }, { data: pmts }] = await Promise.all([
+        supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
+        supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed'),
+      ])
+      const itemsTotal = sumLineTotals(items)
+      const paymentsTotal = (pmts || []).reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+      newBalance = itemsTotal - paymentsTotal
+    }
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: readings || [], folioBalance: newBalance, historyLoaded: true, showHistory: true }; return u })
+  }
+
   async function recordPayment(index: number) {
     const row = campers[index]
     if (!row.folioId || !row.paymentAmount) return
@@ -367,8 +422,11 @@ export default function ElectricBillingPage() {
     const electricItem = (allItems || []).find((i: any) => i.description === thisElectricDesc)
     const electricAmount = electricItem?.line_total || row.calculatedAmount
 
+    // Void-aware (Decision 2d): a voided prior bill must not date the statement's
+    // "new charges since last bill" cutoff. Server-side filter — a limit(1) can't be
+    // client-filtered (the newest could be voided → 0 rows).
     const { data: prevBills } = await supabase.from('electric_readings').select('created_at')
-      .eq('guest_id', row.guest.id).neq('billing_month', billingMonth)
+      .eq('guest_id', row.guest.id).neq('billing_month', billingMonth).eq('voided', false)
       .order('created_at', { ascending: false }).limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
 
@@ -531,11 +589,14 @@ export default function ElectricBillingPage() {
     const liveBalance = itemsTotal - paymentsTotal
 
     // Find the date the previous electric bill was sent for this camper
+    // Void-aware (Decision 2d): exclude voided prior bills from the cutoff. Server-side
+    // filter — a limit(1) can't be client-filtered (the newest could be voided).
     const { data: prevBills } = await supabase
       .from('electric_readings')
       .select('created_at')
       .eq('guest_id', row.guest.id)
       .neq('billing_month', billingMonth)
+      .eq('voided', false)
       .order('created_at', { ascending: false })
       .limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
@@ -853,28 +914,39 @@ export default function ElectricBillingPage() {
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <thead>
                                 <tr style={{ background: '#f9fafb' }}>
-                                  {['Month', 'Prev', 'Curr', 'kWh', 'Rate', 'Billed', 'Date'].map(h => (
+                                  {['Month', 'Prev', 'Curr', 'kWh', 'Rate', 'Billed', 'Date', ''].map(h => (
                                     <th key={h} style={{ padding: '7px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody>
-                                {row.readings.map((r, ri) => (
-                                  <tr key={r.id} style={{ borderBottom: ri < row.readings.length - 1 ? '1px solid #f3f4f6' : 'none', background: ri % 2 === 0 ? '#fff' : '#fafafa' }}>
-                                    <td style={{ padding: '8px 12px', fontWeight: 600, color: '#111827' }}>{r.billing_month}</td>
+                                {row.readings.map((r, ri) => {
+                                  const isVoided = r.voided === true
+                                  return (
+                                  <tr key={r.id} style={{ borderBottom: ri < row.readings.length - 1 ? '1px solid #f3f4f6' : 'none', background: isVoided ? '#f9fafb' : (ri % 2 === 0 ? '#fff' : '#fafafa'), opacity: isVoided ? 0.6 : 1 }}>
+                                    <td style={{ padding: '8px 12px', fontWeight: 600, color: isVoided ? '#9ca3af' : '#111827', textDecoration: isVoided ? 'line-through' : 'none' }}>{r.billing_month}{isVoided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px', textDecoration: 'none' }}>VOIDED</span>}</td>
                                     <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.previous_reading).toLocaleString()}</td>
                                     <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.current_reading).toLocaleString()}</td>
                                     <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>{Number(r.kwh_used).toFixed(1)}</td>
                                     <td style={{ padding: '8px 12px', color: '#6b7280' }}>${Number(r.rate_per_kwh).toFixed(3)}</td>
-                                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#15803d' }}>${(r.final_amount / 100).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 12px', fontWeight: 700, color: isVoided ? '#9ca3af' : '#15803d', textDecoration: isVoided ? 'line-through' : 'none' }}>${(r.final_amount / 100).toFixed(2)}</td>
                                     <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                                    <td style={{ padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                      {isVoided ? (
+                                        <span title={`Voided${r.voided_by ? ' by ' + r.voided_by : ''}${r.reason ? ' · ' + r.reason : ''}${r.voided_at ? ' · ' + new Date(r.voided_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }) : ''}`} style={{ fontSize: 11, color: '#9ca3af', cursor: 'help' }}>voided{r.voided_by ? ' · ' + r.voided_by : ''}</span>
+                                      ) : (
+                                        <button onClick={() => openVoid(i, r)} style={{ fontSize: 11, fontWeight: 600, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 5, padding: '3px 9px', cursor: 'pointer' }}>Void</button>
+                                      )}
+                                    </td>
                                   </tr>
-                                ))}
+                                  )
+                                })}
                               </tbody>
                               <tfoot>
                                 <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
                                   <td colSpan={5} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, color: '#15803d' }}>Total billed (all time)</td>
-                                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#15803d' }}>${(row.readings.reduce((s, r) => s + r.final_amount, 0) / 100).toFixed(2)}</td>
+                                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#15803d' }}>${(row.readings.filter(r => !r.voided).reduce((s, r) => s + r.final_amount, 0) / 100).toFixed(2)}</td>
+                                  <td />
                                   <td />
                                 </tr>
                               </tfoot>
@@ -953,6 +1025,47 @@ export default function ElectricBillingPage() {
           )}
         </div>
       )}
+
+      {/* Phase C2 — Void dialog */}
+      {voidTarget && (() => {
+        const camper = campers[voidTarget.index]
+        const hasPayments = (camper?.folioPayments?.length || 0) > 0
+        const r = voidTarget.reading
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={() => { if (!voiding) setVoidTarget(null) }}>
+            <div style={{ background: '#fff', borderRadius: 14, padding: '1.5rem', width: '100%', maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: '#b91c1c', marginBottom: 6 }}>Void this bill?</div>
+              <div style={{ fontSize: 14, color: '#374151', marginBottom: 12 }}>
+                <strong>{r.billing_month}</strong> · ${(r.final_amount / 100).toFixed(2)} — {camper?.guest.name} · Site {camper?.guest.site_number}
+              </div>
+              <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 14 }}>
+                Voiding removes this bill from the balance and statements. It stays visible on admin surfaces as an audit record. To re-bill this period, void it here, then bill it again.
+              </div>
+              {hasPayments && (
+                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 13, color: '#92400e' }}>
+                  ⚠ This guest's folio has payments on it. Voiding this charge may leave a <strong>credit on their account</strong> — handle that credit on the guest folio the usual way (refund or apply to a future charge).
+                </div>
+              )}
+              <label style={lbl}>Reason</label>
+              <input style={inp} value={voidReason} onChange={e => setVoidReason(e.target.value)} placeholder="e.g. wrong month, misread meter, duplicate" />
+              <label style={{ ...lbl, marginTop: 12 }}>Your name / initials</label>
+              <input style={inp} value={voidBy} onChange={e => setVoidBy(e.target.value)} placeholder="e.g. RC" />
+              {voidError && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 10 }}>{voidError}</div>}
+              <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+                <button onClick={performVoid} disabled={voiding}
+                  style={{ flex: 1, background: '#b91c1c', color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 14, fontWeight: 700, cursor: voiding ? 'default' : 'pointer', opacity: voiding ? 0.6 : 1 }}>
+                  {voiding ? 'Voiding…' : 'Void bill'}
+                </button>
+                <button onClick={() => setVoidTarget(null)} disabled={voiding}
+                  style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 18px', fontSize: 14, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -980,7 +1093,10 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
     setOpen(true)
   }
 
-  const totalBilled = readings.reduce((s, r) => s + r.final_amount, 0)
+  // Phase C2 — voided readings are excluded from the "billed" figures and marked in
+  // the table below (display consistency on this admin surface, Decision 2d).
+  const activeReadings = readings.filter((r: any) => !r.voided)
+  const totalBilled = activeReadings.reduce((s, r) => s + r.final_amount, 0)
   const totalPaid = payments.reduce((s, p) => s + p.amount - (p.surcharge_amount || 0), 0)
 
   return (
@@ -993,7 +1109,7 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
           <div style={{ fontSize: 12, color: '#9ca3af' }}>Site {guest.site_number} · {guest.email || 'No email'}</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          {loaded && <div style={{ fontSize: 12, color: '#6b7280' }}>{readings.length} bill{readings.length !== 1 ? 's' : ''} · ${(totalBilled / 100).toFixed(2)} billed · ${(totalPaid / 100).toFixed(2)} paid</div>}
+          {loaded && <div style={{ fontSize: 12, color: '#6b7280' }}>{activeReadings.length} bill{activeReadings.length !== 1 ? 's' : ''} · ${(totalBilled / 100).toFixed(2)} billed · ${(totalPaid / 100).toFixed(2)} paid</div>}
           <div style={{ fontWeight: 800, fontSize: 16, color: folioBalance > 0 ? '#dc2626' : '#15803d' }}>
             {folioBalance > 0 ? '$' + (folioBalance / 100).toFixed(2) + ' due' : '✓ Current'}
           </div>
@@ -1014,17 +1130,20 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
                 </tr>
               </thead>
               <tbody>
-                {readings.map((r, i) => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
-                    <td style={{ padding: '10px 16px', fontWeight: 600, color: '#111827' }}>{r.billing_month}</td>
+                {readings.map((r, i) => {
+                  const isVoided = r.voided === true
+                  return (
+                  <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', background: isVoided ? '#f9fafb' : (i % 2 === 0 ? '#fff' : '#fafafa'), opacity: isVoided ? 0.6 : 1 }}>
+                    <td style={{ padding: '10px 16px', fontWeight: 600, color: isVoided ? '#9ca3af' : '#111827', textDecoration: isVoided ? 'line-through' : 'none' }}>{r.billing_month}{isVoided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px', textDecoration: 'none' }}>VOIDED</span>}</td>
                     <td style={{ padding: '10px 16px', color: '#6b7280' }}>{Number(r.previous_reading).toLocaleString()}</td>
                     <td style={{ padding: '10px 16px', color: '#6b7280' }}>{Number(r.current_reading).toLocaleString()}</td>
                     <td style={{ padding: '10px 16px', fontWeight: 600 }}>{Number(r.kwh_used).toFixed(1)}</td>
                     <td style={{ padding: '10px 16px', color: '#6b7280' }}>${Number(r.rate_per_kwh).toFixed(3)}/kWh</td>
-                    <td style={{ padding: '10px 16px', fontWeight: 700, color: '#15803d' }}>${(r.final_amount / 100).toFixed(2)}</td>
+                    <td style={{ padding: '10px 16px', fontWeight: 700, color: isVoided ? '#9ca3af' : '#15803d', textDecoration: isVoided ? 'line-through' : 'none' }}>${(r.final_amount / 100).toFixed(2)}</td>
                     <td style={{ padding: '10px 16px', color: '#9ca3af' }}>{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
               <tfoot>
                 <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
