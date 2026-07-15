@@ -1,5 +1,6 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
+import { notVoided } from '@/lib/ledger'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
@@ -23,6 +24,7 @@ type LineItem = {
   charged_at: string
   product_id: string | null
   notes?: string | null
+  voided?: boolean | null
 }
 
 type Payment = {
@@ -243,7 +245,10 @@ export default function WalkUpFolioPage() {
     }
   }
 
-  const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
+  // Phase D: voided charges drop out of the balance AND the inline ledger (via
+  // activeItems), mirroring folio/[id]. Admin still sees them elsewhere; 0 voided today.
+  const activeItems = lineItems.filter(notVoided)
+  const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
@@ -267,7 +272,7 @@ export default function WalkUpFolioPage() {
   }
   const ledgerEvents: LedgerEvent[] = []
   let _lOrder = 0
-  lineItems.forEach((item) => {
+  activeItems.forEach((item) => {
     ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
   })
   payments.forEach((p) => {

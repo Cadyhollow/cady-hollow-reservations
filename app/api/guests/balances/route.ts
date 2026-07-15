@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { notVoided } from '@/lib/ledger'
 
 // POST /api/guests/balances  { guest_ids: string[] }
 // → { balances: { [guest_id]: cents } }
@@ -43,10 +44,10 @@ export async function POST(request: NextRequest) {
   const balByFolio = new Map<string, number>()
   if (folioIds.length) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      svc.from('folio_line_items').select('folio_id, line_total').in('folio_id', folioIds),
+      svc.from('folio_line_items').select('folio_id, line_total, voided').in('folio_id', folioIds),
       svc.from('folio_payments').select('folio_id, amount, surcharge_amount').in('folio_id', folioIds).eq('status', 'completed'),
     ])
-    for (const it of items || []) balByFolio.set(it.folio_id, (balByFolio.get(it.folio_id) || 0) + (it.line_total || 0))
+    for (const it of (items || []).filter(notVoided)) balByFolio.set(it.folio_id, (balByFolio.get(it.folio_id) || 0) + (it.line_total || 0))
     for (const p of pmts || []) balByFolio.set(p.folio_id, (balByFolio.get(p.folio_id) || 0) - (p.amount - (p.surcharge_amount || 0)))
   }
 

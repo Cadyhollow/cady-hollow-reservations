@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { planAtLeast } from '@/lib/plan'
 import { periodFromBillingMonth, classifyPeriod, fmtMDY, type GuardResult } from '@/lib/electric-periods'
+import { notVoided, sumLineTotals } from '@/lib/ledger'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -154,7 +155,7 @@ export default function ElectricBillingPage() {
           supabase.from('folio_line_items').select('*').eq('folio_id', folio.id).order('charged_at'),
           supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at', { ascending: false }),
         ])
-        const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+        const itemsTotal = sumLineTotals(items)
         const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
         folioBalance = itemsTotal - paymentsTotal
         recentCharges = items || []
@@ -267,7 +268,7 @@ export default function ElectricBillingPage() {
       supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
       supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed'),
     ])
-    const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const itemsTotal = sumLineTotals(items)
     const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const newBalance = Math.max(0, itemsTotal - paymentsTotal)
 
@@ -358,7 +359,7 @@ export default function ElectricBillingPage() {
     // Just re-send the email — don't touch the database
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed')
-    const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const itemsTotal = sumLineTotals(allItems)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const balance = Math.max(0, itemsTotal - paymentsTotal)
 
@@ -372,6 +373,7 @@ export default function ElectricBillingPage() {
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
 
     const newLineItems = (allItems || []).filter((item: any) => {
+      if (!notVoided(item)) return false
       if (item.description === thisElectricDesc) return false
       if (!previousBillSentAt) return true
       return new Date(item.charged_at) > new Date(previousBillSentAt)
@@ -384,7 +386,7 @@ export default function ElectricBillingPage() {
       .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) > new Date(previousBillSentAt))
       .reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
     const chargesBeforeResend = (allItems || [])
-      .filter((i: any) => i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
+      .filter((i: any) => notVoided(i) && i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
       .reduce((s: number, i: any) => s + i.line_total, 0)
     const paymentsBeforeResend = (allPayments || [])
       .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) <= new Date(previousBillSentAt))
@@ -523,7 +525,7 @@ export default function ElectricBillingPage() {
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
-    const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const itemsTotal = sumLineTotals(allItems)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     // Live folio balance — matches what shows in their guest folio exactly
     const liveBalance = itemsTotal - paymentsTotal
@@ -543,7 +545,7 @@ export default function ElectricBillingPage() {
     // Balance Forward = everything owed BEFORE this billing month
     // = all charges before this electric bill minus all payments before this electric bill
     const chargesBefore = (allItems || [])
-      .filter((i: any) => i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
+      .filter((i: any) => notVoided(i) && i.description !== thisElectricDesc && (!previousBillSentAt || new Date(i.charged_at) <= new Date(previousBillSentAt)))
       .reduce((s: number, i: any) => s + i.line_total, 0)
     const paymentsBefore = (allPayments || [])
       .filter((p: any) => !previousBillSentAt || new Date(p.paid_at) <= new Date(previousBillSentAt))
@@ -552,6 +554,7 @@ export default function ElectricBillingPage() {
 
     // New charges since last bill (excluding this month's electric — shown separately)
     const newCharges = (allItems || []).filter((item: any) => {
+      if (!notVoided(item)) return false
       if (item.description === thisElectricDesc) return false
       if (!previousBillSentAt) return true
       return new Date(item.charged_at) > new Date(previousBillSentAt)

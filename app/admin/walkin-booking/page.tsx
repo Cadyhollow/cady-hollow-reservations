@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { sumLineTotals } from '@/lib/ledger'
 import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
@@ -396,7 +397,7 @@ export default function WalkInBookingPage() {
     await loadFolioData(folioId)
   }
 
-  const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
+  const itemsTotal = sumLineTotals(lineItems)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, total + itemsTotal - paymentsTotal)
   const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>

@@ -9,6 +9,19 @@ export type LedgerLineItem = {
   quantity?: number | null
   line_total: number
   charged_at?: string | null
+  voided?: boolean | null
+}
+
+// Phase D — the single void-filter idiom, imported everywhere a folio balance is
+// summed. Applied at the SUM step (never at the query) so admin views can still
+// DISPLAY voided rows as the audit trail (Decision 2d) while excluding them from
+// totals. `voided !== true` treats null/undefined/false all as active, so it's safe
+// against any row (or select) that doesn't carry the column.
+export const notVoided = (i: { voided?: boolean | null }): boolean => i.voided !== true
+export function sumLineTotals(
+  items: { line_total: number; voided?: boolean | null }[] | null | undefined,
+): number {
+  return (items || []).filter(notVoided).reduce((s, i) => s + (i.line_total || 0), 0)
 }
 
 export type LedgerPayment = {
@@ -33,7 +46,9 @@ export type LedgerEvent = {
 export function buildLedger(lineItems: LedgerLineItem[], payments: LedgerPayment[]): LedgerEvent[] {
   const events: LedgerEvent[] = []
   let order = 0
-  for (const item of lineItems || []) {
+  // Voided charges drop out of the emailed statement's display AND its running
+  // balance (customer-facing → they vanish entirely, Decision 2d).
+  for (const item of (lineItems || []).filter(notVoided)) {
     events.push({
       key: `item-${item.id}`,
       kind: 'charge',

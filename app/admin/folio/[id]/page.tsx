@@ -1,5 +1,6 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
+import { notVoided } from '@/lib/ledger'
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
@@ -410,7 +411,7 @@ export default function FolioPage() {
   }
 
   // Totals — single source of truth
-  const activeItems = lineItems.filter(i => !i.voided)
+  const activeItems = lineItems.filter(notVoided)
   async function sendToTerminal() {
     if (!folio) return
     const amount = Math.max(0, (reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0) + activeItems.reduce((sum, i) => sum + i.line_total, 0) - payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0))

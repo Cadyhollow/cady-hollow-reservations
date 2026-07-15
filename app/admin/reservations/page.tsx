@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { sumLineTotals } from '@/lib/ledger'
 import { supabase } from '@/lib/supabase'
 import { computePricing } from '@/lib/pricing'
 import WaiverActions from './WaiverActions'
@@ -120,10 +121,10 @@ function ReservationsPageInner() {
       if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0) } return }
       const [{ data: pmts }, { data: items }] = await Promise.all([
         supabase.from('folio_payments').select('amount, surcharge_amount').eq('status', 'completed').in('folio_id', ids),
-        supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
+        supabase.from('folio_line_items').select('line_total, voided').in('folio_id', ids),
       ])
       const paid = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-      const charges = (items || []).reduce((sum: number, i: any) => sum + (i.line_total || 0), 0)
+      const charges = sumLineTotals(items)
       if (!cancelled) { setSelectedFolioPaid(paid); setSelectedFolioCharges(charges) }
     }
     loadFolioTotals()

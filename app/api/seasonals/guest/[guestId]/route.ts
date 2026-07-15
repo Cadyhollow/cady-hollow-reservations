@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { sumLineTotals } from '@/lib/ledger'
 
 // GET /api/seasonals/guest/[guestId]?year=YYYY — summit-gated. Everything the
 // camper page needs (service-role: reads the RLS-zero-policy tables).
@@ -46,10 +47,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const folioId = folio?.id || ''
   if (folioId) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      svc.from('folio_line_items').select('line_total').eq('folio_id', folioId),
+      svc.from('folio_line_items').select('line_total, voided').eq('folio_id', folioId),
       svc.from('folio_payments').select('amount, surcharge_amount, method, paid_at, status').eq('folio_id', folioId).eq('status', 'completed').order('paid_at', { ascending: false }),
     ])
-    const itemsTotal = (items || []).reduce((s, i) => s + i.line_total, 0)
+    const itemsTotal = sumLineTotals(items)
     const paymentsTotal = (pmts || []).reduce((s, p) => s + p.amount - (p.surcharge_amount || 0), 0)
     balance_cents = itemsTotal - paymentsTotal
     lastPayment = (pmts || [])[0] || null

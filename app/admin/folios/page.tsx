@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { sumLineTotals } from '@/lib/ledger'
 import { useRouter } from 'next/navigation'
 import { planAtLeast } from '@/lib/plan'
 
@@ -17,7 +18,7 @@ type FolioRow = {
   status: string
   opened_at: string
   reservation_id: string | null
-  folio_line_items: { line_total: number }[]
+  folio_line_items: { line_total: number; voided?: boolean | null }[]
   folio_payments: { amount: number; surcharge_amount: number; status: string; method: string; paid_at: string }[]
   reservations: { site_number: string; arrival_date: string; departure_date: string; total_price: number; amount_paid: number } | null
 }
@@ -56,7 +57,7 @@ export default function FoliosPage() {
       .from('folios')
       .select(`
         id, guest_name, guest_email, folio_type, status, opened_at, reservation_id,
-        folio_line_items ( line_total ),
+        folio_line_items ( line_total, voided ),
         folio_payments ( amount, surcharge_amount, status, method, paid_at )
       `)
       .order('opened_at', { ascending: false })
@@ -81,7 +82,7 @@ export default function FoliosPage() {
 
     const summaries: FolioSummary[] = (data as any[]).map(f => {
       const reservation = f.reservation_id ? resMap[f.reservation_id] || null : null
-      const itemsTotal = (f.folio_line_items || []).reduce((s: number, i: any) => s + i.line_total, 0)
+      const itemsTotal = sumLineTotals(f.folio_line_items)
       const completedPayments = (f.folio_payments || []).filter((p: any) => p.status === 'completed')
       const paymentsTotal = completedPayments.reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
       const resBal = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0

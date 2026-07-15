@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
+import { sumLineTotals } from '@/lib/ledger'
 import { createClient } from '@supabase/supabase-js'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
     // Load payments
     const { data: payments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
 
-    const itemsTotal = (lineItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const itemsTotal = sumLineTotals(lineItems)
     const paymentsTotal = (payments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const mostRecentPayment = payments && payments.length > 0 ? payments[payments.length - 1] : null
 

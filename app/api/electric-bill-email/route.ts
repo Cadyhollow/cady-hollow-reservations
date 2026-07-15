@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     if (folioId) {
       try {
         const [{ data: items }, { data: pmts }] = await Promise.all([
-          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at').eq('folio_id', folioId),
+          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, voided').eq('folio_id', folioId),
           supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at').eq('folio_id', folioId).eq('status', 'completed'),
         ])
         const stmt = buildStatement(buildLedger(items || [], pmts || []), Date.now(), 90)

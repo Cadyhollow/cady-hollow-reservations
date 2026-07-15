@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { fetchUnifiedTransactions, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 import { planAtLeast } from '@/lib/plan'
+import { notVoided, sumLineTotals } from '@/lib/ledger'
 
 type Reservation = {
   id: string
@@ -293,10 +294,10 @@ export default function ReportsPage() {
         if (guestFolios.length === 0) { camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId: '', balance: 0 }); continue }
         const folioId = guestFolios[0].id
         const [{ data: items }, { data: pmts }] = await Promise.all([
-          supabase.from('folio_line_items').select('line_total').eq('folio_id', folioId),
+          supabase.from('folio_line_items').select('line_total, voided').eq('folio_id', folioId),
           supabase.from('folio_payments').select('amount, surcharge_amount').eq('folio_id', folioId).eq('status','completed'),
         ])
-        const itemsTotal = (items||[]).reduce((s:number,i:any)=>s+i.line_total,0)
+        const itemsTotal = sumLineTotals(items)
         const paymentsTotal = (pmts||[]).reduce((s:number,p:any)=>s+p.amount-(p.surcharge_amount||0),0)
         const balance = Math.max(0, itemsTotal - paymentsTotal)
         camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId, balance })
@@ -308,8 +309,10 @@ export default function ReportsPage() {
     if (gaFolioIds.length > 0) {
       const { data: gaPmts } = await supabase.from('folio_payments').select('id, paid_at, method, amount, surcharge_amount, status, folio_id').eq('status','completed').gte('paid_at', startISO).lte('paid_at', endISO).in('folio_id', gaFolioIds)
       gaPmtData = gaPmts || []
-      const { data: gaLiData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at').in('folio_id', gaFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-      setGuestAccountLineItems(gaLiData as any || [])
+      const { data: gaLiData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided').in('folio_id', gaFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
+      // Phase D: voided charges are not revenue — drop them at ingestion so every
+      // downstream sum (electric/other revenue, category map) excludes them.
+      setGuestAccountLineItems(((gaLiData as any) || []).filter(notVoided))
     } else { setGuestAccountLineItems([]) }
 
     // Monthly campers' guest-account charges (for the Monthly Revenue card)
@@ -320,8 +323,8 @@ export default function ReportsPage() {
       const { data: mFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account').in('guest_id', monthlyGuestIds)
       const mFolioIds = (mFolios||[]).map((f:any)=>f.id)
       if (mFolioIds.length > 0) {
-        const { data: mItems } = await supabase.from('folio_line_items').select('line_total').in('folio_id', mFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-        monthlyCharges = (mItems||[]).reduce((s:number,i:any)=>s+(i.line_total||0),0)
+        const { data: mItems } = await supabase.from('folio_line_items').select('line_total, voided').in('folio_id', mFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
+        monthlyCharges = sumLineTotals(mItems)
       }
     }
     setMonthlyRevenue(monthlyCharges)
@@ -345,7 +348,7 @@ export default function ReportsPage() {
     setTxFolioLoading(true)
     setShowRefund(false)
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at').eq('folio_id', tx.folio_id).order('charged_at'),
+      supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at, voided').eq('folio_id', tx.folio_id).order('charged_at'),
       supabase.from('folio_payments').select('*').eq('folio_id', tx.folio_id).order('paid_at'),
     ])
     setTxFolioItems(items as any || [])
@@ -1201,11 +1204,11 @@ export default function ReportsPage() {
                   <div>
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Charges</h3>
                     <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
-                      {txFolioItems.filter(i=>!i.voided).length===0?(
+                      {txFolioItems.filter(notVoided).length===0?(
                         <p className="text-gray-400 text-sm p-4">No line items</p>
                       ):(
                         <>
-                          {txFolioItems.filter(i=>!i.voided).map((item,i,arr)=>(
+                          {txFolioItems.filter(notVoided).map((item,i,arr)=>(
                             <div key={item.id} className={`flex items-center justify-between px-4 py-3 ${i<arr.length-1?'border-b border-gray-100':''}`}>
                               <div>
                                 <p className="text-sm font-medium text-gray-900">{item.description}{item.quantity>1?` ×${item.quantity}`:''}</p>
@@ -1217,7 +1220,7 @@ export default function ReportsPage() {
                           ))}
                           <div className="flex justify-between px-4 py-3 border-t border-gray-200 bg-white">
                             <span className="text-sm font-bold text-gray-900">Subtotal</span>
-                            <span className="text-sm font-bold text-gray-900">${(txFolioItems.filter(i=>!i.voided).reduce((s,i)=>s+i.line_total,0)/100).toFixed(2)}</span>
+                            <span className="text-sm font-bold text-gray-900">${(txFolioItems.filter(notVoided).reduce((s,i)=>s+i.line_total,0)/100).toFixed(2)}</span>
                           </div>
                         </>
                       )}
@@ -1263,7 +1266,7 @@ export default function ReportsPage() {
 
                   {/* Balance summary */}
                   {(() => {
-                    const chargesTotal = txFolioItems.reduce((s,i)=>s+i.line_total,0)
+                    const chargesTotal = sumLineTotals(txFolioItems)
                     const paymentsTotal = txFolioPayments.filter((p:any)=>p.status==='completed').reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
                     const balance = chargesTotal - paymentsTotal
                     return (
