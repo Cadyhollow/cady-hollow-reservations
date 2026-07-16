@@ -95,6 +95,23 @@ function nightsBetween(arrival: string, departure: string): number {
   return ms > 0 ? Math.round(ms / 86400000) : 0
 }
 
+// Card surcharge — Model B, the single source of truth. Both computePricing and the
+// customer booking page (app/book/page.tsx, which reimplements pricing inline) import
+// THIS so the two can never drift. All money is integer cents.
+//   payment     — the amount being collected on this transaction
+//   cashTotal   — the full amount owed, tax-INCLUSIVE (the denominator; what "in full" means)
+//   nonTaxBase  — cashTotal minus tax; the surcharge only ever applies to non-tax charges
+//   pct         — the surcharge rate (settings.card_surcharge_percent); 0 disables it
+// The whole-bill fee is pct% of nonTaxBase; each payment carries its proportional share,
+// and min(payment, cashTotal) means an overpayment/credit is never surcharged.
+export function cardSurchargeFor(
+  payment: number, cashTotal: number, nonTaxBase: number, pct: number,
+): number {
+  if (cashTotal <= 0 || pct <= 0) return 0
+  const cardFeeCents = Math.round(nonTaxBase * pct / 100)
+  return Math.round(Math.min(payment, cashTotal) * cardFeeCents / cashTotal)
+}
+
 export function computePricing(input: PricingInput): PricingResult {
   const {
     site, arrival_date, departure_date,
@@ -156,8 +173,13 @@ export function computePricing(input: PricingInput): PricingResult {
 
   const cashTotal = baseTotal + extraGuestFee + feesTotalCash + addonTotal + earlyFee + lateFee
 
+  // Card surcharge (Model B): one rate on the NON-TAX base. Reservations carry no tax
+  // until T3, so taxTotal is 0 today and nonTaxBase === cashTotal — but we subtract it
+  // explicitly so the surcharge is correct-by-construction the day tax arrives.
   const pct = settings.card_surcharge_percent || 0
-  const cardSurcharge = (amountCents: number) => Math.round(amountCents * pct / 100)
+  const taxTotal = 0
+  const nonTaxBase = cashTotal - taxTotal
+  const cardSurcharge = (amountCents: number) => cardSurchargeFor(amountCents, cashTotal, nonTaxBase, pct)
 
   const firstNightBase = site ? site.base_rate : 0
   const proportionalFees = nights > 0 ? Math.round(feesTotalCash / nights) : 0

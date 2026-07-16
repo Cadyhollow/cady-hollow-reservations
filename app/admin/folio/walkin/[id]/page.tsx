@@ -1,6 +1,7 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
-import { notVoided } from '@/lib/ledger'
+import { notVoided, sumLineTaxes } from '@/lib/ledger'
+import { cardSurchargeFor } from '@/lib/pricing'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
@@ -183,8 +184,8 @@ export default function WalkUpFolioPage() {
     if (!folio) return
     const baseAmount = paymentMethod === 'cash' && cashTendered !== '' ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100)) : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
-    const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
-      ? Math.round(baseAmount * (cardSurcharge / 100))
+    const surchargeAmount = paymentMethod === 'card' && !waiveFee
+      ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge)
       : 0
     const totalAmount = baseAmount + surchargeAmount
     setSavingPayment(true)
@@ -215,7 +216,7 @@ export default function WalkUpFolioPage() {
     setSavingPayment(true)
     const result = await cardRef.current.tokenize()
     if (!result.ok) { alert(result.error); setSavingPayment(false); return }
-    const surchargeAmount = cardSurcharge > 0 && !waiveFee ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+    const surchargeAmount = !waiveFee ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge) : 0
     const totalAmount = baseAmount + surchargeAmount
     const res = await fetch('/api/admin-card-payment', {
       method: 'POST',
@@ -251,9 +252,12 @@ export default function WalkUpFolioPage() {
   const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
+  // Non-tax base for the card surcharge: balance minus POS tax baked into line totals
+  // (0 today; correct-by-construction for T3). cashTotal for the cap is totalDue.
+  const folioNonTaxBase = totalDue - sumLineTaxes(lineItems)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
-  const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
+  const surchargePreview = paymentMethod === 'card' && !waiveFee ? cardSurchargeFor(paymentAmountCents, totalDue, folioNonTaxBase, cardSurcharge) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   // ---- Chronological ledger: charges + payments interleaved with a running balance ----
   type LedgerEvent = {

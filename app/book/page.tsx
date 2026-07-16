@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
+import { cardSurchargeFor } from '@/lib/pricing'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 type Addon = {
@@ -192,7 +193,7 @@ function BookingForm() {
   async function fetchSettings() {
     const { data } = await supabase
       .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee, card_surcharge_percent')
       .limit(1)
       .single()
     if (data) {
@@ -417,8 +418,12 @@ function BookingForm() {
   }
   const showDepositButton = depositType !== 'full'
 
+  // Card surcharge — Model B (shared helper). Booking carries no tax, so nonTaxBase ===
+  // cashTotal. Reads the unified rate setting; a lingering card_only fee is already out
+  // of cashTotal and is no longer re-added here, so it simply vanishes (as intended).
+  const surchargePct = Number(settings?.card_surcharge_percent) || 0
   // Surcharge on the deposit's cash amount, for a truthful button label.
-  const depositSurcharge = cashTotal > 0 ? Math.round(deposit * cardOnlyFeesTotal / cashTotal) : 0
+  const depositSurcharge = cardSurchargeFor(deposit, cashTotal, cashTotal, surchargePct)
   const depositDisplay = deposit + depositSurcharge
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -449,8 +454,8 @@ function BookingForm() {
 
       // Both deposit and full are already CASH values; surcharge is added below.
       const cashAmountToPay = paymentType === 'deposit' ? deposit : cashTotal
-      // Surcharge actually charged on this payment, scaled to the cash amount.
-      const surchargeAmount = cashTotal > 0 ? Math.round(cashAmountToPay * cardOnlyFeesTotal / cashTotal) : 0
+      // Surcharge actually charged on this payment (Model B shared helper).
+      const surchargeAmount = cardSurchargeFor(cashAmountToPay, cashTotal, cashTotal, surchargePct)
       const addonItems = Object.entries(selectedAddons)
         .filter(([_, qty]) => qty > 0)
         .map(([id, quantity]) => {

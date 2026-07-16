@@ -1,7 +1,8 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import { sumLineTotals } from '@/lib/ledger'
+import { sumLineTotals, sumLineTaxes } from '@/lib/ledger'
+import { cardSurchargeFor } from '@/lib/pricing'
 import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
@@ -294,8 +295,8 @@ export default function WalkInBookingPage() {
       const result = await cardRef.current.tokenize()
       if (!result.ok) { alert(result.error); setChargingCard(false); return }
       const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
-      const surchargeAmount = cardSurcharge > 0 && !waiveFee
-        ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+      const surchargeAmount = !waiveFee
+        ? cardSurchargeFor(baseAmount, totalDue, walkinNonTaxBase, cardSurcharge) : 0
       const totalAmount = baseAmount + surchargeAmount
       const res = await fetch('/api/admin-card-payment', {
         method: 'POST',
@@ -325,7 +326,7 @@ export default function WalkInBookingPage() {
 
   async function sendToTerminal() {
     if (!folioId) return
-    const surchargeAmount = cardSurcharge > 0 ? Math.round(totalDue * (cardSurcharge / 100)) : 0
+    const surchargeAmount = cardSurchargeFor(totalDue, totalDue, walkinNonTaxBase, cardSurcharge)
     const totalAmount = totalDue + surchargeAmount
     setSendingToTerminal(true)
     setTerminalStatus('')
@@ -372,8 +373,8 @@ export default function WalkInBookingPage() {
       ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100))
       : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
-    const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0
-      ? Math.round(baseAmount * (cardSurcharge / 100))
+    const surchargeAmount = paymentMethod === 'card'
+      ? cardSurchargeFor(baseAmount, totalDue, walkinNonTaxBase, cardSurcharge)
       : 0
     const totalAmount = baseAmount + surchargeAmount
     setSavingPayment(true)
@@ -400,11 +401,14 @@ export default function WalkInBookingPage() {
   const itemsTotal = sumLineTotals(lineItems)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, total + itemsTotal - paymentsTotal)
+  // Non-tax base for the card surcharge: the balance minus POS tax baked into line items
+  // (0 today; reservation.tax_amount joins here at T3). cashTotal for the cap is totalDue.
+  const walkinNonTaxBase = totalDue - sumLineTaxes(lineItems)
   const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
     sum + (f.type === 'percentage' ? Math.round(totalDue * f.amount / 100) : f.amount), 0)
   const overpaid = cashTendered !== '' && parseFloat(cashTendered) > parseFloat(paymentAmount) ? Math.round((parseFloat(cashTendered) - parseFloat(paymentAmount)) * 100) : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
-  const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
+  const surchargePreview = paymentMethod === 'card' && !waiveFee ? cardSurchargeFor(paymentAmountCents, totalDue, walkinNonTaxBase, cardSurcharge) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   const filteredProducts = products.filter(p => p.category === activeCategory)
 
@@ -760,7 +764,7 @@ export default function WalkInBookingPage() {
                 <div style={{ fontWeight: 700, fontSize: 16, color: '#1e3f52', marginBottom: 4 }}>Send to Square Terminal</div>
                 <div style={{ fontSize: 13, color: '#4a6275', marginBottom: 12 }}>
                   Amount: <strong>${(totalDue/100).toFixed(2)}</strong>
-                  {cardSurcharge > 0 && <span> + {cardSurcharge}% fee = <strong>${((totalDue + Math.round(totalDue * cardSurcharge / 100))/100).toFixed(2)}</strong></span>}
+                  {cardSurcharge > 0 && <span> + {cardSurcharge}% fee = <strong>${((totalDue + cardSurchargeFor(totalDue, totalDue, walkinNonTaxBase, cardSurcharge))/100).toFixed(2)}</strong></span>}
                 </div>
                 <button
                   onClick={() => { setShowPayment(false); sendToTerminal() }}
@@ -780,7 +784,7 @@ export default function WalkInBookingPage() {
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
-                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(Math.round(Math.round(parseFloat(paymentAmount) * 100) * cardSurcharge / 100) / 100).toFixed(2)}</span>
+                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(Math.round(parseFloat(paymentAmount) * 100), totalDue, walkinNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
                     </div>
                   </div>
                 )}

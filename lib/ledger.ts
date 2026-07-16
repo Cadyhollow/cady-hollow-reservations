@@ -25,6 +25,17 @@ export function sumLineTotals(
   return (items || []).filter(notVoided).reduce((s, i) => s + (i.line_total || 0), 0)
 }
 
+// Companion to sumLineTotals: the tax baked INTO those line totals (line_total is stored
+// as (price + tax_amount) * qty). Subtract from a folio balance to get the non-tax base
+// for the card surcharge. Zero today — Cady's POS tax is 0 — but referenced now so the
+// surcharge base excludes tax by construction the day T3 makes tax_amount non-zero.
+// Void-filtered on the SAME basis as sumLineTotals so the two always agree.
+export function sumLineTaxes(
+  items: { tax_amount?: number | null; voided?: boolean | null }[] | null | undefined,
+): number {
+  return (items || []).filter(notVoided).reduce((s, i) => s + (i.tax_amount || 0), 0)
+}
+
 export type LedgerPayment = {
   id: string
   method: string

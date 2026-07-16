@@ -88,13 +88,33 @@ export default function FeesPage() {
   // Products are a POS-only concept; the tax model itself is core (a no-POS client can
   // still owe lodging tax). Gate only the Products group, like every other POS surface.
   const [posEnabled, setPosEnabled] = useState(false)
+  // Card surcharge (Model B): its own rate setting, stored on settings.card_surcharge_percent.
+  const [settingsId, setSettingsId] = useState<number | null>(null)
+  const [surchargePct, setSurchargePct] = useState('')
+  const [savingSurcharge, setSavingSurcharge] = useState(false)
 
   useEffect(() => {
     fetchFees()
     fetchTaxes()
     fetchTaxTargets()
-    supabase.from('settings').select('pos_enabled').single().then(({ data }) => setPosEnabled(!!data?.pos_enabled))
+    supabase.from('settings').select('id, pos_enabled, card_surcharge_percent').single().then(({ data }) => {
+      setPosEnabled(!!data?.pos_enabled)
+      if (data) {
+        setSettingsId(data.id)
+        setSurchargePct(data.card_surcharge_percent != null ? String(data.card_surcharge_percent) : '')
+      }
+    })
   }, [])
+
+  async function saveSurcharge() {
+    const pct = parseFloat(surchargePct)
+    if (surchargePct === '' || isNaN(pct) || pct < 0) { toast.error('Enter a surcharge rate (0 for none).'); return }
+    setSavingSurcharge(true)
+    const { error } = await supabase.from('settings').update({ card_surcharge_percent: pct }).eq('id', settingsId ?? 1)
+    setSavingSurcharge(false)
+    if (error) { toast.error('Error saving surcharge.'); return }
+    toast.success('Card surcharge saved!')
+  }
 
   async function fetchFees() {
     setLoading(true)
@@ -300,6 +320,19 @@ export default function FeesPage() {
       <Toaster />
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Taxes &amp; Fees</h1>
 
+      {/* ── Card Surcharge ────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Card Surcharge</h2>
+        <p className="text-sm text-gray-500 mb-4">A single percentage added to card payments — online booking and every in-person screen alike — on the total excluding tax. Set to 0 for no surcharge.</p>
+        <div className="flex items-end gap-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Rate (%)</label>
+            <input className="w-40 border border-gray-200 rounded-lg px-3 py-2 text-sm" type="number" step="0.01" min="0" placeholder="e.g. 3.5" value={surchargePct} onChange={e => setSurchargePct(e.target.value)} />
+          </div>
+          <button onClick={saveSurcharge} disabled={savingSurcharge} className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-60" style={{ backgroundColor: 'var(--accent-color)' }}>{savingSurcharge ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+
       {/* ── Taxes ─────────────────────────────────────────────── */}
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-semibold text-gray-900">Taxes</h2>
@@ -444,10 +477,9 @@ export default function FeesPage() {
               />
               <label htmlFor="is_active" className="text-sm text-gray-700">Active (applied to bookings)</label>
             </div>
-            <div className="flex items-center gap-2 mt-3">
-              <input type="checkbox" id="card_only" checked={form.card_only} onChange={e => setForm({ ...form, card_only: e.target.checked })} style={checkboxStyle} />
-              <label htmlFor="card_only" className="text-sm text-gray-700">Card payment fee only (waived for cash/check payments)</label>
-            </div>
+            {/* card_only checkbox retired (Model B): the surcharge is its own rate above.
+                The column is kept and form.card_only round-trips existing fees, but no new
+                card-only fee can be created — one would land in neither cash nor surcharge. */}
           </div>
 
           <div className="flex gap-3 mt-6">

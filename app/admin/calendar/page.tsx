@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd, allPaymentMethods } from '@/lib/transactions'
-import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
+import { computePricing, cardSurchargeFor, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 
 type Reservation = {
@@ -920,7 +920,7 @@ export default function CalendarPage() {
 
         // Live math from the editable amount field
         const payBaseCents = Math.round(parseFloat(payAmount || '0') * 100) || 0
-        const surchargeCents = payMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+        const surchargeCents = payMethod === 'card' && !waiveFee ? cardSurchargeFor(payBaseCents, newBalance, newBalance, cardSurcharge) : 0
         const totalWithSurcharge = payBaseCents + surchargeCents
         const paymentFailed = !!payFailed || terminalStatus === 'error'
         const fmtUSD = (c: number) => (c < 0 ? '−' : '') + '$' + (Math.abs(c) / 100).toFixed(2)
@@ -982,7 +982,7 @@ export default function CalendarPage() {
             ? Math.min(Math.round(parseFloat(cashTendered) * 100), payBaseCents)
             : payBaseCents
           if (!baseAmount || baseAmount <= 0) { setPayError('Enter an amount greater than zero.'); return }
-          const surcharge = payMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(baseAmount * (cardSurcharge / 100)) : 0
+          const surcharge = payMethod === 'card' && !waiveFee ? cardSurchargeFor(baseAmount, newBalance, newBalance, cardSurcharge) : 0
           const totalAmount = baseAmount + surcharge
           setPaySaving(true); setPayError('')
           const { error } = await supabase.from('folio_payments').insert({
@@ -997,7 +997,7 @@ export default function CalendarPage() {
           const fid = adjFolioId || await ensureFolio()
           if (!fid) { setPayFailed('No folio to charge against.'); return }
           if (!payBaseCents || payBaseCents <= 0) { setPayError('Enter an amount greater than zero.'); return }
-          const surcharge = cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+          const surcharge = !waiveFee ? cardSurchargeFor(payBaseCents, newBalance, newBalance, cardSurcharge) : 0
           const totalCharge = payBaseCents + surcharge
           setTerminalStatus('waiting'); setPayError('')
           try {
@@ -1023,7 +1023,7 @@ export default function CalendarPage() {
           setPaySaving(true); setPayError('')
           const result = await cardRef.current.tokenize()
           if (!result.ok) { setPayError(result.error || 'Card was declined or incomplete.'); setPaySaving(false); return }
-          const surcharge = cardSurcharge > 0 && !waiveFee ? Math.round(payBaseCents * (cardSurcharge / 100)) : 0
+          const surcharge = !waiveFee ? cardSurchargeFor(payBaseCents, newBalance, newBalance, cardSurcharge) : 0
           const totalCharge = payBaseCents + surcharge
           try {
             const res = await fetch('/api/admin-card-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' },
