@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
+import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
+import TaxCheckboxList from '@/components/TaxCheckboxList'
 
 type Addon = {
   id: string
@@ -30,8 +32,14 @@ export default function AddonsPage() {
   const [editingAddon, setEditingAddon] = useState<Addon | null>(null)
   const [form, setForm] = useState(emptyAddon)
   const [saving, setSaving] = useState(false)
+  // Item-side tax config: which taxes apply to the add-on being edited.
+  const [taxes, setTaxes] = useState<TaxRow[]>([])
+  const [addonTaxIds, setAddonTaxIds] = useState<string[]>([])
 
-  useEffect(() => { fetchAddons() }, [])
+  useEffect(() => {
+    fetchAddons()
+    fetchTaxes().then(setTaxes)
+  }, [])
 
   async function fetchAddons() {
     const { data } = await supabase.from('addons').select('*').order('display_order')
@@ -39,7 +47,7 @@ export default function AddonsPage() {
     setLoading(false)
   }
 
-  function openAddForm() { setEditingAddon(null); setForm(emptyAddon); setShowForm(true) }
+  function openAddForm() { setEditingAddon(null); setForm(emptyAddon); setAddonTaxIds([]); setShowForm(true) }
 
   function openEditForm(addon: Addon) {
     setEditingAddon(addon)
@@ -51,6 +59,8 @@ export default function AddonsPage() {
       is_early_checkin: addon.is_early_checkin,
       display_order: addon.display_order,
     })
+    setAddonTaxIds([])
+    fetchAppliedTaxIds('addon', addon.id).then(setAddonTaxIds)
     setShowForm(true)
   }
 
@@ -65,15 +75,18 @@ export default function AddonsPage() {
       is_early_checkin: form.is_early_checkin,
       display_order: form.display_order,
     }
+    let addonId = editingAddon?.id
     if (editingAddon) {
       const { error } = await supabase.from('addons').update(payload).eq('id', editingAddon.id)
       if (error) { toast.error('Error updating add-on.'); setSaving(false); return }
       toast.success('Add-on updated!')
     } else {
-      const { error } = await supabase.from('addons').insert(payload)
-      if (error) { toast.error('Error adding add-on.'); setSaving(false); return }
+      const { data, error } = await supabase.from('addons').insert(payload).select().single()
+      if (error || !data) { toast.error('Error adding add-on.'); setSaving(false); return }
+      addonId = data.id
       toast.success('Add-on created!')
     }
+    if (addonId) await syncItemTaxes('addon', addonId, addonTaxIds)
     setSaving(false); setShowForm(false); fetchAddons()
   }
 
@@ -145,6 +158,11 @@ export default function AddonsPage() {
                 <span className="text-sm font-medium text-gray-700">Early check-in option</span>
               </div>
             </div>
+          </div>
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Taxes on this add-on</label>
+            <p className="text-xs text-gray-400 mb-2">Which taxes are charged on this add-on.</p>
+            <TaxCheckboxList taxes={taxes} selected={addonTaxIds} onToggle={id => setAddonTaxIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
           </div>
           <div className="flex gap-3 mt-4">
             <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">{saving ? 'Saving...' : editingAddon ? 'Save Changes' : 'Add Item'}</button>

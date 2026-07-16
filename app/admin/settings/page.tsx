@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
+import TaxCheckboxList from '@/components/TaxCheckboxList'
 import toast, { Toaster } from 'react-hot-toast'
 import Image from 'next/image'
 
@@ -68,11 +70,23 @@ export default function SettingsPage() {
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  // Item-side tax config for the three settings-priced singletons.
+  const [taxes, setTaxes] = useState<TaxRow[]>([])
+  const [earlyTaxIds, setEarlyTaxIds] = useState<string[]>([])
+  const [lateTaxIds, setLateTaxIds] = useState<string[]>([])
+  const [extraGuestTaxIds, setExtraGuestTaxIds] = useState<string[]>([])
   useEffect(() => { setEarlyPriceInput((form.early_checkin_price / 100).toFixed(2)) }, [form.early_checkin_price])
   useEffect(() => { setLatePriceInput((form.late_checkout_price / 100).toFixed(2)) }, [form.late_checkout_price])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { fetchSettings() }, [])
+
+  useEffect(() => {
+    fetchTaxes().then(setTaxes)
+    fetchAppliedTaxIds('early_checkin', null).then(setEarlyTaxIds)
+    fetchAppliedTaxIds('late_checkout', null).then(setLateTaxIds)
+    fetchAppliedTaxIds('extra_guest', null).then(setExtraGuestTaxIds)
+  }, [])
 
   async function fetchSettings() {
     const { data } = await supabase.from('settings').select('*').limit(1).single()
@@ -212,6 +226,10 @@ export default function SettingsPage() {
       const { error } = await supabase.from('settings').insert(payload)
       if (error) { toast.error('Error saving settings.'); setSaving(false); return }
     }
+    // Persist the singleton tax config (same tax_applications rows the Fees screen edits).
+    await syncItemTaxes('early_checkin', null, earlyTaxIds)
+    await syncItemTaxes('late_checkout', null, lateTaxIds)
+    await syncItemTaxes('extra_guest', null, extraGuestTaxIds)
     toast.success('Settings saved!')
     await new Promise(resolve => setTimeout(resolve, 500))
     setSaving(false)
@@ -346,6 +364,11 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Children</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_children} onChange={e => setForm({ ...form, base_occupancy_children: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Adult Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_adult_fee} onChange={e => setForm({ ...form, extra_adult_fee: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Child Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_child_fee} onChange={e => setForm({ ...form, extra_child_fee: e.target.value })} /></div>
+            <div className="col-span-full">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Taxes on extra-guest fees</label>
+              <p className="text-xs text-gray-400 mb-2">Which taxes apply to the extra adult / extra child fees above.</p>
+              <TaxCheckboxList taxes={taxes} selected={extraGuestTaxIds} onToggle={id => setExtraGuestTaxIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
+            </div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Total Campsites</label><p className="text-xs text-gray-400 mb-1">Non-cabin sites at your campground (used for occupancy reporting)</p><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.total_sites} onChange={e => setForm({ ...form, total_sites: parseInt(e.target.value) || 0 })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Total Cabins</label><p className="text-xs text-gray-400 mb-1">Cabin units tracked separately in occupancy reporting</p><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.total_cabins} onChange={e => setForm({ ...form, total_cabins: parseInt(e.target.value) || 0 })} /></div>
             <div className="col-span-full"><label className="block text-sm font-medium text-gray-700 mb-1">Automatic Guest Sync</label><p className="text-xs text-gray-400 mb-2">Automatically add guests to your Guest Directory as reservations come in. Leave this off while testing so test bookings don't get added — you can always use the manual Sync button.</p><div className="flex items-center gap-3"><button type="button" onClick={() => setForm({...form, auto_sync_guests: !form.auto_sync_guests})} style={{width:44,height:24,borderRadius:12,border:'none',cursor:'pointer',backgroundColor:form.auto_sync_guests?'#15803d':'#d1d5db',position:'relative',flexShrink:0,transition:'background 0.2s'}}><span style={{position:'absolute',top:3,left:form.auto_sync_guests?23:3,width:18,height:18,borderRadius:'50%',backgroundColor:'white',transition:'left 0.2s'}}/></button><span className="text-sm text-gray-700">{form.auto_sync_guests ? 'Enabled' : 'Disabled'}</span></div></div>
@@ -594,6 +617,10 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Taxes on this charge</label>
+                    <TaxCheckboxList taxes={taxes} selected={earlyTaxIds} onToggle={id => setEarlyTaxIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
+                  </div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Earliest available check-in time</label>
                     <input type="time"
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -640,6 +667,10 @@ export default function SettingsPage() {
                         onBlur={() => setForm({ ...form, late_checkout_price: Math.round((parseFloat(latePriceInput) || 0) * 100) })}
                       />
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Taxes on this charge</label>
+                    <TaxCheckboxList taxes={taxes} selected={lateTaxIds} onToggle={id => setLateTaxIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Latest available check-out time</label>
