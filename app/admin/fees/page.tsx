@@ -85,11 +85,15 @@ export default function FeesPage() {
   const [products, setProducts] = useState<{ id: string; name: string }[]>([])
   const [addons, setAddons] = useState<{ id: string; name: string }[]>([])
   const [siteTypes, setSiteTypes] = useState<string[]>([])
+  // Products are a POS-only concept; the tax model itself is core (a no-POS client can
+  // still owe lodging tax). Gate only the Products group, like every other POS surface.
+  const [posEnabled, setPosEnabled] = useState(false)
 
   useEffect(() => {
     fetchFees()
     fetchTaxes()
     fetchTaxTargets()
+    supabase.from('settings').select('pos_enabled').single().then(({ data }) => setPosEnabled(!!data?.pos_enabled))
   }, [])
 
   async function fetchFees() {
@@ -321,7 +325,7 @@ export default function FeesPage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">Applies To</label>
               <div style={{ display: 'grid', gap: '16px', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
                 {taxCheckGroup('Site types', siteTypes.map(t => ({ key: `site_type:${t}`, label: labelForAppliesTo(t) })))}
-                {taxCheckGroup('Products', products.map(p => ({ key: `product:${p.id}`, label: p.name })), { disabled: true, hint: 'Set on the Products page until the tax switchover.' })}
+                {posEnabled && taxCheckGroup('Products', products.map(p => ({ key: `product:${p.id}`, label: p.name })), { disabled: true, hint: 'Set on the Products page until the tax switchover.' })}
                 {taxCheckGroup('Add-ons', addons.map(a => ({ key: `addon:${a.id}`, label: a.name })))}
                 {taxCheckGroup('Fees', fees.map(f => ({ key: `fee:${f.id}`, label: f.name })))}
                 {taxCheckGroup('Other charges', SINGLETONS.map(s => ({ key: s.type, label: s.label })))}
