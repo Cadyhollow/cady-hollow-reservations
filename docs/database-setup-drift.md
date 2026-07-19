@@ -10,6 +10,13 @@ until it is regenerated (see *Method*).
 will run POS with taxable goods and charge real cards, so POS-tax and card-surcharge correctness
 on the provisioning path are beta-critical.
 
+**Decisions locked** (this doc is the rewrite's spec):
+- **`admin_password`:** the provisioning artifact embeds **no password value** — no default, no
+  shared placeholder; onboarding forces a per-client password. See *Curation*.
+- **Curation:** value-bearing content is **allowlist, not blocklist** — structure comes wholesale
+  from the live dump; every table provisions empty, and only structural column defaults survive.
+  See *Method*.
+
 ---
 
 ## Headline
@@ -174,8 +181,15 @@ missing also breaks the online-booking insert. **Money taken, no record.**
 - **⚠️ Landmine — Cady-specific column DEFAULTS.** A `pg_dump` of live carries these into the file:
   `settings.admin_password DEFAULT 'Cady7777'` (a new client would inherit Cady's admin password),
   `pos_enabled DEFAULT true`, `park_name DEFAULT 'My Campground'`, `extra_adult_fee 1000`,
-  `total_sites 84`, `same_day_cutoff_message` with Cady's phone number. Scrub/neutralize before
-  shipping.
+  `total_sites 84`, `same_day_cutoff_message` with Cady's phone number.
+
+  **Decision:** the provisioning artifact embeds NO `admin_password` value — not `'Cady7777'`,
+  not a shared placeholder like `'changeme'`. The column definition carries no DEFAULT, and the
+  provisioning settings-row insert does not hardcode a password; client onboarding must require
+  the operator to set a per-client password before the client goes live. A shared or placeholder
+  default is a security defect, not an acceptable interim. The other Cady-specific defaults
+  (`pos_enabled`, `park_name`, `extra_adult_fee`, `total_sites`, `same_day_cutoff_message`) are
+  removed by the allowlist rule in *Method*.
 - **Live-only dead columns** to drop rather than enshrine: `settings.base_adult_rate`,
   `base_child_rate`, `primary_color`, `updated_at`.
 
@@ -186,17 +200,48 @@ missing also breaks the online-booking insert. **Money taken, no record.**
 Because live-Cady **is** the as-built truth and the file is a different era, the correct rebuild is
 **`pg_dump --schema-only` of Cady → curate**, not a hand-patch of the current file:
 1. Dump the live schema (tables, constraints, indexes, RLS, grants, functions, triggers).
-2. Strip the backup/snapshot/platform tables and all seed rows (above).
-3. Neutralize the Cady-specific column defaults (esp. `admin_password`).
-4. Drop the live-only dead columns.
+2. **Table structure comes wholesale from the live dump** — tables, columns, types, constraints,
+   indexes, RLS, grants, functions, triggers. Take-everything: live is the source of truth, so
+   structural completeness is correct-by-construction.
+3. **Value-bearing content is ALLOWLIST, not blocklist.** Nothing encoding Cady's data or config
+   survives unless provably generic to any client:
+     - *Seed rows:* provision every table EMPTY. No data row travels. (The curation list above is a
+       check, not the filter — the rule is "no rows.")
+     - *Column defaults:* strip every default that encodes a value or config; keep only structural
+       defaults (`gen_random_uuid()`, `now()`, `voided=false`, `tax_class='standard'`, folio/payment
+       status defaults). Any default carrying a name, number, phone, credential, or count is removed.
+       `admin_password` per the decision above.
+     - *Tables:* exclude the backup/snapshot tables and `resonation_clients` (platform
+       tenant-registry — holds other clients' service keys).
+   Why allowlist: `admin_password` was caught only because someone inspected defaults. A blocklist
+   removes what you remembered; an allowlist removes anything not affirmatively justified as generic,
+   so the default nobody thought to look for is excluded by rule.
+4. **Live-only dead columns** (`settings.base_adult_rate`, `base_child_rate`, `primary_color`,
+   `updated_at`) — drop from provisioning. Confirm `updated_at` isn't trigger-maintained first.
 5. Decide RLS posture deliberately (RLS-off as live, or RLS-on + allow-all as the file — both open).
 6. Keep the RPCs, `sync_guest_from_reservation`/trigger, and `increment_discount_usage`.
 7. Update the onboarding `DATABASE_SETUP_SQL` (`resonation-admin`) in lockstep — the "repo lies about
    the database" trap otherwise recurs for the next client.
 
-Verification for the rebuild: provision a scratch project from the regenerated file, then run the
-same `information_schema`/`pg_catalog` SELECTs used here and diff against live-Cady — expect zero
-structural drift on the shipped tables.
+   *Open question (log, decide before the rewrite ships):* two hand-maintained provisioning
+   definitions (`database-setup.sql` and `resonation-admin`'s `DATABASE_SETUP_SQL`) is the exact
+   mechanism that produced this drift. Decide whether one should derive from the other — or both be
+   generated from the curated dump — so "keep in lockstep by hand" isn't a standing liability.
+
+**Verification** has three parts; a structural diff alone can pass while a beta-fatal bug survives.
+1. **Structural parity:** provision a scratch project from the regenerated file, re-run the
+   `information_schema`/`pg_catalog` SELECTs used here, diff against live-Cady. Expect zero
+   UNINTENDED drift — matches live except the documented curation (no backup/platform tables, no seed
+   rows, stripped value-defaults, dropped dead columns, no `admin_password` default). Intentional
+   differences are not failures.
+2. **Scenario replay:** against the scratch client, run the actual shipped insert payloads for each
+   previously-broken path and confirm each SUCCEEDS — product create, POS sale on a taxable good,
+   card charge + `folio_payments` record, discount apply, Settings-save, online booking with a
+   surcharge. This directly proves the beta-fatal cases are fixed.
+3. **Anon path:** run the online-booking insert through the ANON key, not the service role — a
+   service-role insert passes while anon fails on a missing grant/policy. `pg_dump --schema-only`
+   carries GRANT statements, so regenerate should reproduce them for free; this asserts it rather
+   than assuming it (closes the un-run L1).
 
 ---
 
@@ -209,3 +254,8 @@ minor, since RLS posture is known; exact `storage.objects` policy reconciliation
 (buckets match). A repo-vs-file diff still cannot see anything the SELECTs did not cover on tables
 outside the sampled set — the "regenerate from a live dump" method sidesteps this by taking live as
 the source of truth rather than diffing against it.
+
+**File-derived findings need re-checking against live.** The live `site_type` CHECK contradicted a
+T0 claim that was read off the file, not the DB. Since the file is a different era, any claim in T0
+or `tax-model-spec.md` sourced from the file rather than live-verified is suspect. Before T2 relies
+on the tax spec, flag which spec claims are file-derived and re-verify them against Cady.
