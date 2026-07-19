@@ -11,8 +11,11 @@ will run POS with taxable goods and charge real cards, so POS-tax and card-surch
 on the provisioning path are beta-critical.
 
 **Decisions locked** (this doc is the rewrite's spec):
-- **`admin_password`:** the provisioning artifact embeds **no password value** — no default, no
-  shared placeholder; onboarding forces a per-client password. See *Curation*.
+- **`admin_password`:** `settings.admin_password` is **vestigial — not read for auth** (login uses
+  the `ADMIN_PASSWORD` env var). Drop its DEFAULT from provisioning purely as **secret hygiene**
+  (never commit Cady's password string). The real per-client login secret is the `ADMIN_PASSWORD`
+  env var provisioned by `resonation-admin` — that's where "no shared secret" lands, not the SQL.
+  See *Curation*.
 - **Curation:** value-bearing content is **allowlist, not blocklist** — structure comes wholesale
   from the live dump; every table provisions empty, and only structural column defaults survive.
   See *Method*.
@@ -179,17 +182,25 @@ missing also breaks the online-booking insert. **Money taken, no record.**
   (Transaction Fee), `discounts` (2 codes), `addons` (4), `categories` (6), `product_categories`
   (12), `pricing_rules` (9), `min_stay_rules` (3), `cancellation_rules` (3).
 - **⚠️ Landmine — Cady-specific column DEFAULTS.** A `pg_dump` of live carries these into the file:
-  `settings.admin_password DEFAULT 'Cady7777'` (a new client would inherit Cady's admin password),
-  `pos_enabled DEFAULT true`, `park_name DEFAULT 'My Campground'`, `extra_adult_fee 1000`,
-  `total_sites 84`, `same_day_cutoff_message` with Cady's phone number.
+  `settings.admin_password DEFAULT 'Cady7777'`, `pos_enabled DEFAULT true`,
+  `park_name DEFAULT 'My Campground'`, `extra_adult_fee 1000`, `total_sites 84`,
+  `same_day_cutoff_message` with Cady's phone number.
 
-  **Decision:** the provisioning artifact embeds NO `admin_password` value — not `'Cady7777'`,
-  not a shared placeholder like `'changeme'`. The column definition carries no DEFAULT, and the
-  provisioning settings-row insert does not hardcode a password; client onboarding must require
-  the operator to set a per-client password before the client goes live. A shared or placeholder
-  default is a security defect, not an acceptable interim. The other Cady-specific defaults
-  (`pos_enabled`, `park_name`, `extra_adult_fee`, `total_sites`, `same_day_cutoff_message`) are
-  removed by the allowlist rule in *Method*.
+  **Decision (admin_password — corrected mechanism, Phase 0):** `settings.admin_password` is
+  **vestigial — write-only, nullable, and never read for auth.** Login is `password ===
+  process.env.ADMIN_PASSWORD` (`app/api/admin-auth/route.ts`) + an `admin_session` cookie; the DB
+  column governs nothing. So dropping its DEFAULT is **pure secret hygiene** — the point is to never
+  commit Cady's password string (`'Cady7777'`, likely the same as the env var) into a shared file —
+  **not** a lockout risk: the column is nullable, the insert simply omits it, and no login breaks.
+  The **real per-client login secret is the `ADMIN_PASSWORD` env var**, provisioned by
+  `resonation-admin` (Vercel) — that is where the "no shared secret" decision lands, **not** the SQL
+  insert. (An earlier draft of this doc framed it as a settings-insert / NOT-NULL / onboarding-supplies
+  coupling; that was wrong — corrected here.)
+  **Log (do not fix — auth is a parked conversation):** the Settings page's "change admin password"
+  field writes `settings.admin_password`, which nothing reads — a **dead no-op** for actual login.
+
+  The other Cady-specific defaults (`pos_enabled`, `park_name`, `extra_adult_fee`, `total_sites`,
+  `same_day_cutoff_message`) are removed by the allowlist rule in *Method*.
 - **Live-only dead columns** to drop rather than enshrine: `settings.base_adult_rate`,
   `base_child_rate`, `primary_color`, `updated_at`.
 
