@@ -33,8 +33,13 @@
 
 
 -- ============================================================
--- FUNCTIONS (created before the trigger + tables that the trigger reads)
+-- FUNCTIONS (created before the tables they reference)
 -- ============================================================
+-- These function bodies reference tables created further down. pg_dump disables body
+-- validation for exactly this reason (functions are emitted before tables). Required for
+-- the SQL-language increment_discount_usage, whose body IS resolved at CREATE time.
+-- The whole file runs as one SQL-editor session, so this SET applies throughout.
+SET check_function_bodies = false;
 
 CREATE OR REPLACE FUNCTION public.create_electric_bill(
   p_folio_id uuid, p_guest_id uuid, p_billing_month text, p_period_start date, p_period_end date,
