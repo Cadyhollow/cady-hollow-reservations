@@ -768,11 +768,16 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role
 
 -- ============================================================
 -- STORAGE BUCKETS + POLICIES  (generic infra — every client needs these)
+-- Wrapped best-effort: the Supabase Management API (/database/query) used by the
+-- onboarding tool can't reach the `storage` schema, so this section no-ops there
+-- (onboarding provisions buckets via the Storage REST API and policies separately).
+-- In the SQL editor, `storage` is reachable and this runs normally. The EXCEPTION
+-- rolls back only this subtransaction, so the public-schema tables above still commit.
 -- ============================================================
-INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true) ON CONFLICT (id) DO NOTHING;
-INSERT INTO storage.buckets (id, name, public) VALUES ('site-photos', 'site-photos', true) ON CONFLICT (id) DO NOTHING;
-
 DO $$ BEGIN
+  INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true) ON CONFLICT (id) DO NOTHING;
+  INSERT INTO storage.buckets (id, name, public) VALUES ('site-photos', 'site-photos', true) ON CONFLICT (id) DO NOTHING;
+
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow public read on logos') THEN
     CREATE POLICY "Allow public read on logos" ON storage.objects FOR SELECT USING (bucket_id = 'logos'); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow upload on logos') THEN
@@ -781,6 +786,8 @@ DO $$ BEGIN
     CREATE POLICY "Allow public read on site-photos" ON storage.objects FOR SELECT USING (bucket_id = 'site-photos'); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow upload on site-photos') THEN
     CREATE POLICY "Allow upload on site-photos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'site-photos'); END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'Storage provisioning skipped (storage schema not reachable in this context); handled separately by onboarding.';
 END $$;
 
 
