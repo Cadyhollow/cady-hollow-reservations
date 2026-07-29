@@ -82,6 +82,7 @@ function ConfirmationContent() {
           width={48}
           height={48}
           className="rounded-full"
+          priority
           style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
         />
         <div>
