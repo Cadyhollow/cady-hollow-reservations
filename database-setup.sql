@@ -377,7 +377,9 @@ CREATE TABLE IF NOT EXISTS settings (
   deposit_type text DEFAULT 'first_night',
   deposit_value integer DEFAULT 0,
   custom_payment_methods text[] DEFAULT '{}'::text[],
-  contract_text text
+  contract_text text,
+  theme text DEFAULT 'light',
+  hero_image_url text
 );
 
 CREATE TABLE IF NOT EXISTS reservations (
