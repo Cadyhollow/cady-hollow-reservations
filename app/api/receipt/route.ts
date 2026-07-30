@@ -217,15 +217,15 @@ Guest: ${folio.guest_name}
 ${'─'.repeat(40)}
 
 CHARGES
-${(lineItems || []).map((item: any) => `${item.description}: $${(item.line_total/100).toFixed(2)}`).join('\n')}
+${(lineItems || []).map((item: any) => `${item.description}: ${money(item.line_total)}`).join('\n')}
 
-Total charges: $${(itemsTotal/100).toFixed(2)}
+Total charges: ${money(itemsTotal)}
 ${'─'.repeat(40)}
 
 PAYMENTS
-${(payments || []).map((p: any) => `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: $${(p.amount/100).toFixed(2)}`).join('\n')}
+${paymentRowsText}
 
-${mostRecentPayment ? 'Most recent payment: $' + (mostRecentPayment.amount/100).toFixed(2) + '\n' : ''}Balance remaining: ${balanceRemaining < 0 ? 'Credit on Account: $' + (Math.abs(balanceRemaining)/100).toFixed(2) : balanceRemaining === 0 ? 'PAID IN FULL' : '$' + (balanceRemaining/100).toFixed(2)}
+${mostRecentPayment ? 'Most recent payment: ' + money(mostRecentPayment.amount) + '\n' : ''}Balance remaining: ${balanceRemaining < 0 ? 'Credit on Account: ' + money(Math.abs(balanceRemaining)) : balanceRemaining === 0 ? 'PAID IN FULL' : money(balanceRemaining)}
 ${'─'.repeat(40)}
 Thank you!
 ${campgroundName}`
