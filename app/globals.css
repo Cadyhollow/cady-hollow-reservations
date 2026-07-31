@@ -95,11 +95,40 @@ body {
    Tradeoff, deliberate and now global: in the dark theme an autofilled field sits in a
    light box until the camper edits it, on desktop as well as mobile. That is a visible
    inconsistency against the dark fields beside it, and it is the price of a rule that
-   cannot silently stop applying. Legibility in all four combinations was the requirement. */
+   cannot silently stop applying. Legibility in all four combinations was the requirement.
+
+   Both the standard :autofill and the prefixed :-webkit-autofill are listed. A device
+   screenshot showed an autofilled field with iOS's own pale-lavender background AND white
+   text — neither of them values this rule sets — which means the rule was not matching at
+   all, not that the background was winning. The white came from the base .themed-input
+   rule above (--text-primary is white in the dark theme). Since every earlier attempt was
+   scoped to the prefixed selector alone, a device that only implements the standard one
+   would have ignored all four of them. Listing both costs nothing and closes that gap.
+
+   Note they are separate selectors on purpose, not one comma-joined group with a shared
+   fate: a browser that does not understand :autofill would otherwise discard the entire
+   rule, including the prefixed selectors it does understand. Splitting is handled below by
+   duplicating the declarations rather than relying on forgiving parsing. */
 html input.themed-input:-webkit-autofill,
 html input.themed-input:-webkit-autofill:hover,
 html input.themed-input:-webkit-autofill:focus,
 html input.themed-input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+  box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+  background-color: #FFFFFF !important;
+  -webkit-text-fill-color: #1F2620 !important;
+  color: #1F2620 !important;
+  caret-color: #1F2620 !important;
+}
+
+/* Deliberately a SECOND rule rather than more selectors on the one above. A browser that
+   does not understand :autofill discards the whole rule it appears in — comma-joining the
+   two would have taken the prefixed selectors down with it on exactly the browsers that
+   need them. Duplicated declarations are the cost of that safety. */
+html input.themed-input:autofill,
+html input.themed-input:autofill:hover,
+html input.themed-input:autofill:focus,
+html input.themed-input:autofill:active {
   -webkit-box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
   box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
   background-color: #FFFFFF !important;
