@@ -68,71 +68,44 @@ body {
   border-color: var(--border);
 }
 
-/* Autofill previously hardcoded a #1f2937 inset, which would paint a dark box
-   inside a light-theme input. Follows the token now.
+/* Autofill. Three earlier attempts kept the theme tokens here and each failed on iOS, so
+   this deliberately does NOT follow the tokens — it is a fixed, self-consistent pair.
 
-   Everything here is keyed off the tokens, never a fixed color, so whichever theme is
-   active the autofilled text and the box behind it come from the same pair and contrast.
+   What the device actually showed, which is what this is built on: on iPhone/iPad the box
+   is a light blue that we never set, and the text colour tracked the theme — black in
+   light (fine), white in dark (invisible on that light box). That combination proves iOS
+   honours -webkit-text-fill-color and ignores every background declaration we can write:
+   the inset shadow, background-color, and the 9999s transition trick alike. The light blue
+   is iOS's own AutoFill background and there is no way to repaint it.
 
-   The inset box-shadow alone is enough on desktop but not on iOS Safari: AutoFill from a
-   contact card repaints the field with its own background and does not reliably honor the
-   shadow, which is how the text ends up matching the background (white-on-white). Typing
-   never goes through AutoFill, so it always looked fine. The extra declarations below each
-   close one hole in that:
-     - background-color   states the token background outright, for when iOS ignores the
-                          shadow;
-     - transition         defers the browser's own background repaint effectively forever,
-                          the long-standing trick for making an autofill background stick;
-     - caret-color        keeps the cursor visible — it would otherwise inherit the same
-                          invisible color the text had.
-   :active is included alongside :hover/:focus because iOS applies it mid-tap. */
-.themed-input:-webkit-autofill,
-.themed-input:-webkit-autofill:hover,
-.themed-input:-webkit-autofill:focus,
-.themed-input:-webkit-autofill:active {
-  -webkit-box-shadow: 0 0 0px 1000px var(--surface-input) inset !important;
-  box-shadow: 0 0 0px 1000px var(--surface-input) inset !important;
-  background-color: var(--surface-input) !important;
-  -webkit-text-fill-color: var(--text-primary) !important;
-  color: var(--text-primary) !important;
-  caret-color: var(--text-primary) !important;
-  transition: background-color 9999s ease-in-out 0s !important;
-}
+   Attempt three tried to scope a fixed pair to touch devices with
+   (hover: none) and (pointer: coarse). That query never matched — iPadOS under
+   desktop-class browsing reports hover: hover and pointer: fine — so the token rule stayed
+   in charge and dark mode stayed broken. Hence no media query and no @supports here:
+   device detection is what failed, so this stops relying on any.
 
-/* iOS follow-up. The rule above fixed desktop but NOT iOS: on an iPhone/iPad in the dark
-   theme, an autofilled field came out white-on-white. That specific pairing is diagnostic —
-   in dark theme --text-primary is white and --surface-input is #1F2937, so the white TEXT
-   was ours and the white BOX was not. iOS honors -webkit-text-fill-color and ignores both
-   the inset shadow and background-color, painting its own light AutoFill background instead.
-   (The 9999s transition above may compound it by deferring our own background repaint too,
-   which is why it is dropped below rather than repeated.)
+   One rule, every device, every theme. The text is dark because the background we cannot
+   control is light on iOS, and the background we CAN control on desktop is set light to
+   match, so the pair is consistent wherever it lands. -webkit-text-fill-color is the
+   load-bearing declaration since it is the one iOS demonstrably honours.
 
-   Since the background cannot be controlled on iOS, this stops fighting it and pins the
-   autofill state to the pair iOS actually paints: a light box with dark text. Both are
-   stated, so the field is legible whichever declaration the engine honors — if our white
-   background applies we get dark-on-white, and if iOS's own light background wins we still
-   get dark-on-light.
+   Specificity is raised with `html input.` (0,2,2) so nothing later in this file — the
+   .bg-white / .bg-gray-800 blocks below — can outrank it.
 
-   Scoped to touch devices so desktop keeps the token-driven treatment above, which is
-   already correct there and would otherwise regress to dark-on-dark in the dark theme.
-
-   Tradeoff, deliberate: in the dark theme on a phone or tablet, an autofilled Name/Email
-   sits in a light box until the camper edits it, which looks inconsistent next to the
-   dark fields around it. Legibility was the requirement, so that is the trade taken —
-   an odd-looking field beats an invisible one. */
-@media (hover: none) and (pointer: coarse) {
-  .themed-input:-webkit-autofill,
-  .themed-input:-webkit-autofill:hover,
-  .themed-input:-webkit-autofill:focus,
-  .themed-input:-webkit-autofill:active {
-    -webkit-box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
-    box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
-    background-color: #FFFFFF !important;
-    -webkit-text-fill-color: #1F2620 !important;
-    color: #1F2620 !important;
-    caret-color: #1F2620 !important;
-    transition: none !important;
-  }
+   Tradeoff, deliberate and now global: in the dark theme an autofilled field sits in a
+   light box until the camper edits it, on desktop as well as mobile. That is a visible
+   inconsistency against the dark fields beside it, and it is the price of a rule that
+   cannot silently stop applying. Legibility in all four combinations was the requirement. */
+html input.themed-input:-webkit-autofill,
+html input.themed-input:-webkit-autofill:hover,
+html input.themed-input:-webkit-autofill:focus,
+html input.themed-input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+  box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+  background-color: #FFFFFF !important;
+  -webkit-text-fill-color: #1F2620 !important;
+  color: #1F2620 !important;
+  caret-color: #1F2620 !important;
 }
 
 /* Dark background inputs - white text */
