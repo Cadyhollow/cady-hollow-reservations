@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
 import { cardSurchargeFor } from '@/lib/pricing'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
+import PaymentTrustRow from '../components/PaymentTrustRow'
 
 type Addon = {
   id: string
@@ -830,6 +831,9 @@ function BookingForm() {
               <div className="mb-6">
                 <h3 className="text-[var(--text-primary)] font-medium mb-3">Card Details</h3>
                 <SquareCardField ref={cardRef} onReady={setCardReady} />
+                {/* Sits inside the Card Details block, so it appears with the card fields and
+                    nowhere else — this page has no cash path to guard against. */}
+                <PaymentTrustRow />
               </div>
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
               <div className="space-y-3">
