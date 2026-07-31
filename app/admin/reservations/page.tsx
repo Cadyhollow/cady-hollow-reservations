@@ -800,10 +800,28 @@ function ReservationsPageInner() {
                       </button>
                     ) : (
                       <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                        {/* "Paid" used to read reservations.amount_paid alone, which understates a
+                            booking that also took money on its folio — a deposit online then the
+                            balance at the desk shows only the deposit.
+                            The percentages still compute off amount_paid on purpose, NOT off the
+                            combined figure: /api/reservation-refund refunds the reservation's own
+                            Square payment and rejects anything above currentAmountPaid, so a preset
+                            sized to the folio money would simply fail. Folio payments are refunded
+                            individually from the folio page. Both numbers are shown so the split is
+                            visible rather than implied. */}
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold text-orange-800">Issue Refund</span>
-                          <span className="text-xs text-gray-500">Paid: ${(selected.amount_paid / 100).toFixed(2)}</span>
+                          <span className="text-xs text-gray-500">
+                            Paid: ${((selected.amount_paid + selectedFolioPaid) / 100).toFixed(2)}
+                          </span>
                         </div>
+                        {selectedFolioPaid > 0 && (
+                          <p className="text-xs text-orange-700">
+                            ${(selected.amount_paid / 100).toFixed(2)} of that was taken on the booking and can be
+                            refunded here. The other ${(selectedFolioPaid / 100).toFixed(2)} was taken on the folio —
+                            refund it from the folio page.
+                          </p>
+                        )}
                         <div className="flex gap-2">
                           {[100, 90, 50].map(pct => (
                             <button key={pct} onClick={() => setResRefundAmount((selected.amount_paid * pct / 10000).toFixed(2))}
