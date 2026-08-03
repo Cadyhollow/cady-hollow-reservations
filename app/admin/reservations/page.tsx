@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { sumLineTotals } from '@/lib/ledger'
 import { supabase } from '@/lib/supabase'
 import { computePricing } from '@/lib/pricing'
+import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -148,7 +149,7 @@ function ReservationsPageInner() {
       const surcharge = (pmts || []).reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
       // Refunds of the BOOKING leg specifically, as negative cents. Kept apart from folio-side
       // refunds because only these reduce what this panel is still allowed to refund.
-      const bookingRefundRows = (pmts || []).filter((p: any) => p.reference_number === 'booking-refund')
+      const bookingRefundRows = (pmts || []).filter((p: any) => p.reference_number === BOOKING_REFUND_REF)
       const bookingRefunds = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
       const bookingRefundSurcharge = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
       if (!cancelled) {
