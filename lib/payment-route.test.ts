@@ -37,6 +37,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
 import { fetchDateFacts, checkDateFacts, checkSeason } from './bookability.ts'
+import { computeBookingQuote, resolveNightlyRate } from './booking-quote.ts'
+import { ruleAppliesToSite } from './bookability.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -111,8 +113,8 @@ async function post(over: Record<string, any>) {
   return {
     status: res.status,
     json,
-    // The route only ever emits `reason` from the bookability gate, and the gate is the only
-    // thing above the Square call. Its presence therefore proves Square was not contacted.
+    // `reason` is emitted only by the gates ABOVE the Square call — bookability, and now the
+    // pricing chokepoint. Its presence therefore still proves Square was not contacted.
     gated: typeof json?.reason === 'string',
   }
 }
@@ -198,6 +200,43 @@ test('payment: a malformed range is refused, and never reaches Square', { skip }
 // payment, so nothing above it turned a legitimate booking away. The invalid token means no
 // card is charged, and the reservation insert is downstream of a successful charge, so nothing
 // is written.
+// The authoritative price for a site and date range, assembled from the same tables
+// /api/payment reads. Lets the "no false rejections" test post what a real booking page would.
+async function quoteFor(siteId: string, arrival: string, departure: string) {
+  const [{ data: site }, { data: rules }, { data: settings }, { data: fees }] = await Promise.all([
+    supabase.from('sites').select('id, site_type, base_rate').eq('id', siteId).single(),
+    supabase.from('pricing_rules').select('*').eq('is_active', true)
+      .lte('start_date', departure).gte('end_date', arrival),
+    supabase.from('settings').select('*').limit(1).single(),
+    supabase.from('fees').select('*').eq('is_active', true),
+  ])
+  const nights = Math.round(
+    (new Date(departure).getTime() - new Date(arrival).getTime()) / 86400000)
+  const nightlyRate = resolveNightlyRate(
+    { id: siteId, site_type: (site as any)?.site_type || '', base_rate: (site as any)?.base_rate || 0 },
+    rules || [], ruleAppliesToSite)
+  const quote = computeBookingQuote({
+    site: {
+      site_type: (site as any)?.site_type || '',
+      nightly_rate: nightlyRate,
+      total_price: nightlyRate * nights,
+      nights,
+    },
+    adults: 2, children: 0,
+    settings: settings as any,
+    fees: (fees || []) as any,
+    addonSelections: [],
+    discount: null,
+    earlyRequested: false, lateRequested: false, earlyBlocked: false, lateBlocked: false,
+  })
+  const pct = Number((settings as any)?.card_surcharge_percent) || 0
+  const cashTotal = quote.cashTotal
+  const surcharge = cashTotal <= 0 || pct <= 0
+    ? 0
+    : Math.round(Math.min(cashTotal, cashTotal) * Math.round(cashTotal * pct / 100) / cashTotal)
+  return { nights, nightlyRate, quote, surcharge }
+}
+
 test('payment: a legitimate booking is NOT refused — it reaches the charge', { skip }, async (t) => {
   const arrival = '2026-08-18', departure = '2026-08-20'
   const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
@@ -210,8 +249,80 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
     return t.skip('sample week falls outside the configured season')
   }
 
-  const r = await post({ siteId: free.id, arrival, departure, nights: 2 })
+  // The true price for this site and these dates, derived the way /book and /api/payment both
+  // derive it. The fixture used to claim a flat 15000 for a 3-night stay while booking a real
+  // site for two nights — a figure no site actually had. That passed only because the route
+  // charged whatever it was told; with the pricing chokepoint in place an honest request has
+  // to carry an honest number, which is the point of the change.
+  const quoted = await quoteFor(free.id, arrival, departure)
+  const r = await post({
+    siteId: free.id, arrival, departure, nights: quoted.nights,
+    nightlyRate: quoted.nightlyRate,
+    totalPrice: quoted.quote.cashTotal,
+    amountToPay: quoted.quote.cashTotal,
+    paymentType: 'full',
+    surchargeAmount: quoted.surcharge,
+  })
 
   assert.equal(r.gated, false, `a legitimate booking was wrongly refused: ${JSON.stringify(r.json)}`)
   assert.match(String(r.json.error), /authoriz/i, 'expected to die at the deliberately invalid Square token')
+})
+
+// The exploit PR 4a closes, asserted as a test rather than a claim.
+//
+// /book builds its quote from URL parameters, so before the pricing chokepoint a camper could
+// retype `totalPrice` in the address bar and be charged it — no crafted POST or devtools
+// needed. The request below is exactly that: a real, bookable site and date range, priced at a
+// dollar. It must be refused BEFORE Square is contacted, for `price-mismatch` specifically —
+// not merely fail somewhere downstream for an unrelated reason.
+test('payment: a forged price is refused before any charge', { skip }, async (t) => {
+  const arrival = '2026-08-18', departure = '2026-08-20'
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, arrival, departure)
+  const free = (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable)
+  if (!free) return t.skip('no free site in the sample week')
+  const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+    return t.skip('sample week falls outside the configured season')
+  }
+
+  const honest = await quoteFor(free.id, arrival, departure)
+  // Only if the site actually costs something is there anything to forge.
+  if (honest.quote.cashTotal <= 100) return t.skip('sample site is already free — nothing to undercut')
+
+  const r = await post({
+    siteId: free.id, arrival, departure, nights: honest.nights,
+    nightlyRate: 100, totalPrice: 100, amountToPay: 100, paymentType: 'full', surchargeAmount: 0,
+  })
+
+  assert.equal(r.gated, true, 'a forged price reached Square')
+  assert.equal(r.json.reason, 'price-mismatch',
+    `expected the pricing chokepoint to refuse it, got: ${JSON.stringify(r.json)}`)
+})
+
+// A discount the server has never heard of must not reduce the charge. This used to be decided
+// entirely in the browser, against a `discounts` row the browser read for itself.
+test('payment: an unknown discount code is refused', { skip }, async (t) => {
+  const arrival = '2026-08-18', departure = '2026-08-20'
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, arrival, departure)
+  const free = (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable)
+  if (!free) return t.skip('no free site in the sample week')
+  const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+    return t.skip('sample week falls outside the configured season')
+  }
+
+  const honest = await quoteFor(free.id, arrival, departure)
+  const r = await post({
+    siteId: free.id, arrival, departure, nights: honest.nights,
+    nightlyRate: honest.nightlyRate,
+    totalPrice: honest.quote.cashTotal, amountToPay: honest.quote.cashTotal,
+    paymentType: 'full', surchargeAmount: honest.surcharge,
+    discountCode: 'TOTALLY-MADE-UP-CODE', discountAmount: 5000,
+  })
+
+  assert.equal(r.gated, true, 'a forged discount reached Square')
+  assert.equal(r.json.reason, 'discount-invalid',
+    `expected the discount check to refuse it, got: ${JSON.stringify(r.json)}`)
 })
