@@ -472,7 +472,12 @@ export default function FolioPage() {
       amount: totalAmount,
       surcharge_amount: surchargeAmount,
       status: 'completed',
-      note: paymentNote + (surchargeAmount > 0 ? ` (incl. ${cardSurcharge}% card fee: $${(surchargeAmount/100).toFixed(2)})` : ''),
+      // The fee used to be baked into this note as text. It is now rendered from
+      // surcharge_amount (stored on the row above) wherever the payment is shown — folio
+      // ledger and receipts alike — so baking it in a second time just printed it twice.
+      // Amounts are untouched; only the note text this writes going forward is shorter.
+      // Rows written before this change keep their old wording until they age out.
+      note: paymentNote,
     })
     setSavingPayment(false)
     setShowPayment(false)
@@ -623,6 +628,13 @@ export default function FolioPage() {
     sub: string
     note?: string | null
     taxAmount?: number
+    // The transaction fee this payment carried, read straight from the stored
+    // surcharge_amount. INFORMATIONAL ONLY — `amount` below stays cash-canonical
+    // (amount − surcharge) exactly as before, so the running balance, the Paid headline and
+    // the Total are untouched by anything rendered from this field. The fee is Square's cut,
+    // not campground revenue, which is why it is a note and not a ledger row. Negative on
+    // refund rows (they store a negative surcharge), hence the sign check at render.
+    feeAmount?: number
     amount: number
     negative?: boolean
     itemId?: string
@@ -651,6 +663,8 @@ export default function FolioPage() {
       ledgerEvents.push({
         key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++,
         label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid,
+        // Display-only note; amount stays cash-canonical amount_paid, as it always has.
+        feeAmount: reservation.surcharge_amount || 0,
         isOpening: true, isBookingLeg: true,
         // The same cap /api/reservation-refund enforces: the original charge less the
         // booking-leg refunds already recorded (those are negative rows in `payments`).
@@ -671,7 +685,7 @@ export default function FolioPage() {
     // A refund row is itself a payment event with a negative amount, and folioPaymentRefundable
     // returns 0 for it (max(0, negative - 0)), so refunds of refunds never get offered.
     const { remainingCents } = folioPaymentRefundable(p, payments)
-    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), payment: p, refundableCents: remainingCents, balanceAfter: 0 })
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, feeAmount: p.surcharge_amount || 0, amount: p.amount - (p.surcharge_amount || 0), payment: p, refundableCents: remainingCents, balanceAfter: 0 })
   })
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
@@ -803,6 +817,16 @@ export default function FolioPage() {
                       <div style={{ fontSize: 11, color: isPay ? '#7BA88C' : '#A1937C' }}>{ev.sub}{ev.isOpening ? '' : (isPay ? ' · payment' : ' · charge')}</div>
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
+                      {/* Informational only — the fee is Square's cut, already excluded from
+                          the amount at right and from every total on this page. A cash or
+                          check payment carries no surcharge, so this renders nothing.
+                          "plus … charged", not "includes": Model B adds the fee ON TOP of the
+                          base, and the amount at right is the base (amount − surcharge). A
+                          $220 stay paid by card charges $227.70, so saying the $220 "includes"
+                          $7.70 was simply false. Refund rows state the fee plainly — the
+                          refund genuinely returns it (Square is refunded the gross, of which
+                          surcharge_amount is a prorated share). */}
+                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isVoided ? '#9ca3af' : isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827'), textDecoration: isVoided ? 'line-through' : 'none' }}>
                       {/* A refund is a payment event with a NEGATIVE amount, so the literal '−'
@@ -1083,7 +1107,7 @@ export default function FolioPage() {
                 {paymentMethod === 'card' && cardSurcharge > 0 && !feeAlreadyIncluded && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '10px 14px', background: waiveFee ? '#f0fdf4' : '#fffbeb', border: '1px solid', borderColor: waiveFee ? '#bbf7d0' : '#fde68a', borderRadius: 8 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Card fee ({cardSurcharge}%)</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Transaction fee ({cardSurcharge}%)</div>
                   <div style={{ fontSize: 12, color: '#6b7280' }}>{waiveFee ? 'Fee waived for this payment' : 'Applied to card payments'}</div>
                 </div>
                 <button
@@ -1144,7 +1168,7 @@ export default function FolioPage() {
                 {cardSurcharge > 0 && !waiveFee && (
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginTop: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                      <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
                       <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(Math.round(parseFloat(paymentAmount || '0') * 100), totalDue, folioNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
                     </div>
                   </div>
@@ -1166,7 +1190,7 @@ export default function FolioPage() {
               {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
                 <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                    <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
                     <span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargePreview/100).toFixed(2)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontWeight: 700 }}>

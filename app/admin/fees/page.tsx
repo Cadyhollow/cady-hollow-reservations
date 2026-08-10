@@ -112,8 +112,8 @@ export default function FeesPage() {
     setSavingSurcharge(true)
     const { error } = await supabase.from('settings').update({ card_surcharge_percent: pct }).eq('id', settingsId ?? 1)
     setSavingSurcharge(false)
-    if (error) { toast.error('Error saving surcharge.'); return }
-    toast.success('Card surcharge saved!')
+    if (error) { toast.error('Error saving transaction fee.'); return }
+    toast.success('Transaction fee saved!')
   }
 
   async function fetchFees() {
@@ -320,10 +320,10 @@ export default function FeesPage() {
       <Toaster />
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Taxes &amp; Fees</h1>
 
-      {/* ── Card Surcharge ────────────────────────────────────── */}
+      {/* ── Transaction Fee ───────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Card Surcharge</h2>
-        <p className="text-sm text-gray-500 mb-4">A single percentage added to card payments — online booking and every in-person screen alike — on the total excluding tax. Set to 0 for no surcharge.</p>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Transaction Fee</h2>
+        <p className="text-sm text-gray-500 mb-4">A single percentage added to card payments — online booking and every in-person screen alike — on the total excluding tax. Set to 0 for no fee.</p>
         <div className="flex items-end gap-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Rate (%)</label>
