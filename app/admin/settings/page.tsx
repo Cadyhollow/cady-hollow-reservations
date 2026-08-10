@@ -77,7 +77,6 @@ const defaultSettings = {
   accent_color: '#2D6A4F',
   theme: 'light',
   show_site_map: false,
-  admin_password: '',
   sender_name: '',
   sender_email: '',
   reply_to_email: '',
@@ -185,7 +184,6 @@ export default function SettingsPage() {
         accent_color: data.accent_color || '#2D6A4F',
         theme: data.theme === 'dark' ? 'dark' : 'light',
         show_site_map: data.show_site_map || false,
-        admin_password: '',
         sender_name: data.sender_name || '',
         sender_email: data.sender_email || '',
         reply_to_email: data.reply_to_email || '',
@@ -441,7 +439,6 @@ export default function SettingsPage() {
       // one unknown column fails the whole update and takes every other setting with it.
       ...(hasHeroColumn ? { hero_image_url: form.hero_image_url } : {}),
       show_site_map: form.show_site_map,
-      ...(form.admin_password ? { admin_password: form.admin_password } : {}),
       sender_name: form.sender_name,
       sender_email: form.sender_email,
       reply_to_email: form.reply_to_email,
@@ -1064,16 +1061,14 @@ export default function SettingsPage() {
 
       </div>
 
-      <div className="border-t border-gray-200 pt-6 mt-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Admin Password</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-            <input type="password" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="Enter new password" value={form.admin_password || ''} onChange={e => setForm({ ...form, admin_password: e.target.value })} />
-          </div>
-        </div>
-        <p className="text-xs text-gray-400 mt-2">Leave blank to keep current password.</p>
-      </div>
+      {/* The "Change Admin Password" section used to live here. It wrote settings.admin_password,
+          which NOTHING read — /api/admin-auth compares against the ADMIN_PASSWORD env var — so
+          typing a new password here changed nothing about logging in, while writing a
+          password-shaped secret into a table any visitor could read. The column is dropped in
+          db/migrations/2026-08-10-pr2-table-hardening.sql; this control had to go with it, both
+          because it was misleading and because writing a dropped column would fail the whole
+          save (see the hasThemeColumn guard above for that exact failure mode).
+          Changing the admin password means changing ADMIN_PASSWORD in Vercel and redeploying. */}
 
       <div className="mt-6 flex justify-end">
         <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-8 py-3 rounded-lg font-medium hover:bg-green-800 disabled:opacity-50">
