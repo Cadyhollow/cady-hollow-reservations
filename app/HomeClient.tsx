@@ -2,7 +2,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
-import { supabase } from '@/lib/supabase'
 
 type Site = {
   id: string
@@ -30,7 +29,20 @@ type Category = {
 // The booking page's interactive half. Split out of app/page.tsx, which is now a server
 // component that reads the park settings and hands them in below — see the comment on
 // `initialSettings` for why.
-export default function HomeClient({ initialSettings }: { initialSettings: any }) {
+//
+// Security PR 4b took the Supabase client out of this file entirely. The site types and
+// categories arrive as props from the same server component; the per-search site_categories
+// come back with the sites from /api/availability, which was already reading them from the
+// server side of the same request.
+export default function HomeClient({
+  initialSettings,
+  initialSiteTypes,
+  initialCategories,
+}: {
+  initialSettings: any
+  initialSiteTypes: string[]
+  initialCategories: Category[]
+}) {
   const [step, setStep] = useState(1)
   const [arrival, setArrival] = useState('')
   const [departure, setDeparture] = useState('')
@@ -50,9 +62,12 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
   // no-hero variant and then jumped, because the settings arrived in a useEffect after mount.
   // The theme has been resolved server-side for exactly this reason; the hero now is too.
   const [settings, setSettings] = useState<any>(initialSettings ?? null)
-  const [siteTypes, setSiteTypes] = useState<string[]>([])
+  // Server-read, like `settings` above and for the same reason — with the added one that these
+  // two were the last anon-key queries this page made. Constants rather than state: nothing
+  // in the browser changes them.
+  const siteTypes = initialSiteTypes
+  const categories = initialCategories
   const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
-  const [categories, setCategories] = useState<Category[]>([])
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
   const [openCategories, setOpenCategories] = useState<Set<number | 'uncategorized'>>(new Set())
   const [expandedPhotoSiteId, setExpandedPhotoSiteId] = useState<string | null>(null)
@@ -60,20 +75,10 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
 
   const today = new Date().toISOString().split('T')[0]
 
-  useEffect(() => {
-    // The settings fetch that used to live here is gone: the server component already read
-    // them and passed them in, and re-fetching would only spend a round trip to arrive at the
-    // same row. The other two reads stay — they are not needed for the first paint.
-    supabase.from('sites').select('site_type').then(({ data }) => {
-      if (data) {
-        const types = [...new Set(data.map((s) => s.site_type))]
-        setSiteTypes(types)
-      }
-    })
-    supabase.from('categories').select('*').order('name').then(({ data }) => {
-      setCategories(data || [])
-    })
-  }, [])
+  // The mount-time fetches that used to live here are all gone. Settings went first (they
+  // decide the first paint, so a useEffect was always too late); PR 4b took the other two,
+  // which had no such excuse — they were simply reads the browser was doing on its own
+  // authority. lib/home-server.ts does both now, before the HTML is sent.
 
   useEffect(() => {
     if (selectedSite && selectedSiteRef.current) {
@@ -119,21 +124,12 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
     setSeasonStart(data.seasonStart || '')
     setSeasonEnd(data.seasonEnd || '')
 
-    // Fetch site_categories for these sites
-    if (fetchedSites.length > 0) {
-      const siteIds = fetchedSites.map(s => s.id)
-      const { data: sc } = await supabase
-        .from('site_categories')
-        .select('*')
-        .in('site_id', siteIds)
-      if (sc) {
-        const map: Record<string, number[]> = {}
-        sc.forEach((row) => {
-          if (!map[row.site_id]) map[row.site_id] = []
-          map[row.site_id].push(row.category_id)
-        })
-        setSiteCategories(map)
-      }
+    // site_categories used to be a second round trip from the browser — an anon-key read of
+    // that table, keyed by the ids /api/availability had just returned. The route builds the
+    // same map now and sends it with the sites, so the accordion is grouped by the same
+    // server that decided what is available in the first place. One request, not two.
+    if (fetchedSites.length > 0 && data.siteCategories) {
+      setSiteCategories(data.siteCategories)
     }
 
     setLoading(false)

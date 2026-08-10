@@ -15,6 +15,7 @@
 // first paint, so there is nothing left to shift.
 
 import { getSettings } from '@/lib/settings-server'
+import { getHomeData } from '@/lib/home-server'
 import HomeClient from './HomeClient'
 
 // The layout already forces dynamic rendering for this tree, so this is belt-and-braces —
@@ -25,6 +26,16 @@ export const dynamic = 'force-dynamic'
 export default async function Page() {
   // Shares the layout's cache()'d read, so the theme, the page title and the hero come from
   // ONE settings query per request rather than one each.
-  const settings = await getSettings()
-  return <HomeClient initialSettings={settings} />
+  //
+  // Security PR 4b adds the second call: the site types and categories HomeClient used to
+  // read for itself with the anon key on mount. Same rows, read here instead. In parallel —
+  // neither depends on the other, and the page waits for both regardless.
+  const [settings, home] = await Promise.all([getSettings(), getHomeData()])
+  return (
+    <HomeClient
+      initialSettings={settings}
+      initialSiteTypes={home.siteTypes}
+      initialCategories={home.categories}
+    />
+  )
 }
