@@ -1,5 +1,6 @@
 'use client'
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react'
+import { SQUARE_SDK_URL } from '@/lib/square-env'
 
 // Shared Square Web Payments MANUAL card entry — the single implementation for every
 // surface that captures a card in the browser (was hand-rolled 5×). The seam is the
@@ -15,9 +16,12 @@ function loadSquareSdk(): Promise<void> {
   if (sdkPromise) return sdkPromise
   sdkPromise = new Promise<void>((resolve, reject) => {
     const script = document.createElement('script')
-    script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-      ? 'https://web.squarecdn.com/v1/square.js'
-      : 'https://sandbox.web.squarecdn.com/v1/square.js'
+    // Resolved centrally so the card form and the server that charges its token can never
+    // disagree about which Square environment they are in. This used to be an inline ternary
+    // that fell through to the SANDBOX SDK for any value that was not exactly 'production' —
+    // so an unset or misspelled variable pointed the live card form at sandbox. The helper
+    // inverts that: sandbox is opt-in by exact match, everything else is production.
+    script.src = SQUARE_SDK_URL
     script.onload = () => resolve()
     script.onerror = () => { sdkPromise = null; reject(new Error('Square payment library failed to load.')) }
     document.head.appendChild(script)
