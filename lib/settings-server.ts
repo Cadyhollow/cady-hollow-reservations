@@ -7,6 +7,11 @@
 //
 // Importing this from a client component would drag a Supabase client into the browser bundle;
 // it is only ever called from server components.
+//
+// Security PR 4c switched the key from anon to service-role. The query never ran in a browser,
+// but it ran with the browser's credential — so it was still a read that depended on anon
+// being able to see `settings`, and PR 6 revokes exactly that. Nothing about the result
+// changes: the anon policy on this table is permissive today, so the same row comes back.
 
 import { cache } from 'react'
 import { createClient } from '@supabase/supabase-js'
@@ -15,10 +20,17 @@ import { createClient } from '@supabase/supabase-js'
 // makes PostgREST error, and neither `theme` nor `hero_image_url` is in every tenant's
 // settings table. With '*' a missing column is simply absent from the row, so the readers
 // fall back to their defaults instead of throwing.
+//
+// KNOWN RESIDUE, not introduced here: app/page.tsx hands this whole row to HomeClient as a
+// prop, so it is serialized into the home page's RSC payload. That is a server→client prop
+// rather than a browser query — nothing PR 6's revoke touches — and the one secret this table
+// used to carry, admin_password, was already dropped in PR 2's migration. Narrowing what
+// crosses that boundary is worth doing, but it is a change to what the page RENDERS with, so
+// it belongs in its own pass rather than riding along with a key swap.
 export const getSettings = cache(async () => {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
   const { data } = await supabase.from('settings').select('*').limit(1).single()
   return data
