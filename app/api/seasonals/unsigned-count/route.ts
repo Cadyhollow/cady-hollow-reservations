@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
 import { currentSeasonYear } from '@/lib/season'
+import { requireAdmin } from '@/lib/require-admin'
 
 // GET /api/seasonals/unsigned-count?year=YYYY — summit-gated (fail closed).
 //
@@ -14,6 +15,9 @@ import { currentSeasonYear } from '@/lib/season'
 // "Current season" defaults to new Date().getFullYear() — exactly how the list
 // route (…/seasonals/list) and the /admin/seasonals page derive it. Never hardcoded.
 export async function GET(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   if (!(await isSummit())) {
     return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
   }

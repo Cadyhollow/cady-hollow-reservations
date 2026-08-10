@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/seasonal-contracts/create
 // body: { guest_id, season_year }
 // Creates a draft, prefilled from the guest. Idempotent on the
 // (guest_id, season_year) unique constraint — returns the existing row, no error.
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     if (!(await isSummit())) {
       return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })

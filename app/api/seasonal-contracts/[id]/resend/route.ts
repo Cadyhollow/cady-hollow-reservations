@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit, getResend, originOf, packetEmailHtml } from '@/lib/contract-server'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/seasonal-contracts/[id]/resend  — summit-gated.
 // Re-emails the EXISTING packet link. Does NOT regenerate tokens, re-render text,
 // or touch document_text — a resent email points at the same frozen documents.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     if (!(await isSummit())) {
       return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
