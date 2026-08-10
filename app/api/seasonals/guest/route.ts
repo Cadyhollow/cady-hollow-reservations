@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/seasonals/guest — summit-gated. The SINGLE writer for seasonal guest
 // data: upsert ALL guest fields in one call — create a new guest, or update by id.
@@ -11,6 +12,9 @@ import { svc, isSummit } from '@/lib/contract-server'
 //         camper_type, camper_length, camper_amperage,
 //         camper_make, camper_model, camper_year }
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     if (!(await isSummit())) {
       return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })

@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
 import { notVoided } from '@/lib/ledger'
 import { currentSeasonYear } from '@/lib/season'
+import { requireAdmin } from '@/lib/require-admin'
 
 // GET /api/seasonals/list?year=YYYY — summit-gated. One aggregated payload for the
 // /admin/seasonals list (seasonal_contracts + guest_notes are RLS-zero-policy, so
 // the admin anon client can't read them; this service-role route does).
 export async function GET(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
 
   const url = new URL(request.url)

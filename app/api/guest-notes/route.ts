@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/guest-notes — summit-gated. Append a note. No edit, no delete route.
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
   const body = await request.json()
   const guest_id: string | undefined = body.guest_id

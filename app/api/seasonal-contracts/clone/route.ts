@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/seasonal-contracts/clone  { from_year, to_year, preview? }
 //
@@ -17,6 +18,9 @@ import { svc, isSummit } from '@/lib/contract-server'
 // preview:true returns { would_create, would_skip } and writes NOTHING — used by
 // the confirm dialog to show the count before the staff commits.
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     if (!(await isSummit())) {
       return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
