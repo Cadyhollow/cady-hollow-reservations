@@ -819,8 +819,14 @@ export default function FolioPage() {
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                       {/* Informational only — the fee is Square's cut, already excluded from
                           the amount at right and from every total on this page. A cash or
-                          check payment carries no surcharge, so this renders nothing. */}
-                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>includes ${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee{ev.feeAmount < 0 ? ' returned' : ''}</div> : null}
+                          check payment carries no surcharge, so this renders nothing.
+                          "plus … charged", not "includes": Model B adds the fee ON TOP of the
+                          base, and the amount at right is the base (amount − surcharge). A
+                          $220 stay paid by card charges $227.70, so saying the $220 "includes"
+                          $7.70 was simply false. Refund rows state the fee plainly — the
+                          refund genuinely returns it (Square is refunded the gross, of which
+                          surcharge_amount is a prorated share). */}
+                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isVoided ? '#9ca3af' : isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827'), textDecoration: isVoided ? 'line-through' : 'none' }}>
                       {/* A refund is a payment event with a NEGATIVE amount, so the literal '−'
