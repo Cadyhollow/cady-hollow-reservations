@@ -19,7 +19,7 @@
 // along with the legacy branch, and until then it is better than a mode toggle that someone has
 // to understand.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Image from 'next/image'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
@@ -34,6 +34,19 @@ export default function LoginForm({
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // PR 5c-1. Set by middleware.ts when it turns away a session that authenticated fine but has no
+  // usable role — a deactivated account, or a Supabase user with no profiles row. Without this the
+  // user is dumped on a blank login form having just been signed in, which reads as a bug.
+  //
+  // Read from window.location rather than useSearchParams(), matching app/admin/layout.tsx: the
+  // hook opts the whole subtree into a Suspense boundary at build time, which is a lot of
+  // machinery for one line of copy.
+  const [inactive, setInactive] = useState(false)
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('inactive')) setInactive(true)
+  }, [])
 
   async function handleLogin() {
     if (!password) { setError('Please enter your password.'); return }
@@ -51,6 +64,26 @@ export default function LoginForm({
         })
         if (signInError) {
           setError('Incorrect email or password.')
+          setLoading(false)
+          return
+        }
+
+        // PR 5c-1: SIGNING IN IS NOT THE SAME AS HAVING ACCESS.
+        //
+        // Supabase Auth knows nothing about profiles.active — a deactivated staff member's
+        // password still works, because deactivation is this application's concept, not GoTrue's.
+        // Their session is real and every server guard then refuses it, so without this check they
+        // would land on /admin, be bounced to the login page by middleware, sign in successfully
+        // again, and loop — apparently at random.
+        //
+        // /api/me is the authority because it runs the SAME roleForSession() the guards use, so
+        // this cannot drift from what will actually be enforced on the next request. A 401 here
+        // means authenticated-but-not-provisioned. Sign them back out so the browser is not left
+        // holding a session that opens nothing.
+        const me = await fetch('/api/me')
+        if (!me.ok) {
+          await supabase.auth.signOut()
+          setError('This account is not active. Ask an owner to reactivate it.')
           setLoading(false)
           return
         }
@@ -115,6 +148,13 @@ export default function LoginForm({
         {/* Login Card */}
         <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
           <h2 className="text-white font-bold text-lg mb-6 text-center">Staff Login</h2>
+
+          {inactive && (
+            <div role="alert" className="rounded-lg px-3 py-2 mb-4 text-sm"
+              style={{ background: 'rgba(180,83,9,0.25)', color: '#fcd34d', border: '1px solid rgba(217,119,6,0.5)' }}>
+              Your account is no longer active. Ask an owner to reactivate it.
+            </div>
+          )}
 
           <div className="space-y-4">
             <div>

@@ -26,6 +26,15 @@
 //
 //   /admin/settings/terminal is covered by the /admin/settings prefix — pairing a Square device
 //   is integration configuration.
+//
+//   /admin/users (PR 5c-1) is the account-management screen, and it is Owner for the obvious
+//   reason: it decides who may issue a refund. Note that listing it here is the SECOND gate, not
+//   the only one — every operation on that page is a call to /api/admin-users, which runs its own
+//   requireRole(request, 'owner'). A page-level entry alone would leave the routes open.
+//
+//   /admin/account is deliberately ABSENT, so it takes the 'staff' default. It is the
+//   self-service password screen and every logged-in user needs it, including a Staff member who
+//   can reach nothing else on this list.
 
 import type { Role } from '@/lib/roles'
 
@@ -41,6 +50,7 @@ const PAGE_ROLES: [string, Role][] = [
   ['/admin/discounts', 'owner'],
   ['/admin/products', 'owner'],
   ['/admin/settings', 'owner'],
+  ['/admin/users', 'owner'],
 
   ['/admin/reports', 'manager'],
   ['/admin/transactions', 'manager'],

@@ -109,6 +109,12 @@ after(() => { server?.kill('SIGTERM') })
 // Bodies are intentionally empty: the guard is the FIRST statement in each handler, so an
 // unauthenticated request must be refused before the body is ever parsed.
 const GATED: [string, string][] = [
+  // PR 5c-1. These two create logins and change roles over the service-role key, so they are the
+  // routes where an unauthenticated caller would matter most — an open POST /api/admin-users is a
+  // "make yourself an owner" endpoint. Owner-gated in the handler; asserted 401 here.
+  ['GET', '/api/admin-users'],
+  ['POST', '/api/admin-users'],
+  ['PATCH', '/api/admin-users/00000000-0000-0000-0000-000000000000'],
   ['POST', '/api/admin-card-payment'],
   ['POST', '/api/broadcast-email'],
   ['POST', '/api/electric-bill-email'],

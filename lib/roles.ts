@@ -40,3 +40,20 @@ export function atLeast(role: Role | null | undefined, minimum: Role): boolean {
 export function rankOf(role: string | null | undefined): number {
   return role ? (RANK[role] ?? 0) : 0
 }
+
+/**
+ * The ladder as a person reads it, for the account screens (PR 5c-1).
+ *
+ * Here rather than in lib/admin-users.ts because that module constructs a service-role client at
+ * import — pulling it into a client component would be a build error at best. This file is the
+ * browser-safe half of the role model, which is exactly what a dropdown needs.
+ *
+ * The blurbs describe what each tier actually reaches, per lib/admin-pages.ts and the requireRole
+ * call in each route. They are the only place a person is told what they are choosing, so they
+ * should be corrected alongside any change to the route→role map.
+ */
+export const ROLE_OPTIONS: { value: Role; label: string; blurb: string }[] = [
+  { value: 'owner', label: 'Owner', blurb: 'everything, including settings, pricing and accounts' },
+  { value: 'manager', label: 'Manager', blurb: 'day-to-day plus refunds, reports and billing' },
+  { value: 'staff', label: 'Staff', blurb: 'bookings and guests; no refunds or cancellations' },
+]

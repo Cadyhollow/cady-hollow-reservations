@@ -91,6 +91,9 @@ const navGroups: NavGroup[] = [
     icon: '🔧',
     items: [
       { name: 'Settings', href: '/admin/settings', icon: '⚙️' },
+      // PR 5c-1. Owner-only, and hidden below Owner by the roleForPath() filter further down
+      // rather than by anything special here — lib/admin-pages.ts maps /admin/users to 'owner'.
+      { name: 'Staff Accounts', href: '/admin/users', icon: '👤' },
     ],
   },
 ]
@@ -383,6 +386,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
           </div>
         </div>
+        {/* PR 5c-1. In the footer beside Log Out rather than in a nav group, because it belongs to
+            whoever is signed in rather than to a part of the park. No role gate: /admin/account is
+            the self-service password page and every logged-in user needs it. */}
+        <Link href="/admin/account"
+          className="flex items-center px-4 rounded-xl text-sm transition-all duration-150"
+          style={{minHeight:'44px',display:'flex',alignItems:'center',color:'rgba(255,255,255,0.6)'}}
+          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='#fff'}
+          onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='rgba(255,255,255,0.6)'}>
+          My Account
+        </Link>
         <Link href="/"
           className="flex items-center px-4 rounded-xl text-sm transition-all duration-150"
           style={{minHeight:'44px',display:'flex',alignItems:'center',color:'rgba(255,255,255,0.6)'}}
