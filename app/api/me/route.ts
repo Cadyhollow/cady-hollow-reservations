@@ -1,26 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { resolveRole } from '@/lib/require-role'
+import { readAdminSession } from '@/lib/admin-auth'
+import { roleForSession } from '@/lib/require-role'
 
-// GET /api/me → { role: 'owner' | 'manager' | 'staff' }
+// GET /api/me → { role, email, userId }
 //
 // Security PR 5b-2. The admin layout hides nav items the user cannot use, and it cannot work the
-// role out for itself. A legacy 5a-0 cookie has no Supabase session at all, so a browser-side
-// `select role from profiles` returns nothing for exactly the users who have the MOST access —
-// the nav would collapse to Staff for anyone holding the shared password. Only the server can
-// answer for both halves of dual-accept, so it does, here.
+// role out for itself — the role lives in `profiles`, whose RLS policy scopes SELECT to the
+// caller's own row, and reading it needs the session that only the server sees at guard time.
+//
+// PR 5c-1 added the identity fields, and 5c-2 dropped the `via` field that sat beside them: it
+// distinguished a real session from a legacy shared-password one, and there is only one kind of
+// session now. `email` names who is signed in on /admin/account and doubles as the identity its
+// self-service form re-authenticates with. Every field describes the CALLER's own session only —
+// this route never reveals anything about another user.
 //
 // This is presentation only. Nothing is authorised on the strength of this response: pages are
 // enforced by middleware.ts and API routes by their own requireRole() call. Tampering with the
 // reply in devtools reveals menu items whose pages then redirect and whose routes then 403.
 //
 // Returns 401 rather than a null role when there is no session, so it behaves like every other
-// gated route and lib/api-auth.test.ts's blanket assertion covers it.
+// gated route and lib/api-auth.test.ts's blanket assertion covers it. A DEACTIVATED user reaches
+// here with a valid Supabase session but no role — roleForSession fails closed on `active` — and
+// gets that same 401, which is what app/admin/login/LoginForm.tsx uses to catch a deactivated
+// account at sign-in rather than bouncing them around the admin.
 export async function GET(request: NextRequest) {
-  const role = await resolveRole(request)
+  const session = await readAdminSession(request)
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
+  const role = await roleForSession(session, request)
   if (!role) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  return NextResponse.json({ role })
+  return NextResponse.json({
+    role,
+    email: session.email,
+    userId: session.userId,
+  })
 }

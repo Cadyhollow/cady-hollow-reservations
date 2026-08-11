@@ -25,17 +25,21 @@ export { atLeast, type Role }
 // Returning the response rather than throwing keeps the guard explicit at each call site: a
 // reader can see the route is gated, and at what level, without following a throw.
 //
-// HISTORY. PR 5a-0 made the legacy cookie unforgeable (it used to be the constant string
-// 'authenticated', published in this repository — see lib/admin-session.ts). PR 5a added real
-// per-user Supabase logins alongside it. Both stages were AUTHENTICATION only: they answered
-// "is a logged-in admin calling", and granted every caller everything.
+// HISTORY. PR 5a-0 made the legacy shared-password cookie unforgeable (it used to be the constant
+// string 'authenticated', published in this repository). PR 5a added real per-user Supabase logins
+// alongside it. Both stages were AUTHENTICATION only: they answered "is a logged-in admin
+// calling", and granted every caller everything.
 //
 // PR 5b-2 is the authorization half. This file was lib/require-admin.ts and exported
 // requireAdmin(); that function is gone, because "is an admin" is no longer a question any route
 // should be asking. Every route now names the minimum role it needs.
 //
+// PR 5c-2 retired the shared password entirely, so every caller reaching this file has a personal
+// account behind them. There is no longer a login ROUTE to exempt: signing in happens against
+// Supabase Auth directly from the browser, so the "never gate /api/admin-auth" rule that used to
+// sit here is gone along with the endpoint.
+//
 // DO NOT apply this to:
-//   • /api/admin-auth — it is the login endpoint; gating it makes logging in impossible.
 //   • Camper-facing routes (/api/payment, /api/availability, /api/cancellation-policy,
 //     /api/discount), token-authenticated links (/api/sign/[token], /api/packet/[packetId],
 //     /api/unsubscribe), or /api/webhooks/square, which Square calls with its own signature.
@@ -45,17 +49,12 @@ export { atLeast, type Role }
 /**
  * The caller's role, or null if they are not a logged-in admin at all.
  *
- * LEGACY SESSIONS RESOLVE TO OWNER, and this is the most important caveat in the file. The 5a-0
- * cookie carries no identity — it says only "someone knew ADMIN_PASSWORD" — so there is no role
- * to look up. Owner is the only answer compatible with dual-accept: anything less would lock the
- * park's actual owner out of refunds the moment this shipped, since she may still be holding a
- * legacy cookie.
- *
- * The consequence, stated plainly so nobody mistakes this stage for more than it is: until 5c
- * retires the legacy path, ANYONE WHO KNOWS THE SHARED PASSWORD IS AN OWNER, whatever their
- * profile says. The role model is enforced for people who sign in with their own email and
- * password, and advisory for anyone with the shared one. Removing the legacy branch in
- * lib/admin-auth.ts is what turns this from advisory into enforced.
+ * PR 5c-2 REMOVED THE CAVEAT THAT USED TO LIVE HERE. Until the legacy path was retired, a
+ * shared-password session carried no identity and therefore resolved to Owner — so anyone who knew
+ * ADMIN_PASSWORD was an Owner whatever their profile said, and the ladder was enforced only for
+ * people signing in with their own email. Every session now has a user id behind it, so every
+ * answer this function gives comes from that person's own profiles row. The role model is
+ * enforced, with no way around it.
  */
 export async function resolveRole(request: NextRequest): Promise<Role | null> {
   const session = await readAdminSession(request)
@@ -73,9 +72,7 @@ export async function roleForSession(
   session: AdminSession,
   request: NextRequest
 ): Promise<Role | null> {
-  if (session.via === 'legacy') return 'owner'
-
-  // A real per-user session: the role lives in public.profiles (PR 5a).
+  // The role lives in public.profiles (PR 5a).
   //
   // Read over the USER'S OWN session, not service-role. The 5a policy "Users read their own
   // profile" scopes SELECT to auth.uid() = id, so this can only ever return the caller's row,

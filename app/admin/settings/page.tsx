@@ -1070,13 +1070,15 @@ export default function SettingsPage() {
       </div>
 
       {/* The "Change Admin Password" section used to live here. It wrote settings.admin_password,
-          which NOTHING read — /api/admin-auth compares against the ADMIN_PASSWORD env var — so
-          typing a new password here changed nothing about logging in, while writing a
-          password-shaped secret into a table any visitor could read. The column is dropped in
+          which NOTHING read — the login compared against the ADMIN_PASSWORD env var — so typing a
+          new password here changed nothing about logging in, while writing a password-shaped
+          secret into a table any visitor could read. The column is dropped in
           db/migrations/2026-08-10-pr2-table-hardening.sql; this control had to go with it, both
           because it was misleading and because writing a dropped column would fail the whole
           save (see the hasThemeColumn guard above for that exact failure mode).
-          Changing the admin password means changing ADMIN_PASSWORD in Vercel and redeploying. */}
+          PR 5c-2 then retired the shared password altogether, so there is nothing here to bring
+          back: each person has their own login. Change your own under My Account; reset someone
+          else's on Staff Accounts. */}
 
       <div className="mt-6 flex justify-end">
         <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-8 py-3 rounded-lg font-medium hover:bg-green-800 disabled:opacity-50">
