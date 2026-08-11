@@ -15,7 +15,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // "Current season" defaults to new Date().getFullYear() — exactly how the list
 // route (…/seasonals/list) and the /admin/seasonals page derive it. Never hardcoded.
 export async function GET(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   if (!(await isSummit())) {

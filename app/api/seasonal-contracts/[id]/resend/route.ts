@@ -6,7 +6,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // Re-emails the EXISTING packet link. Does NOT regenerate tokens, re-render text,
 // or touch document_text — a resent email points at the same frozen documents.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

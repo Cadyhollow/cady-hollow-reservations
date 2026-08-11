@@ -8,7 +8,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // /admin/seasonals list (seasonal_contracts + guest_notes are RLS-zero-policy, so
 // the admin anon client can't read them; this service-role route does).
 export async function GET(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
