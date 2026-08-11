@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/seasonals/guest — summit-gated. The SINGLE writer for seasonal guest
 // data: upsert ALL guest fields in one call — create a new guest, or update by id.
@@ -12,7 +12,7 @@ import { requireAdmin } from '@/lib/require-admin'
 //         camper_type, camper_length, camper_amperage,
 //         camper_make, camper_model, camper_year }
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

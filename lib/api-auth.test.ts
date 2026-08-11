@@ -6,7 +6,7 @@
 // WHY THIS FILE EXISTS: middleware.ts guards admin PAGES only (matcher '/admin/:path*'), so the
 // API routes are unauthenticated unless each one checks for itself. A security audit found ~20
 // service-role-backed routes open to anyone — refunds, terminal charges, manual bookings, guest
-// PII, outbound email. lib/require-admin.ts closed that. Nothing but this file can tell you it
+// PII, outbound email. lib/require-role.ts closed that. Nothing but this file can tell you it
 // STAYS closed: a future refactor that drops a guard leaves every other test green.
 //
 // The second half matters just as much and is easy to forget: the camper-facing routes must stay
@@ -116,6 +116,7 @@ const GATED: [string, string][] = [
   ['POST', '/api/email'],
   ['POST', '/api/guest-notes'],
   ['POST', '/api/guests/balances'],
+  ['GET', '/api/me'],
   ['POST', '/api/manual-booking'],
   ['POST', '/api/receipt'],
   ['POST', '/api/refund'],
@@ -201,7 +202,7 @@ test('a valid admin session is accepted (read-only routes)', { skip: skipLogin }
 // impossible, locking every admin out permanently.
 //
 // It cannot be asserted with "not 401" like the routes above: a wrong password is itself a
-// legitimate 401 from its own handler. So distinguish by BODY. requireAdmin always answers
+// legitimate 401 from its own handler. So distinguish by BODY. requireRole always answers
 // {"error":"Unauthorized"}; the login route answers {"error":"Incorrect password."}. Seeing the
 // login route's own message proves the request reached the handler rather than a guard.
 test('POST /api/admin-auth reaches its own handler (never gated)', { skip }, async () => {
@@ -213,7 +214,7 @@ test('POST /api/admin-auth reaches its own handler (never gated)', { skip }, asy
   const json: any = await res.json().catch(() => ({}))
   assert.notEqual(
     json?.error, 'Unauthorized',
-    'the login route answered with requireAdmin\'s message — it has been gated, which locks admins out'
+    'the login route answered with requireRole\'s message — it has been gated, which locks admins out'
   )
   assert.equal(json?.error, 'Incorrect password.')
 })

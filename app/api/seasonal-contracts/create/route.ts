@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/seasonal-contracts/create
 // body: { guest_id, season_year }
 // Creates a draft, prefilled from the guest. Idempotent on the
 // (guest_id, season_year) unique constraint — returns the existing row, no error.
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'manager')
   if (denied) return denied
 
   try {

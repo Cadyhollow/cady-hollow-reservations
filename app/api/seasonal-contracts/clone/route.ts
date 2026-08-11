@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { svc, isSummit } from '@/lib/contract-server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/seasonal-contracts/clone  { from_year, to_year, preview? }
 //
@@ -18,7 +18,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // preview:true returns { would_create, would_skip } and writes NOTHING — used by
 // the confirm dialog to show the count before the staff commits.
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'manager')
   if (denied) return denied
 
   try {

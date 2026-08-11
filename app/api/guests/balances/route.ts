@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { notVoided } from '@/lib/ledger'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/guests/balances  { guest_ids: string[] }
 // → { balances: { [guest_id]: cents } }
@@ -24,7 +24,7 @@ const svc = createClient(
 )
 
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   const body = await request.json().catch(() => ({}))
