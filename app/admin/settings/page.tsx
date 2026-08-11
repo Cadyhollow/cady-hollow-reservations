@@ -1,13 +1,21 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
 import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
 import TaxCheckboxList from '@/components/TaxCheckboxList'
 import toast, { Toaster } from 'react-hot-toast'
 import Image from 'next/image'
 import imageCompression from 'browser-image-compression'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 
 // Hero photos come straight off phones, where 8-15MB and 4000px+ on the long edge is normal.
 // Downscaling in the browser before the upload keeps the landing page quick — the whole point
