@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ADMIN_SESSION_COOKIE, verifyAdminSession } from '@/lib/admin-session'
+import { readAdminSession } from '@/lib/admin-auth'
 
 // WHY THIS EXISTS: middleware.ts guards admin PAGES only — its matcher is ['/admin/:path*'],
 // which never matches /api/*. So every API route is reachable unauthenticated unless it checks
@@ -33,14 +33,18 @@ import { ADMIN_SESSION_COOKIE, verifyAdminSession } from '@/lib/admin-session'
 // session could be forged without knowing ADMIN_PASSWORD — this helper's coverage was correct but
 // the check underneath it never failed closed. See lib/admin-session.ts.
 //
+// UPDATE (PR 5a): now accepts EITHER the signed legacy cookie or a real Supabase Auth session,
+// via lib/admin-auth.ts. Still authentication only — this says a logged-in admin is calling, not
+// which of them, and grants every caller the same access it always did. The role check that makes
+// /api/refund refuse a Staff user is requireRole in 5b.
+//
 // DO NOT apply this to:
 //   • /api/admin-auth — it is the login endpoint; gating it makes logging in impossible.
 //   • Camper-facing routes (/api/payment, /api/availability, /api/cancellation-policy),
 //     token-authenticated links (/api/sign/[token], /api/packet/[packetId], /api/unsubscribe),
 //     or /api/webhooks/square, which Square calls with its own signature.
 export async function requireAdmin(request: NextRequest): Promise<NextResponse | null> {
-  const session = request.cookies.get(ADMIN_SESSION_COOKIE)
-  if (!(await verifyAdminSession(session?.value))) {
+  if (!(await readAdminSession(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   return null
