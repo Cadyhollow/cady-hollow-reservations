@@ -2,7 +2,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
 import { buildContractVars, renderTemplate } from '@/lib/contracts'
@@ -10,6 +9,15 @@ import AddressEditor, { type Address } from '../AddressEditor'
 import RigEditor, { type Rig } from '../RigEditor'
 import PartyEditor, { type Occupant } from '../PartyEditor'
 import toast, { Toaster } from 'react-hot-toast'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 
 // One-page "New Seasonal Camper" intake. Always creates a seasonal (is_seasonal via
 // the consolidated guest route). Sections on one scroll: WHO / SETUP / CONTRACT

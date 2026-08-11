@@ -7,14 +7,17 @@ import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, bookingLegRefundable, prorateSurcharge } from '@/lib/refundable'
 import { computePolicyRefund, normalizePolicy } from '@/lib/cancellation-policy'
 import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 

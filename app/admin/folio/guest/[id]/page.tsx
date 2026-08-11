@@ -3,12 +3,20 @@ import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { notVoided, sumLineTaxes } from '@/lib/ledger'
 import { cardSurchargeFor } from '@/lib/pricing'
 import { useEffect, useRef, useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useParams, useRouter } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 
@@ -537,6 +545,15 @@ export default function GuestAccountPage() {
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                       {/* Informational only — already excluded from the amount at right and
                           from every total. Cash and check carry no fee, so this is blank.
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
                           "plus … charged": the fee is added on top of the base, and the amount
                           at right is the base. See the staff folio for the full reasoning. */}
                       {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}

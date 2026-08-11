@@ -3,7 +3,6 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { sumLineTotals } from '@/lib/ledger'
-import { supabase } from '@/lib/supabase'
 import { computePricing } from '@/lib/pricing'
 import {
   bookingLegRefundable, prorateSurcharge, REFUNDABLE_STATUSES,
@@ -16,6 +15,15 @@ import {
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 
 type Addon = {
   name: string

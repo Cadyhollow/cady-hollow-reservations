@@ -1,3 +1,12 @@
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
+// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
+// these queries as `authenticated` and the role policies in
+// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
+// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
+// during prerender.
+const supabase = createBrowserSupabase()
 // lib/tax-applications.ts
 // Shared read/write helpers for the polymorphic `tax_applications` table, used by the
 // ITEM-SIDE tax config (an add-on / fee / settings singleton picking which taxes apply
@@ -8,7 +17,6 @@
 // by admin config screens (Fees, Add-ons, Settings). No charging path (computePricing,
 // POS, booking, folios, calendar, API routes) may import this yet — that wiring is T2+.
 
-import { supabase } from '@/lib/supabase'
 
 // Mirrors the CHECK constraint in 2026-07-16-tax-model-tables.sql. Note 'late_checkout'
 // (the real settings charge), not the spec's original 'late_checkin'.
