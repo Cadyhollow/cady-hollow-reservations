@@ -4,6 +4,8 @@ import { notVoided, sumLineTaxes } from '@/lib/ledger'
 import { cardSurchargeFor } from '@/lib/pricing'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
 import { folioPaymentRefundable, bookingLegRefundable, prorateSurcharge } from '@/lib/refundable'
 import { computePolicyRefund, normalizePolicy } from '@/lib/cancellation-policy'
 import { useEffect, useState, useRef } from 'react'
@@ -349,7 +351,18 @@ export default function FolioPage() {
 
   async function voidPayment(id: string) {
     if (!confirm('Void this payment? This cannot be undone.')) return
-    await supabase.from('folio_payments').update({ status: 'voided' }).eq('id', id)
+    // Checked, not discarded. Voiding is a raw folio_payments UPDATE and the PR 5b-1 policy gates
+    // it at manager, so a Staff session is refused here. RLS hides the row rather than raising,
+    // so an empty result IS the refusal — without asking for the updated row back this reported
+    // success and then silently un-voided itself on the next reload.
+    const { data: voided, error: voidError } = await supabase
+      .from('folio_payments').update({ status: 'voided' }).eq('id', id).select('id')
+
+    if (voidError || !voided?.length) {
+      alert('You do not have permission to void payments.')
+      return
+    }
+
     await loadFolioData(folio!.id)
   }
 
@@ -362,6 +375,13 @@ export default function FolioPage() {
   // night — nothing a cancellation policy governs. Withholding a tenth of a $12 firewood charge
   // encoded a rule that never applied to it. Where a policy DOES apply — a booking-leg refund
   // on a reservation — the reservations page seeds the modal from computePolicyRefund instead.
+  // PR 5b-2 follow-up: refunds and voids are Manager+. Staff legitimately work this page to take
+  // payments and ring up items, so the page stays Staff-level and only these actions are hidden.
+  // The server refuses them regardless — /api/refund and /api/reservation-refund answer 403, and
+  // the void is a raw folio_payments UPDATE that the 5b-1 RLS policy gates at manager.
+  const { role, roleLoaded } = useRole()
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
+
   function openRefund(payment: any) {
     if (!folio) return
     const { remainingCents } = folioPaymentRefundable(payment, payments)
@@ -864,14 +884,14 @@ export default function FolioPage() {
                           partial, which used to retire the button for good and strand the
                           remainder. Void keeps its stricter guard: a payment that has already
                           been partly returned should be refunded down, not voided wholesale. */}
-                      {ev.payment && (ev.refundableCents || 0) > 0 && (
+                      {ev.payment && (ev.refundableCents || 0) > 0 && canMoveMoney && (
                         <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
                       )}
                       {/* The booking leg. Same button, same modal, different route on submit —
                           it has no folio_payments row to refund against, so it goes through
                           /api/reservation-refund. It was the only payment on this page with no
                           way to give the money back from here. */}
-                      {ev.isBookingLeg && (ev.refundableCents || 0) > 0 && (
+                      {ev.isBookingLeg && (ev.refundableCents || 0) > 0 && canMoveMoney && (
                         <button
                           onClick={openBookingLegRefund}
                           disabled={loadingBookingPolicy}
@@ -880,7 +900,7 @@ export default function FolioPage() {
                           {loadingBookingPolicy ? '…' : 'Refund'}
                         </button>
                       )}
-                      {ev.payment && ev.payment.status === 'completed' && (
+                      {ev.payment && ev.payment.status === 'completed' && canMoveMoney && (
                         <button onClick={() => voidPayment(ev.payment!.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
                       )}
                     </div>

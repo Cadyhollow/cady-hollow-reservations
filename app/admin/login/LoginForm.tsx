@@ -43,7 +43,7 @@ export default function LoginForm({
     try {
       if (email.trim()) {
         // Supabase Auth. On success the session is written to cookies by the browser client, which
-        // is what makes it visible to middleware and requireAdmin on the very next request.
+        // is what makes it visible to middleware and requireRole on the very next request.
         const supabase = createBrowserSupabase()
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email: email.trim(),
@@ -54,6 +54,18 @@ export default function LoginForm({
           setLoading(false)
           return
         }
+
+        // Drop any legacy shared-password cookie this browser is still carrying.
+        //
+        // readAdminSession() now prefers a real session, so a leftover admin_session no longer
+        // grants Owner on its own — but leaving one behind keeps a second, weaker way into this
+        // browser that outlives the account actually being used, and it would come back the
+        // moment this user's token expired. Clearing it makes "signed in as this person" mean
+        // exactly one thing.
+        //
+        // allSettled: the sign-in already succeeded, so failing to clear a cookie that may not
+        // even exist must never turn a good login into an error.
+        await Promise.allSettled([fetch('/api/admin-auth', { method: 'DELETE' })])
       } else {
         // Legacy shared password. Unchanged from 5a-0.
         const res = await fetch('/api/admin-auth', {

@@ -13,6 +13,8 @@ import {
   type ResolvedPolicy, type PolicyRefundResult,
 } from '@/lib/cancellation-policy'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
@@ -125,6 +127,13 @@ function ReservationsPageInner() {
   const [overrideTotalValue, setOverrideTotalValue] = useState('')
   // The inline refund panel became the shared modal. Its five pieces of state collapse to a
   // target plus the policy-derived seed the modal opens with.
+  // PR 5b-2 follow-up: Cancel, Issue Refund and Permanently Delete are Manager+ actions sitting
+  // on a page Staff may legitimately open. Hiding them is UX — /api/reservation-cancel and
+  // /api/refund answer 403, and the raw deletes below are refused by the 5b-1 RLS policies —
+  // but showing a Staff user a button that cannot work is its own kind of broken.
+  const { role, roleLoaded } = useRole()
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
+
   const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
   const [refundSeed, setRefundSeed] = useState<{ cents: number; policyLabel: string | null; hint: string | null }>(
     { cents: 0, policyLabel: null, hint: null }
@@ -613,9 +622,26 @@ function ReservationsPageInner() {
     if (!confirm(`PERMANENTLY DELETE this reservation for ${res.guest_name}?\n\nThis cannot be undone and will remove all records. Only use this for test data or duplicates.`)) return
     const secondConfirm = prompt(`Type DELETE to confirm permanently removing this reservation:`)
     if (secondConfirm !== 'DELETE') { toast.error('Deletion cancelled.'); return }
+    // Errors are CHECKED, not discarded. These are raw PostgREST deletes, and since PR 5b-1 the
+    // RLS policy gates folios and reservations at manager — so for a Staff session they now fail.
+    // The old code awaited all three without looking at the result and then toasted success
+    // unconditionally, which meant a refused delete was indistinguishable from a completed one
+    // until the list was refreshed and the row was still sitting there.
+    //
+    // An RLS refusal on DELETE is not always an error: rows the policy hides simply are not
+    // matched, so PostgREST returns success having deleted nothing. That is why this asks for the
+    // deleted rows back and treats "no error but nothing deleted" as the refusal it is.
     await supabase.from('reservation_addons').delete().eq('reservation_id', res.id)
-    await supabase.from('folios').delete().eq('reservation_id', res.id)
-    await supabase.from('reservations').delete().eq('id', res.id)
+    const { error: folioError } = await supabase.from('folios').delete().eq('reservation_id', res.id)
+    const { data: deletedRes, error: resError } = await supabase
+      .from('reservations').delete().eq('id', res.id).select('id')
+
+    if (folioError || resError || !deletedRes?.length) {
+      toast.error('You do not have permission to delete reservations.')
+      fetchReservations()
+      return
+    }
+
     toast.success('Reservation permanently deleted.')
     fetchReservations()
     setSelected(null)
@@ -953,12 +979,14 @@ function ReservationsPageInner() {
                     >
                       Open Folio
                     </button>
-                    <button
-                      onClick={() => handleCancel(selected)}
-                      className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
-                    >
-                      Cancel
-                    </button>
+                    {canMoveMoney && (
+                      <button
+                        onClick={() => handleCancel(selected)}
+                        className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                   <div className="pt-2">
                     <button
@@ -1044,7 +1072,7 @@ function ReservationsPageInner() {
                     cancel-and-refund flow was built to avoid creating going forward but could
                     not undo for bookings already in it. What remains is the honest test: is
                     there anything left to refund? */}
-                {grossPaidHere > 0 && (
+                {grossPaidHere > 0 && canMoveMoney && (
                   <div className="pt-2">
                     <button
                       onClick={() => openBookingRefund(selected)}
@@ -1060,7 +1088,7 @@ function ReservationsPageInner() {
                     )}
                   </div>
                 )}
-                {selected.status === 'cancelled' && (
+                {selected.status === 'cancelled' && canMoveMoney && (
                   <div className="pt-3">
                     <div className="text-xs text-gray-400 mb-2 text-center">This reservation is cancelled and kept for records.</div>
                     <button

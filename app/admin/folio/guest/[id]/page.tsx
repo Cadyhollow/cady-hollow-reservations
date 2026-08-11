@@ -7,6 +7,8 @@ import { useParams, useRouter } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
@@ -238,6 +240,13 @@ export default function GuestAccountPage() {
   // Seeded at the full remaining. A guest-account payment is an electric bill, a storage fee,
   // a prepayment — nothing a cancellation policy governs — so there is no percentage to apply,
   // exactly as on the main folio's own payment rows.
+  // PR 5b-2 follow-up: refunds and voids are Manager+. Staff legitimately work this page to take
+  // payments and ring up items, so the page stays Staff-level and only these actions are hidden.
+  // The server refuses them regardless — /api/refund and /api/reservation-refund answer 403, and
+  // the void is a raw folio_payments UPDATE that the 5b-1 RLS policy gates at manager.
+  const { role, roleLoaded } = useRole()
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
+
   function openRefund(payment: any) {
     if (!folio) return
     const { remainingCents } = folioPaymentRefundable(payment, payments)
@@ -255,7 +264,18 @@ export default function GuestAccountPage() {
 
   async function voidPayment(id: string) {
     if (!confirm('Void this payment?')) return
-    await supabase.from('folio_payments').update({ status: 'voided' }).eq('id', id)
+    // Checked, not discarded. Voiding is a raw folio_payments UPDATE and the PR 5b-1 policy gates
+    // it at manager, so a Staff session is refused here. RLS hides the row rather than raising,
+    // so an empty result IS the refusal — without asking for the updated row back this reported
+    // success and then silently un-voided itself on the next reload.
+    const { data: voided, error: voidError } = await supabase
+      .from('folio_payments').update({ status: 'voided' }).eq('id', id).select('id')
+
+    if (voidError || !voided?.length) {
+      alert('You do not have permission to void payments.')
+      return
+    }
+
     await loadFolioData(folio!.id)
   }
 
@@ -588,10 +608,10 @@ const supabase = createBrowserSupabase()
                       {/* Gated on what is still refundable, like every other surface — not on
                           the row's status, which flips to 'partially_refunded' after the first
                           partial and used to retire the button for good. */}
-                      {ev.payment && (ev.refundableCents || 0) > 0 && (
+                      {ev.payment && (ev.refundableCents || 0) > 0 && canMoveMoney && (
                         <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, marginRight: 6 }}>Refund</button>
                       )}
-                      {ev.paymentId && ev.payment?.status === 'completed' && (
+                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
                         <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
                       )}
                     </div>
