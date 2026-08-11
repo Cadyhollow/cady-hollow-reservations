@@ -3,7 +3,7 @@ import { Resend } from 'resend'
 import { sumLineTotals, buildLedger, buildStatement } from '@/lib/ledger'
 import { renderStatementHtml } from '@/lib/statement-html'
 import { createClient } from '@supabase/supabase-js'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 const supabase = createClient(
@@ -12,7 +12,7 @@ const supabase = createClient(
 )
 
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

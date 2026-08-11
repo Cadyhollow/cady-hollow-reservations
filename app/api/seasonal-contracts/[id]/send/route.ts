@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isSummit, getResend, originOf, packetEmailHtml, freezePacket } from '@/lib/contract-server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/seasonal-contracts/[id]/send  — THE REMOTE FLOW
 // Freezes the draft into a packet via freezePacket() (which owns the empty-doc
@@ -10,7 +10,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // compensated: once the packet is committed it's real, so a failed email returns
 // { ok:true, emailed:false } and leaves everything intact for a resend.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

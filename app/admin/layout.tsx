@@ -9,6 +9,8 @@ import { usePathname } from 'next/navigation'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import Image from 'next/image'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+import { atLeast, type Role } from '@/lib/roles'
+import { roleForPath } from '@/lib/admin-pages'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -133,6 +135,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [plan, setPlan] = useState<string>('trailhead') // fail closed — lowest tier until settings load
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
 
+  // NOTE the name collision, because it will bite someone otherwise: `dashboardView` above is a
+  // cosmetic owner/staff TOGGLE on the dashboard that predates roles and has nothing to do with
+  // permissions — any user can flip it. `role` below is the real one.
+  const [role, setRole] = useState<Role | null>(null) // fail closed — no privileged nav until /api/me answers
+  const [roleLoaded, setRoleLoaded] = useState(false)
+
+  // Set by middleware.ts when it refuses a page for lack of role. Without this the redirect looks
+  // like a click that silently did nothing, which reads as a bug rather than a permission.
+  //
+  // Read from window.location rather than useSearchParams(): the latter opts the whole subtree
+  // into a Suspense requirement at build time, which is a lot of machinery for one banner.
+  const [deniedPath, setDeniedPath] = useState<string | null>(null)
+
   useEffect(() => {
     const stored = localStorage.getItem('resonation_dashboard_view')
     if (stored === 'owner' || stored === 'staff') setDashboardView(stored as 'owner'|'staff')
@@ -172,6 +187,38 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       })
   }, [isLoginPage])
 
+  // PR 5b-2: the signed-in user's role, for hiding nav items they cannot use.
+  //
+  // From the server (/api/me) rather than from a browser read of `profiles`, because a legacy
+  // 5a-0 cookie carries no Supabase session — a client-side lookup would return nothing for the
+  // very users who have the most access, and collapse the menu to Staff for anyone holding the
+  // shared password. See app/api/me/route.ts.
+  //
+  // Fails closed to Staff: a failed fetch hides the privileged items rather than showing links
+  // that would only redirect. `roleLoaded` gates the nav the same way `settingsLoaded` does, so
+  // Owner-only groups never flash into view during the first paint and then vanish.
+  useEffect(() => {
+    if (isLoginPage) return
+    fetch('/api/me')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (data?.role) setRole(data.role as Role)
+      })
+      .catch(() => {})
+      .finally(() => setRoleLoaded(true))
+  }, [isLoginPage])
+
+  useEffect(() => {
+    const denied = new URLSearchParams(window.location.search).get('denied')
+    setDeniedPath(denied)
+    if (denied) {
+      // Drop the marker so a refresh, or a later back-navigation, does not re-announce it.
+      const url = new URL(window.location.href)
+      url.searchParams.delete('denied')
+      window.history.replaceState({}, '', url.toString())
+    }
+  }, [pathname])
+
   useEffect(() => {
     setOpenGroup(getActiveGroup())
   }, [pathname])
@@ -201,6 +248,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     .map(g => ({
       ...g,
       items: g.items.filter(item => {
+        // PR 5b-2 role gate. roleForPath() is the SAME table middleware.ts enforces with, so a
+        // link can never appear for a page that would then redirect. This is UX only — hiding a
+        // link authorises nothing, and the middleware refuses the URL whether or not it was
+        // ever shown.
+        if (!atLeast(role, roleForPath(item.href))) return false
         if (item.href === '/admin/electric-billing') return planAtLeast(plan, 'summit')
         // minPlan is always enforced; POS (an add-on) governs only posOnly groups, never plan gates
         return !item.minPlan || planAtLeast(plan, item.minPlan)
@@ -247,7 +299,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           Dashboard
         </Link>
 
-        {!settingsLoaded ? (
+        {!settingsLoaded || !roleLoaded ? (
           <div className="space-y-1.5 px-1 pt-1" aria-hidden>
             {[0, 1, 2, 3, 4].map(i => (
               <div key={i} style={{ height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.06)' }} />
@@ -297,8 +349,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           )
         })}
 
-        {/* Reports — standalone top-level item (ridgeline+) */}
-        {planAtLeast(plan, 'ridgeline') && (
+        {/* Reports — standalone top-level item (ridgeline+, Manager+) */}
+        {planAtLeast(plan, 'ridgeline') && atLeast(role, roleForPath('/admin/reports')) && (
           <Link href="/admin/reports" onClick={() => setSidebarOpen(false)}
             className="flex items-center px-4 rounded-xl text-sm font-semibold transition-all duration-150 mt-3"
             style={{
@@ -351,6 +403,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {deniedPath && (
+        <div role="alert" className="px-4 py-3 text-sm"
+          style={{ background: '#fef3c7', color: '#92400e', borderBottom: '1px solid #fde68a' }}>
+          <strong>Not available to your account.</strong>{' '}
+          <span style={{ opacity: 0.9 }}>
+            {deniedPath} needs a higher permission level. Ask an owner if you need access.
+          </span>
+          <button onClick={() => setDeniedPath(null)} aria-label="Dismiss"
+            className="ml-3 underline" style={{ opacity: 0.75 }}>Dismiss</button>
+        </div>
+      )}
 
       {/* Mobile top bar */}
       <div className="lg:hidden text-white px-4 py-3 flex items-center justify-between"

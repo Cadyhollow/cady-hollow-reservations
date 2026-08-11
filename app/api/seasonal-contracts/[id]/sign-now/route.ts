@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isSummit, freezePacket } from '@/lib/contract-server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/seasonal-contracts/[id]/sign-now — summit-gated. In-person signing:
 // freeze the draft into a packet via freezePacket() (inherits the empty-doc guard,
@@ -9,7 +9,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // Does NOT email, and does NOT require the guest to have an email (a walk-up may
 // have none) — no requireEmail passed.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {
