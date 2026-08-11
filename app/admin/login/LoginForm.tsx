@@ -3,21 +3,22 @@
 // The interactive half of the login screen. Branding arrives as props from the server component
 // (page.tsx) — this file makes no Supabase data reads.
 //
-// PR 5a runs TWO login paths at once, deliberately:
+// PR 5c-2: ONE LOGIN PATH. Email + password, against Supabase Auth, for a real per-user account.
 //
-//   • Email + password  -> Supabase Auth. A real per-user account. This is the one that survives.
-//   • Password only     -> POST /api/admin-auth, the shared ADMIN_PASSWORD, minting the 5a-0
-//                          signed cookie. Unchanged, still works, removed in 5c.
+// From 5a until now this screen offered two, selected by whether the email field was filled in:
+// leaving it blank posted the password to /api/admin-auth and logged you in with the single shared
+// ADMIN_PASSWORD that every member of staff knew. That path is gone — the endpoint is deleted, the
+// cookie is unread, and the "leave blank to use the shared staff password" hint below the email
+// field went with it.
 //
-// Both are offered until a real login has been proven in production, because the no-lockout rule
-// says the old way keeps working until the new way is known to. The email field is what selects
-// between them: fill it in and you get Supabase, leave it blank and you get the shared password
-// exactly as before. That means Cady's existing habit — type the password, press enter — is
-// completely undisturbed by this deploy.
+// WHY IT HAD TO GO, beyond tidiness: a shared-password session carried no identity, so
+// lib/require-role.ts had to treat it as Owner. Every role in the system was optional for anyone
+// who knew one password. And because that session never authenticated to Supabase, its database
+// queries ran as `anon` — so PR 6's revoke of the anon role would have locked those users out.
 //
-// The "leave blank" affordance is temporary and slightly awkward on purpose. It disappears in 5c
-// along with the legacy branch, and until then it is better than a mode toggle that someone has
-// to understand.
+// The no-lockout rule was satisfied before this shipped, not after: 5c-1 proved that accounts can
+// be created, roles changed and passwords reset and self-changed, and scripts/seed-user.mjs was
+// re-confirmed as the break-glass — it is now the only way back in if every Owner is locked out.
 
 import { useEffect, useState } from 'react'
 import Image from 'next/image'
@@ -49,69 +50,43 @@ export default function LoginForm({
   }, [])
 
   async function handleLogin() {
+    if (!email.trim()) { setError('Please enter your email address.'); return }
     if (!password) { setError('Please enter your password.'); return }
     setLoading(true)
     setError('')
 
     try {
-      if (email.trim()) {
-        // Supabase Auth. On success the session is written to cookies by the browser client, which
-        // is what makes it visible to middleware and requireRole on the very next request.
-        const supabase = createBrowserSupabase()
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        })
-        if (signInError) {
-          setError('Incorrect email or password.')
-          setLoading(false)
-          return
-        }
+      // Supabase Auth. On success the session is written to cookies by the browser client, which
+      // is what makes it visible to middleware and requireRole on the very next request.
+      const supabase = createBrowserSupabase()
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      })
+      if (signInError) {
+        setError('Incorrect email or password.')
+        setLoading(false)
+        return
+      }
 
-        // PR 5c-1: SIGNING IN IS NOT THE SAME AS HAVING ACCESS.
-        //
-        // Supabase Auth knows nothing about profiles.active — a deactivated staff member's
-        // password still works, because deactivation is this application's concept, not GoTrue's.
-        // Their session is real and every server guard then refuses it, so without this check they
-        // would land on /admin, be bounced to the login page by middleware, sign in successfully
-        // again, and loop — apparently at random.
-        //
-        // /api/me is the authority because it runs the SAME roleForSession() the guards use, so
-        // this cannot drift from what will actually be enforced on the next request. A 401 here
-        // means authenticated-but-not-provisioned. Sign them back out so the browser is not left
-        // holding a session that opens nothing.
-        const me = await fetch('/api/me')
-        if (!me.ok) {
-          await supabase.auth.signOut()
-          setError('This account is not active. Ask an owner to reactivate it.')
-          setLoading(false)
-          return
-        }
-
-        // Drop any legacy shared-password cookie this browser is still carrying.
-        //
-        // readAdminSession() now prefers a real session, so a leftover admin_session no longer
-        // grants Owner on its own — but leaving one behind keeps a second, weaker way into this
-        // browser that outlives the account actually being used, and it would come back the
-        // moment this user's token expired. Clearing it makes "signed in as this person" mean
-        // exactly one thing.
-        //
-        // allSettled: the sign-in already succeeded, so failing to clear a cookie that may not
-        // even exist must never turn a good login into an error.
-        await Promise.allSettled([fetch('/api/admin-auth', { method: 'DELETE' })])
-      } else {
-        // Legacy shared password. Unchanged from 5a-0.
-        const res = await fetch('/api/admin-auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
-        })
-        const data = await res.json().catch(() => ({}))
-        if (!data.success) {
-          setError('Incorrect password. Please try again.')
-          setLoading(false)
-          return
-        }
+      // PR 5c-1: SIGNING IN IS NOT THE SAME AS HAVING ACCESS.
+      //
+      // Supabase Auth knows nothing about profiles.active — a deactivated staff member's password
+      // still works, because deactivation is this application's concept, not GoTrue's. Their
+      // session is real and every server guard then refuses it, so without this check they would
+      // land on /admin, be bounced to the login page by middleware, sign in successfully again,
+      // and loop — apparently at random.
+      //
+      // /api/me is the authority because it runs the SAME roleForSession() the guards use, so this
+      // cannot drift from what will actually be enforced on the next request. A 401 here means
+      // authenticated-but-not-provisioned. Sign them back out so the browser is not left holding a
+      // session that opens nothing.
+      const me = await fetch('/api/me')
+      if (!me.ok) {
+        await supabase.auth.signOut()
+        setError('This account is not active. Ask an owner to reactivate it.')
+        setLoading(false)
+        return
       }
 
       // A full navigation rather than router.push: the session cookie was just set, and this
@@ -172,9 +147,6 @@ export default function LoginForm({
                 onKeyDown={handleKeyDown}
                 autoFocus
               />
-              <p className="text-xs text-gray-500 mt-1">
-                Leave blank to use the shared staff password.
-              </p>
             </div>
 
             <div>

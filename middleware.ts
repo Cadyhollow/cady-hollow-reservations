@@ -16,8 +16,9 @@ export async function middleware(request: NextRequest) {
     // user logged in past their access token's hour.
     const response = NextResponse.next({ request })
 
-    // Dual-accept: a 5a-0 signed legacy cookie OR a real Supabase Auth session. Either is enough;
-    // neither is enough on its own to grant more than the other. See lib/admin-auth.ts.
+    // PR 5c-2: one kind of session — a real Supabase Auth session. The shared-password cookie
+    // that used to be accepted alongside it is gone, so reaching past this line means a specific
+    // person is signed in, not merely that someone knew a password. See lib/admin-auth.ts.
     const session = await readAdminSession(request, response)
     if (!session) {
       return NextResponse.redirect(new URL('/admin/login', request.url))

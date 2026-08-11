@@ -229,15 +229,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   // Below every hook, so the hook order is identical on both branches.
   if (isLoginPage) return <>{children}</>
 
-  // PR 5a: there are two kinds of session now, so logging out has to end both. Clearing only the
-  // legacy cookie would leave a Supabase user still signed in — they would bounce straight back
-  // into the admin on the next navigation and reasonably conclude Log Out is broken. Whichever
-  // session the user actually holds, the other call is a harmless no-op.
+  // PR 5c-2: there is one kind of session again, so logging out is one call. This used to also
+  // DELETE /api/admin-auth to clear the legacy shared-password cookie; that endpoint no longer
+  // exists and nothing reads that cookie, so a stale one grants nothing and expires on its own.
   async function handleLogout() {
-    await Promise.allSettled([
-      fetch('/api/admin-auth', { method: 'DELETE' }),
-      createBrowserSupabase().auth.signOut(),
-    ])
+    await createBrowserSupabase().auth.signOut()
     window.location.href = '/admin/login'
   }
 

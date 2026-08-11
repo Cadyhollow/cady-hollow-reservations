@@ -22,7 +22,7 @@ import { ROLE_OPTIONS, type Role } from '@/lib/roles'
 
 const MIN_PASSWORD_LENGTH = 12 // matches lib/admin-users.ts and scripts/seed-user.mjs
 
-type Me = { role: Role; email: string | null; userId: string | null; via: 'legacy' | 'supabase' }
+type Me = { role: Role; email: string | null; userId: string | null }
 
 export default function AccountPage() {
   const [me, setMe] = useState<Me | null>(null)
@@ -103,7 +103,7 @@ export default function AccountPage() {
           <div className="min-w-0">
             <div className="text-xs uppercase tracking-widest text-gray-400 mb-1">Signed in as</div>
             <div className="font-medium text-gray-900 truncate">
-              {me?.email || 'Shared staff password'}
+              {me?.email || 'Unknown'}
             </div>
           </div>
           {roleLabel && (
@@ -117,75 +117,65 @@ export default function AccountPage() {
         )}
       </div>
 
-      {/* A legacy shared-password session has no user account behind it, so there is nothing for
-          updateUser() to act on. Saying so is better than showing a form that cannot work. This
-          branch disappears with the legacy path in 5c-2. */}
-      {me?.via === 'legacy' ? (
-        <div className="rounded-xl px-4 py-3 text-sm"
-          style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' }}>
-          You are signed in with the shared staff password, which is not tied to a personal account,
-          so there is no password here for you to change. Ask an owner to create an account for your
-          email address — then you can set your own password on this page.
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="current-password">
-                Current Password
-              </label>
-              <input
-                id="current-password"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                type="password"
-                autoComplete="current-password"
-                value={current}
-                onChange={e => setCurrent(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="new-password">
-                New Password
-              </label>
-              <input
-                id="new-password"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                type="password"
-                autoComplete="new-password"
-                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-                value={next}
-                onChange={e => setNext(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="confirm-password">
-                Confirm New Password
-              </label>
-              <input
-                id="confirm-password"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                type="password"
-                autoComplete="new-password"
-                value={confirm}
-                onChange={e => setConfirm(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleChange() }}
-              />
-            </div>
-            <button
-              onClick={handleChange}
-              disabled={saving}
-              className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
-            >
-              {saving ? 'Changing...' : 'Change Password'}
-            </button>
+      {/* PR 5c-2 removed the branch that used to sit here, explaining to a shared-password session
+          that it had no personal password to change. Every session is a real account now. */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="current-password">
+              Current Password
+            </label>
+            <input
+              id="current-password"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              type="password"
+              autoComplete="current-password"
+              value={current}
+              onChange={e => setCurrent(e.target.value)}
+            />
           </div>
-          <p className="text-xs text-gray-400 mt-4">
-            Forgotten your password? This system does not send reset emails — ask an owner to set a
-            new one for you.
-          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="new-password">
+              New Password
+            </label>
+            <input
+              id="new-password"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              type="password"
+              autoComplete="new-password"
+              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+              value={next}
+              onChange={e => setNext(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="confirm-password">
+              Confirm New Password
+            </label>
+            <input
+              id="confirm-password"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleChange() }}
+            />
+          </div>
+          <button
+            onClick={handleChange}
+            disabled={saving}
+            className="bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
+          >
+            {saving ? 'Changing...' : 'Change Password'}
+          </button>
         </div>
-      )}
+        <p className="text-xs text-gray-400 mt-4">
+          Forgotten your password? This system does not send reset emails — ask an owner to set a
+          new one for you.
+        </p>
+      </div>
     </div>
   )
 }

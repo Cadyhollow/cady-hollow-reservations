@@ -2,20 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { readAdminSession } from '@/lib/admin-auth'
 import { roleForSession } from '@/lib/require-role'
 
-// GET /api/me → { role, email, userId, via }
+// GET /api/me → { role, email, userId }
 //
 // Security PR 5b-2. The admin layout hides nav items the user cannot use, and it cannot work the
-// role out for itself. A legacy 5a-0 cookie has no Supabase session at all, so a browser-side
-// `select role from profiles` returns nothing for exactly the users who have the MOST access —
-// the nav would collapse to Staff for anyone holding the shared password. Only the server can
-// answer for both halves of dual-accept, so it does, here.
+// role out for itself — the role lives in `profiles`, whose RLS policy scopes SELECT to the
+// caller's own row, and reading it needs the session that only the server sees at guard time.
 //
-// PR 5c-1 added the identity fields. /admin/account changes your own password, which it can only
-// offer to someone who HAS an account: a legacy shared-password session has no user to update, and
-// `via` is what lets that page say so plainly instead of failing at the Supabase call. `email`
-// spares the page a second round trip to name who is signed in, and doubles as the identity the
-// self-service form re-authenticates with. Both describe the CALLER's own session only — this
-// route never reveals anything about another user.
+// PR 5c-1 added the identity fields, and 5c-2 dropped the `via` field that sat beside them: it
+// distinguished a real session from a legacy shared-password one, and there is only one kind of
+// session now. `email` names who is signed in on /admin/account and doubles as the identity its
+// self-service form re-authenticates with. Every field describes the CALLER's own session only —
+// this route never reveals anything about another user.
 //
 // This is presentation only. Nothing is authorised on the strength of this response: pages are
 // enforced by middleware.ts and API routes by their own requireRole() call. Tampering with the
@@ -41,6 +38,5 @@ export async function GET(request: NextRequest) {
     role,
     email: session.email,
     userId: session.userId,
-    via: session.via,
   })
 }

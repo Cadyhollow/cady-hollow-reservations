@@ -1,40 +1,39 @@
 // Who is making this request — the one answer both guards use.
 //
-// Security PR 5a. During the cutover there are TWO ways to hold an admin session, and both are
-// valid. This module is the single place that says so, so middleware.ts and lib/require-admin.ts
-// cannot drift apart the way they did before 5a-0 (each carried its own copy of the cookie check,
-// and both had to be fixed separately).
+// Security PR 5c-2. THE LEGACY SHARED-PASSWORD PATH IS GONE. There is now exactly one way to hold
+// an admin session: a real Supabase Auth session, one row in auth.users per person, carrying a
+// user id we can attribute actions to and a role we can enforce.
 //
-//   'legacy'   — the 5a-0 HMAC-signed admin_session cookie, minted by /api/admin-auth from the
-//                shared ADMIN_PASSWORD. No user identity: it says "someone knew the password".
-//   'supabase' — a real Supabase Auth session, one row in auth.users per person, carrying a user
-//                id we can attribute actions to and hang a role off.
+// WHAT THIS COMPLETES. Between 5a and 5c-1 this module accepted two kinds of session, and the
+// second one — an HMAC-signed `admin_session` cookie minted from a single shared ADMIN_PASSWORD —
+// carried NO IDENTITY. It said only "someone knew the password", so lib/require-role.ts had no
+// choice but to resolve it to Owner. That was the caveat sitting underneath the whole role model:
+// roles were enforced for anyone signing in with their own email, and merely advisory for anyone
+// with the shared one. Deleting the branch is what turns the ladder from a convention into a
+// boundary — a Staff account can no longer be sidestepped by typing the password everybody knows.
 //
-// WHY BOTH. Dual-accept is the no-lockout rule: the legacy path keeps working unchanged for the
-// entire cutover, so no deploy in this stage can strand anyone.
+// AND IT IS WHAT MAKES PR 6 SAFE. A legacy session never authenticated to Supabase, so PostgREST
+// executed its queries as `anon` — which meant revoking the anon role would have taken the admin
+// offline for anyone still on that path. Now every admin request carries a user JWT and runs as
+// `authenticated`, against the policy set 5b-1 authored. Revoking anon can no longer strand an
+// administrator.
 //
-// THE ORDER CHANGED IN 5b-2, and the reasoning is in the PRECEDENCE note further down. In 5a the
-// legacy check ran first because it is a local HMAC and both branches meant the same thing. Once
-// roles arrived they stopped meaning the same thing, and legacy-first became a privilege bug.
-// A real session now wins; the cookie sniff keeps the legacy path free of network cost.
+// NO-LOCKOUT, for the record: this shipped only after 5c-1 proved that real accounts, Owner-driven
+// password resets and self-service changes all work, and after scripts/seed-user.mjs was confirmed
+// to still reset an Owner's password over the service key. That script is now the ONLY recovery
+// path if every Owner is locked out, which is why it was verified before this landed rather than
+// after.
 //
-// Removing the legacy branch is 5c, and it is deliberately a one-line deletion here plus the
-// login route — small enough to be its own revertible commit, which the cutover plan depends on.
-//
-// 5a SCOPE — AUTHENTICATION ONLY. This answers "is this a logged-in admin", NOT "may they do
-// this". Every authenticated user still gets exactly what every admin got before: everything.
-// Roles exist in the profiles table but nothing reads them yet. requireRole and the route→role
-// map are 5b. Nothing a Staff or Manager can do changes in this stage, because nothing
-// distinguishes them yet.
+// STALE COOKIES: a browser may still be carrying an `admin_session` cookie from before this
+// deploy. Nothing reads it — the code that verified it is deleted — so it grants exactly nothing
+// and expires on its own within 24 hours. lib/api-auth.test.ts asserts that sending one, in any
+// form, is refused.
 
 import type { NextRequest, NextResponse } from 'next/server'
-import { ADMIN_SESSION_COOKIE, verifyAdminSession } from '@/lib/admin-session'
 import { createRequestSupabase } from '@/lib/supabase-server'
 import { isSupabaseAuthCookie } from '@/lib/supabase-cookie'
 
-export type AdminSession =
-  | { via: 'legacy'; userId: null; email: null }
-  | { via: 'supabase'; userId: string; email: string | null }
+export type AdminSession = { userId: string; email: string | null }
 
 /**
  * The authenticated admin behind this request, or null.
@@ -48,80 +47,36 @@ export async function readAdminSession(
   request: NextRequest,
   response?: NextResponse
 ): Promise<AdminSession | null> {
-  // 1. A REAL per-user session wins over the shared password. See PRECEDENCE below.
+  // The cookie sniff survives the removal of the legacy path, for a different reason than it was
+  // added. It used to exist so a legacy-only admin never paid for a getUser() round trip that was
+  // always going to miss; now it spares that round trip on requests with NO session at all —
+  // logged-out visitors, crawlers, and anything probing the admin URLs. No auth cookie means no
+  // session, and that can be answered locally.
   //
-  // Skipped entirely when no Supabase auth cookie is present, which is what preserves 5a's
-  // "legacy costs nothing" property: a legacy-only admin never pays for a getUser() round trip
-  // that was always going to miss.
-  //
-  // The name match is in lib/supabase-cookie.ts and pinned by lib/supabase-cookie.test.ts,
-  // because it depends on a naming convention @supabase/ssr owns rather than one we do — and if
-  // it silently stopped matching, every real session would fall through to the legacy branch and
-  // this bug would reopen with nothing in this repository having changed.
-  const hasSupabaseCookie = request.cookies.getAll().some((c) => isSupabaseAuthCookie(c.name))
+  // The name match is in lib/supabase-cookie.ts and pinned by lib/supabase-cookie.test.ts, because
+  // it depends on a naming convention @supabase/ssr owns rather than one we do. Its failure mode
+  // is now a clean one: if it stopped matching, real sessions would be refused and the admin would
+  // be locked out loudly, rather than silently falling through to a weaker path.
+  if (!request.cookies.getAll().some((c) => isSupabaseAuthCookie(c.name))) return null
 
-  if (hasSupabaseCookie) {
-    const supabaseSession = await readSupabaseSession(request, response)
-    if (supabaseSession) return supabaseSession
-    // Fall through on an expired or invalid token rather than refusing: dual-accept's whole job
-    // is that no deploy and no expiry can strand someone who still holds a valid legacy cookie.
-  }
-
-  // 2. Legacy signed cookie — local, no network. See lib/admin-session.ts.
-  const legacy = request.cookies.get(ADMIN_SESSION_COOKIE)
-  if (await verifyAdminSession(legacy?.value)) {
-    return { via: 'legacy', userId: null, email: null }
-  }
-
-  return null
-}
-
-// PRECEDENCE — WHY SUPABASE IS CHECKED FIRST, and why it was the other way round until 5b-2.
-//
-// In 5a this order was a pure performance choice and it was the right one: both branches meant
-// exactly the same thing ("a logged-in admin"), so checking the local HMAC first and skipping a
-// network call cost nothing. Whichever answered first, the caller got identical access.
-//
-// 5b-2 broke that assumption without changing this file. Once requireRole() started asking WHO is
-// calling, the two branches stopped being equivalent — `legacy` resolves to Owner, because a
-// shared-password cookie carries no identity to look up. Legacy-first therefore meant a stale
-// admin_session cookie SHADOWED a real login: a Staff user signing in with their own email in a
-// browser that had ever used the shared password was silently Owner for every server-side check —
-// /api/me and the nav, middleware's page gate, and every requireRole route including /api/refund
-// and /api/reservation-cancel.
-//
-// It did not reach RLS, because PostgREST still used the user's own JWT. That asymmetry is what
-// made it hard to see: Permanently Delete stayed correctly blocked at the database while Cancel
-// and Issue Refund went through, so the failure did not look like an auth problem at all.
-//
-// Reversing it makes the rule simple and correct: IF YOU HAVE AN IDENTITY, YOUR IDENTITY DECIDES.
-// The shared password is now only what it should have been all along — a fallback for people who
-// have not been given an account yet, and the break-glass path. 5c deletes the branch entirely.
-async function readSupabaseSession(
-  request: NextRequest,
-  response?: NextResponse
-): Promise<AdminSession | null> {
   //
   // getUser() over getSession(): getSession() decodes whatever JWT is in the cookie WITHOUT
-  // verifying it, so a hand-written cookie would satisfy it — the same class of bug 5a-0 just
+  // verifying it, so a hand-written cookie would satisfy it — the same class of bug PR 5a-0
   // closed, reintroduced in a new coat. getUser() validates against the auth server, which also
   // means a signed-out or deleted user stops working immediately rather than when their token
-  // expires. That matters for 5c's deactivate-a-staff-member flow.
+  // expires. That is what makes 5c-1's deactivate flow take effect on the very next request.
   //
-  // COST, ACKNOWLEDGED: that is a network round trip, and as of 5b-2 it is paid by everyone
-  // holding a real account rather than by almost nobody — reversing the precedence moved this
-  // ahead of the local HMAC check. The caller-side guard is the cookie sniff in readAdminSession:
-  // an admin with no Supabase cookie never gets here, so the legacy path stays free. If the cost
-  // on real sessions becomes a problem, the escape hatch is auth.getClaims() — this project signs
-  // JWTs with an asymmetric ES256 key (a JWKS is published), so claims can be verified locally
-  // with no round trip. The tradeoff is that local verification cannot see a revoked session
-  // until the token expires, which is precisely what makes it the wrong default for a security
-  // boundary.
+  // COST, ACKNOWLEDGED: that is a network round trip on every authenticated admin request. If it
+  // becomes a problem the escape hatch is auth.getClaims() — this project signs JWTs with an
+  // asymmetric ES256 key (a JWKS is published), so claims can be verified locally with no round
+  // trip. The tradeoff is that local verification cannot see a revoked session until the token
+  // expires, which is precisely what makes it the wrong default for a security boundary, and more
+  // so now that deactivating an account is a button in the admin.
   try {
     const supabase = createRequestSupabase(request, response)
     const { data, error } = await supabase.auth.getUser()
     if (error || !data.user) return null
-    return { via: 'supabase', userId: data.user.id, email: data.user.email ?? null }
+    return { userId: data.user.id, email: data.user.email ?? null }
   } catch {
     // Never let an auth-server hiccup read as "authenticated".
     return null
