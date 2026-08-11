@@ -4,6 +4,10 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+// Only for signOut() — this layout's DATA reads still go through the anon client above. Moving
+// them onto the session-aware client is 5b, where the authenticated-role RLS policies land in the
+// same stage; switching them here would break every admin page the moment anon is revoked.
+import { createBrowserSupabase } from '@/lib/supabase-browser'
 import Image from 'next/image'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
 
@@ -84,6 +88,21 @@ const navGroups: NavGroup[] = [
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+
+  // /admin/login is inside this layout's segment, so before PR 5a it rendered wrapped in the whole
+  // admin sidebar — which meant two things nobody intended. The chrome was drawn around a login
+  // card that is already a full-screen centered design, and, more importantly, THIS LAYOUT'S
+  // ANON SETTINGS READ RAN ON THE LOGIN PAGE. Moving the login page's own read server-side would
+  // therefore not have been enough: the layout's read would still have been there for PR 6's
+  // revoke to break, on the one page you cannot afford to break.
+  //
+  // It also served the entire navigation — every group and item name — to anyone who loaded the
+  // login screen without a session.
+  //
+  // Bailing out below the hooks (never above: the Rules of Hooks apply to every render) gives the
+  // login page a bare layout, no fetch, and nothing to leak.
+  const isLoginPage = pathname.startsWith('/admin/login')
+
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settings, setSettings] = useState<any>(null)
@@ -129,6 +148,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   useEffect(() => {
+    // No session exists on the login page, so this anon read must not run there. See isLoginPage.
+    if (isLoginPage) return
     supabase
       .from('settings')
       .select('park_name, logo_url, logo_shape, plan, pos_enabled')
@@ -142,14 +163,24 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         }
         setSettingsLoaded(true) // resolve even on null/failed fetch so the nav never sticks on skeleton
       })
-  }, [])
+  }, [isLoginPage])
 
   useEffect(() => {
     setOpenGroup(getActiveGroup())
   }, [pathname])
 
+  // Below every hook, so the hook order is identical on both branches.
+  if (isLoginPage) return <>{children}</>
+
+  // PR 5a: there are two kinds of session now, so logging out has to end both. Clearing only the
+  // legacy cookie would leave a Supabase user still signed in — they would bounce straight back
+  // into the admin on the next navigation and reasonably conclude Log Out is broken. Whichever
+  // session the user actually holds, the other call is a harmless no-op.
   async function handleLogout() {
-    await fetch('/api/admin-auth', { method: 'DELETE' })
+    await Promise.allSettled([
+      fetch('/api/admin-auth', { method: 'DELETE' }),
+      createBrowserSupabase().auth.signOut(),
+    ])
     window.location.href = '/admin/login'
   }
 

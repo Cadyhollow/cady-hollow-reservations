@@ -1,21 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ADMIN_SESSION_COOKIE, verifyAdminSession } from '@/lib/admin-session'
+import { readAdminSession } from '@/lib/admin-auth'
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
-  const session = request.cookies.get(ADMIN_SESSION_COOKIE)
 
   if (
     pathname.startsWith('/admin') &&
     !pathname.startsWith('/admin/login')
   ) {
-    // Was `session.value !== 'authenticated'` — a published constant anyone could send. See
-    // lib/admin-session.ts. Async because verification uses Web Crypto, the one HMAC
-    // implementation available in both runtimes middleware may run on.
-    if (!(await verifyAdminSession(session?.value))) {
-      const loginUrl = new URL('/admin/login', request.url)
-      return NextResponse.redirect(loginUrl)
+    // The response is created BEFORE the check so a Supabase session that needs refreshing has
+    // somewhere to write its new cookies. Handing it to readAdminSession is what keeps a logged-in
+    // user logged in past their access token's hour.
+    const response = NextResponse.next({ request })
+
+    // Dual-accept: a 5a-0 signed legacy cookie OR a real Supabase Auth session. Either is enough;
+    // neither is enough on its own to grant more than the other. See lib/admin-auth.ts.
+    const session = await readAdminSession(request, response)
+    if (!session) {
+      return NextResponse.redirect(new URL('/admin/login', request.url))
     }
+
+    return response
   }
 
   return NextResponse.next()
