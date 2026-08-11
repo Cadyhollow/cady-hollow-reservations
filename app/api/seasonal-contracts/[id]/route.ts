@@ -13,7 +13,7 @@ const EDITABLE = [
 // PATCH /api/seasonal-contracts/[id]
 // Staff edits a draft. A sent or signed contract is frozen — reject the edit.
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

@@ -6,7 +6,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // GET /api/seasonals/guest/[guestId]?year=YYYY — summit-gated. Everything the
 // camper page needs (service-role: reads the RLS-zero-policy tables).
 export async function GET(request: NextRequest, { params }: { params: Promise<{ guestId: string }> }) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })

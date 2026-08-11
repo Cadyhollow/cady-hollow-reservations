@@ -10,7 +10,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // compensated: once the packet is committed it's real, so a failed email returns
 // { ok:true, emailed:false } and leaves everything intact for a resend.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

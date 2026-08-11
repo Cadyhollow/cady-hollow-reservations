@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/guest-notes — summit-gated. Append a note. No edit, no delete route.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })

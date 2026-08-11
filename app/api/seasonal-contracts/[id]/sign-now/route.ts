@@ -9,7 +9,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // Does NOT email, and does NOT require the guest to have an email (a walk-up may
 // have none) — no requireEmail passed.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

@@ -18,7 +18,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // preview:true returns { would_create, would_skip } and writes NOTHING — used by
 // the confirm dialog to show the count before the staff commits.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

@@ -7,7 +7,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // Creates a draft, prefilled from the guest. Idempotent on the
 // (guest_id, season_year) unique constraint — returns the existing row, no error.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

@@ -12,7 +12,7 @@ import { requireAdmin } from '@/lib/require-admin'
 //         camper_type, camper_length, camper_amperage,
 //         camper_make, camper_model, camper_year }
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {
