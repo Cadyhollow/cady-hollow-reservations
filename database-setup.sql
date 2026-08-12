@@ -710,6 +710,39 @@ CREATE TABLE IF NOT EXISTS site_categories (
 -- `active` rather than deleting a user: folio and booking history should keep pointing at a real
 -- person. Deactivating is what the Owner's account screen does, and app.user_role() returns NULL
 -- for an inactive user, so the next request they make has no role at all.
+-- square_connections — the park's Square OAuth tokens.
+--
+-- A CREDENTIAL TABLE. It holds a live access token and refresh token for the park's own Square
+-- account: whoever can read a row here can take payments as that park. Treat it the way the
+-- platform registry is treated, not the way `settings` is.
+--
+-- Written by exactly one thing: the shared OAuth callback at admin.myresonation.com, over the
+-- service-role key, at the end of a signed handshake. Read by the app's server-side payment code,
+-- also service-role. NOTHING in a browser touches it — which is why the RLS section below gives it
+-- RLS with NO POLICY AT ALL and the grants section never mentions it. Adding a policy here is not
+-- a small change; it is a decision to expose payment credentials to a browser session.
+--
+-- WHY IT WAS MISSING UNTIL PR 7-4a: the callback and the app's status route both referenced this
+-- table, and no schema anywhere created it — not this file, not a migration, not by hand on any
+-- project. The Square OAuth feature has therefore never completed on any tenant: the handshake
+-- died at the final write with `save_failed`. The table is the drawer the keys go in.
+--
+-- campground_id is the tenant's slug (or id) as issued in the OAuth state, and is UNIQUE because
+-- the callback upserts on it — one Square connection per park, reconnecting replaces it.
+CREATE TABLE IF NOT EXISTS square_connections (
+  id                uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+  campground_id     text NOT NULL,
+  merchant_id       text,
+  access_token      text,
+  refresh_token     text,
+  token_expires_at  timestamptz,
+  location_id       text,
+  connected_at      timestamptz DEFAULT now(),
+  updated_at        timestamptz DEFAULT now(),
+  created_at        timestamptz DEFAULT now(),
+  CONSTRAINT square_connections_campground_id_key UNIQUE (campground_id)
+);
+
 CREATE TABLE IF NOT EXISTS profiles (
   id          uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email       text,
@@ -829,8 +862,8 @@ ALTER TABLE public.taxes ENABLE ROW LEVEL SECURITY;
 -- 2. Tables NOTHING reaches from a browser. RLS ON WITH NO POLICY AT ALL, which denies every
 --    API role outright while service_role (which bypasses RLS) still works. These are read and
 --    written only by server code holding the service key: outbound email history, the
---    charged-but-not-booked safety net, guest notes, seasonal contracts, e-signatures, and the
---    Square terminal handshake. Adding a policy here is not a small change — it is a decision to
+--    charged-but-not-booked safety net, guest notes, seasonal contracts, e-signatures, the
+--    Square terminal handshake, and the park's Square OAuth tokens. Adding a policy here is not a small change — it is a decision to
 --    expose the table to the browser.
 ALTER TABLE public.broadcast_emails ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.failed_bookings ENABLE ROW LEVEL SECURITY;
@@ -838,6 +871,7 @@ ALTER TABLE public.guest_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.seasonal_contracts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.terminal_checkouts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.square_connections ENABLE ROW LEVEL SECURITY;
 
 -- 3. profiles. RLS on, and exactly ONE policy: a signed-in user may read their OWN row.
 --    That is not role enforcement, it is what lets the app answer "who am I", and it is scoped
@@ -1557,6 +1591,15 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
 -- A policy denying DELETE is the right answer and the revoked grant is the second lock (PR 5b-1).
 REVOKE DELETE ON public.folio_payments FROM authenticated;
 REVOKE DELETE ON public.electric_readings FROM authenticated;
+
+-- square_connections gets NOTHING. It is deliberately absent from the blanket grant above only
+-- because that grant is schema-wide, so revoke it back off by name: this table holds live Square
+-- access and refresh tokens, and no browser session — not even an Owner's — has any reason to
+-- read them. service_role keeps its access and bypasses RLS, which is how the callback writes and
+-- how the payment code reads. (PR 7-4a)
+REVOKE ALL ON public.square_connections FROM anon;
+REVOKE ALL ON public.square_connections FROM PUBLIC;
+REVOKE ALL ON public.square_connections FROM authenticated;
 
 -- profiles: SELECT and nothing more (PR 5a). Writes go through service-role code only — the
 -- Owner's account screen and onboarding's Owner-seed. Without the REVOKE, `authenticated` would
