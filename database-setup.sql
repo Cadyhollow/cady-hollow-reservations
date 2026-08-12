@@ -8,6 +8,32 @@
 -- The prior version of this file was a pre-POS / pre-electric / pre-tax / pre-surcharge
 -- schema and could not provision a working current-generation client.
 --
+-- LOCKED DOWN 2026-08-12 (security PR 7-2). Until this stage the file reproduced live-Cady's
+-- posture as it stood on 2026-07-19 — RLS off on the POS/folio/guest tables, `{public}`
+-- allow-all policies everywhere else, and `GRANT ALL ... TO anon`. Security PRs 1 through 6
+-- then hardened Cady's own database through db/migrations/, and none of it came back here. So
+-- every client provisioned between those dates launched on the PRE-PR-1 posture: the anon
+-- publishable key could read and write every table, including `settings`. This stage folds
+-- those six migrations into the artifact new clients are actually built from.
+--
+-- The target is Cady's live catalogue, and these are the numbers to match:
+--   anon table grants 0 · `{public}` policies 0 · authenticated policies 87 permissive
+--   + 88 restrictive · RLS on every table · profiles present (RLS on, 1 policy)
+--   · app.user_role/app.at_least SECURITY DEFINER with search_path='' · storage 8 policies
+--   (2 public read, 6 role-gated write).
+--
+-- WHAT THIS FILE IS. A provisioning artifact — the schema a NEW client is built from. Nothing
+-- reads it at runtime, and editing it changes no existing database, Cady's included. Applying
+-- the same posture to a client already provisioned from an older copy is a migration, not an
+-- edit here (PR 7-4).
+--
+-- SOURCE MIGRATIONS folded in, for anyone reconciling this against Cady:
+--   db/migrations/2026-08-10-pr2-table-hardening.sql               (RLS + search_path + admin_password)
+--   db/migrations/2026-08-10-pr4a-fix-increment-discount-usage.sql (the p_code rebuild)
+--   db/migrations/2026-08-11-pr5a-profiles.sql                     (profiles + its grants)
+--   db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql (the helper + 174 policies)
+--   db/migrations/2026-08-12-pr6-revoke-anon.sql                   (the revoke + storage)
+--
 -- CURATION APPLIED (allowlist — structure wholesale from live; value-bearing content only
 -- if provably generic). Anything below is an INTENTIONAL difference from live-Cady:
 --   • EXCLUDED tables (Cady operational / platform, never per-client):
@@ -16,17 +42,22 @@
 --       resonation_clients (platform tenant-registry — holds other clients' service keys).
 --   • SEED ROWS: none. Every table provisions EMPTY except the single required settings row.
 --   • DROPPED dead columns: settings.base_adult_rate, base_child_rate, primary_color, updated_at.
---   • admin_password: NO default (vestigial column; login uses the ADMIN_PASSWORD env var).
---       Never embed a password value in a shared artifact.
+--   • admin_password: the COLUMN IS GONE (PR 2 dropped it live). It was vestigial — written by
+--       the Settings page, never read for auth — but `settings` is a table the anon key could
+--       read, so on a provisioned client it published a password-shaped string to anyone who
+--       asked. Verified on the lakeshore-camp-demo tenant, which returns one today. Not a
+--       default to neutralise: a column to not create.
 --   • NEUTRALIZED Cady-config column defaults (see the settings table):
 --       park_name (no default), extra_adult_fee 1000→0, extra_child_fee 500→0,
 --       accent_color #3DBDD4→#2D6A4F, season_start/end → NULL, plan ridgeline→trailhead,
 --       pos_enabled true→false, total_sites 84→0, total_cabins 3→0, waiver_enabled true→false,
 --       same_day_cutoff_message (Cady phone) → generic,
 --       electric_readings.rate_per_kwh 0.27→0, minimum_charge 1500→0 (Cady electric rates).
---   • RLS / grants / functions / triggers reproduce live's posture AS-IS (parity, not a
---     security redesign): RLS is OFF on the POS/folio/guest tables live, ON elsewhere.
---   • Storage buckets (logos, site-photos) are generic infra, provisioned explicitly below.
+--   • RLS / grants / policies reproduce live's posture as of PR 6: RLS ON for every table,
+--     the anon role holding no table privilege at all, and the admin reaching data as
+--     `authenticated` through the role-gated policy set. See ROW LEVEL SECURITY below.
+--   • Storage buckets (logos, site-photos) are generic infra, provisioned explicitly below —
+--     public read, role-gated write.
 --
 -- The settings bootstrap row (one row; sign-off 2026-07-19) carries only neutral placeholders.
 -- ============================================================
@@ -41,6 +72,12 @@
 -- The whole file runs as one SQL-editor session, so this SET applies throughout.
 SET check_function_bodies = false;
 
+-- EVERY function below pins `SET search_path = public, pg_temp` (PR 2). An unpinned search_path
+-- lets whoever calls the function decide which schema `folio_line_items` resolves to, so a
+-- caller able to create a table in a schema earlier on their path gets the function to write to
+-- theirs instead. None of these are SECURITY DEFINER, so that is a smaller hole than it is on
+-- app.at_least() further down — but it is free to close and the reason to close it is the same.
+-- Do not remove the SET when editing a body.
 CREATE OR REPLACE FUNCTION public.create_electric_bill(
   p_folio_id uuid, p_guest_id uuid, p_billing_month text, p_period_start date, p_period_end date,
   p_description text, p_amount_cents integer, p_previous_reading numeric, p_current_reading numeric,
@@ -48,6 +85,7 @@ CREATE OR REPLACE FUNCTION public.create_electric_bill(
   p_final_amount integer
 ) RETURNS jsonb
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
   AS $$
 DECLARE
   v_line_item_id uuid;
@@ -71,14 +109,31 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.increment_discount_usage(code text) RETURNS void
+-- The parameter is `p_code`, NOT `code`, and that is the whole point of this signature.
+--
+-- This function used to read `increment_discount_usage(code text)` with the body
+--
+--     update discounts set times_used = times_used + 1 where discounts.code = code;
+--
+-- In a SQL-language function an unqualified `code` on the right-hand side resolves to the
+-- COLUMN, not the parameter — so the predicate was `discounts.code = discounts.code`, true for
+-- every row, and one camper redeeming one code burned a use off EVERY discount the park had.
+-- On a park with a max_uses limit that silently exhausts codes nobody redeemed. Prefixing the
+-- parameter removes the ambiguity outright; qualifying the column alone would not.
+--
+-- `coalesce(times_used, 0)` because the column is nullable and NULL + 1 is NULL, which reads as
+-- "never used" forever. Fixed live in db/migrations/2026-08-10-pr4a-fix-increment-discount-usage.sql
+-- and folded in here so a provisioned client does not ship with it.
+CREATE OR REPLACE FUNCTION public.increment_discount_usage(p_code text) RETURNS void
   LANGUAGE sql
+  SET search_path = public, pg_temp
   AS $$
-  update discounts set times_used = times_used + 1 where discounts.code = code;
+  update discounts set times_used = coalesce(times_used, 0) + 1 where discounts.code = p_code;
 $$;
 
 CREATE OR REPLACE FUNCTION public.sync_guest_from_reservation() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
   AS $$
 DECLARE
   v_enabled boolean;
@@ -128,6 +183,7 @@ CREATE OR REPLACE FUNCTION public.void_electric_bill(
   p_reading_id uuid, p_voided_by text, p_reason text
 ) RETURNS jsonb
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
   AS $$
 DECLARE
   v_line_item_id uuid;
@@ -348,7 +404,11 @@ CREATE TABLE IF NOT EXISTS settings (
   same_day_cutoff_time time without time zone DEFAULT '11:00:00',
   accent_color text DEFAULT '#2D6A4F',
   show_site_map boolean DEFAULT false,
-  admin_password text,
+  -- NO admin_password COLUMN. It was dropped live in PR 2 and must not come back: it was
+  -- write-only (the Settings page set it, nothing read it for auth), and `settings` is the one
+  -- table every public page reads, so on a provisioned client it published a password-shaped
+  -- string over the anon key. Login is per-user Supabase Auth; there is no password in this
+  -- schema at all.
   park_location text,
   logo_shape text DEFAULT 'circle',
   confirmation_message text,
@@ -632,6 +692,33 @@ CREATE TABLE IF NOT EXISTS site_categories (
   category_id bigint NOT NULL
 );
 
+-- profiles — one row per admin user, keyed to auth.users (PR 5a).
+--
+-- This is the table the whole role model rests on: app.user_role() reads it, every policy below
+-- calls app.at_least(), and lib/require-role.ts in the app resolves a request's role from it.
+-- A client provisioned without it has no way to express who anyone is.
+--
+-- IT PROVISIONS EMPTY. Onboarding seeds the client's first Owner over the service-role admin API
+-- (PR 7-3); until then the client has no accounts and nobody can sign in, which is the correct
+-- state for a database with no owner yet rather than a problem to solve with a default row.
+--
+-- Owner > Manager > Staff as a CHECK rather than an enum: widening a CHECK is a plain ALTER
+-- TABLE, while adding a value to an enum needs ALTER TYPE, which does not run inside a
+-- transaction on older Postgres. The three tiers must stay in step with the ladder in
+-- app.at_least() below and with RANK in the app's lib/roles.ts.
+--
+-- `active` rather than deleting a user: folio and booking history should keep pointing at a real
+-- person. Deactivating is what the Owner's account screen does, and app.user_role() returns NULL
+-- for an inactive user, so the next request they make has no role at all.
+CREATE TABLE IF NOT EXISTS profiles (
+  id          uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email       text,
+  full_name   text,
+  role        text NOT NULL DEFAULT 'staff' CHECK (role IN ('owner', 'manager', 'staff')),
+  active      boolean NOT NULL DEFAULT true,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
 
 -- ============================================================
 -- INDEXES (non-PK / non-UNIQUE)
@@ -659,140 +746,930 @@ CREATE TRIGGER trg_sync_guest_from_reservation
 
 
 -- ============================================================
--- ROW LEVEL SECURITY  (parity with live: ON for these tables, OFF for the
--- POS/folio/guest tables — electric_readings, folio_line_items, folio_payments,
--- folios, guests, product_categories, products, terminal_checkouts.)
+-- APP SCHEMA + THE ROLE HELPER   (security PR 5b-1)
 -- ============================================================
+-- Every policy in the next section is one call to app.at_least(). This is where the ladder is
+-- actually decided, so it is the highest-value function in the schema and it is written to fail
+-- closed in every direction.
+--
+-- SECURITY DEFINER because public.profiles carries RLS with a self-row-only SELECT policy.
+-- Reading it from inside a policy on another table would otherwise re-enter RLS on every row;
+-- DEFINER evaluates it once, as the owner, which also means profiles' own policy never has to be
+-- widened to make roles work.
+--
+-- `SET search_path = ''` with fully-qualified names throughout, and this one is not optional: an
+-- unpinned search_path on a DEFINER function is a privilege-escalation primitive. A caller who
+-- can create a table in any schema earlier on the path substitutes their own `profiles` and the
+-- function cheerfully reads their role out of it. The empty path makes that impossible.
+--
+-- FAIL CLOSED IS THE DESIGN. A user with no profiles row, a deactivated user, and an
+-- unrecognised role all fall through to 0 >= n, which is false. An unrecognised `minimum`
+-- maps to 99, so a TYPO IN A POLICY DENIES rather than grants. Both comparisons are total.
+-- This is what keeps the model safe if public signup is ever switched back on for a project.
+CREATE SCHEMA IF NOT EXISTS app;
+REVOKE ALL ON SCHEMA app FROM PUBLIC, anon, authenticated;
+GRANT USAGE ON SCHEMA app TO authenticated;
+
+CREATE OR REPLACE FUNCTION app.user_role() RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+  SELECT p.role FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.active
+$fn$;
+
+CREATE OR REPLACE FUNCTION app.at_least(minimum text) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+  SELECT COALESCE(
+    (CASE app.user_role()
+       WHEN 'owner' THEN 3 WHEN 'manager' THEN 2 WHEN 'staff' THEN 1 ELSE 0 END)
+    >=
+    (CASE minimum
+       WHEN 'owner' THEN 3 WHEN 'manager' THEN 2 WHEN 'staff' THEN 1 ELSE 99 END),
+    false)
+$fn$;
+
+REVOKE ALL ON FUNCTION app.user_role(), app.at_least(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION app.user_role(), app.at_least(text) TO authenticated;
+
+
+-- ============================================================
+-- ROW LEVEL SECURITY  —  ON FOR EVERY TABLE
+-- ============================================================
+-- This file used to switch RLS on for 20 tables and leave it OFF for the POS/folio/guest ones,
+-- as live-Cady stood in July. Combined with the `{public}` allow-all policies and the anon
+-- GRANT further down, that left a provisioned client's entire database readable and writable
+-- with the publishable key that ships in the browser. PR 5b-1 and PR 6 closed it on Cady; this
+-- is the same close, at provisioning time.
+--
+-- Two shapes below, and the difference is deliberate.
+
+-- 1. Tables the ADMIN reaches from the browser. RLS on, and the authenticated policy set in the
+--    next section is what grants access — nothing else does.
 ALTER TABLE public.addons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.blocked_dates ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.broadcast_emails ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cancellation_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.discounts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.failed_bookings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.electric_readings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fees ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.guest_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.folio_line_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.folio_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.folios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.guests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.min_stay_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pricing_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.product_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reservation_addons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reservations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.seasonal_contracts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.site_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tax_applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.taxes ENABLE ROW LEVEL SECURITY;
 
--- Policies (reproduced verbatim from live; guarded for re-runnability).
--- guest_notes, seasonal_contracts, signatures: RLS ON with NO policy = service-role only.
+-- 2. Tables NOTHING reaches from a browser. RLS ON WITH NO POLICY AT ALL, which denies every
+--    API role outright while service_role (which bypasses RLS) still works. These are read and
+--    written only by server code holding the service key: outbound email history, the
+--    charged-but-not-booked safety net, guest notes, seasonal contracts, e-signatures, and the
+--    Square terminal handshake. Adding a policy here is not a small change — it is a decision to
+--    expose the table to the browser.
+ALTER TABLE public.broadcast_emails ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.failed_bookings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.guest_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.seasonal_contracts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.signatures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.terminal_checkouts ENABLE ROW LEVEL SECURITY;
+
+-- 3. profiles. RLS on, and exactly ONE policy: a signed-in user may read their OWN row.
+--    That is not role enforcement, it is what lets the app answer "who am I", and it is scoped
+--    to a single row so one staff member cannot enumerate their colleagues' email addresses.
+--    Listing all users is an Owner-only server-side operation over the service key.
+--
+--    NO INSERT/UPDATE/DELETE POLICY, ON PURPOSE. With RLS on and no policy those are denied to
+--    `authenticated` — which is what stops a signed-in user UPDATEing their own `role` column to
+--    'owner'. The grants below close the same door from the other side; see the note there.
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='failed_bookings' AND policyname='Allow all') THEN
-    CREATE POLICY "Allow all" ON public.failed_bookings USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='addons' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.addons TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='addons' AND policyname='Allow all operations on addons') THEN
-    CREATE POLICY "Allow all operations on addons" ON public.addons USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='blocked_dates' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.blocked_dates TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='blocked_dates' AND policyname='Allow all operations on blocked_dates') THEN
-    CREATE POLICY "Allow all operations on blocked_dates" ON public.blocked_dates USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='cancellation_rules' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.cancellation_rules TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='cancellation_rules' AND policyname='Allow all operations on cancellation_rules') THEN
-    CREATE POLICY "Allow all operations on cancellation_rules" ON public.cancellation_rules USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='discounts' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.discounts TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='discounts' AND policyname='Allow all operations on discounts') THEN
-    CREATE POLICY "Allow all operations on discounts" ON public.discounts USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='min_stay_rules' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.min_stay_rules TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='min_stay_rules' AND policyname='Allow all operations on min_stay_rules') THEN
-    CREATE POLICY "Allow all operations on min_stay_rules" ON public.min_stay_rules USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='pricing_rules' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.pricing_rules TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='pricing_rules' AND policyname='Allow all operations on pricing_rules') THEN
-    CREATE POLICY "Allow all operations on pricing_rules" ON public.pricing_rules USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='reservation_addons' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.reservation_addons TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='reservation_addons' AND policyname='Allow all operations on reservation_addons') THEN
-    CREATE POLICY "Allow all operations on reservation_addons" ON public.reservation_addons USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='reservations' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.reservations TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='reservations' AND policyname='Allow all operations on reservations') THEN
-    CREATE POLICY "Allow all operations on reservations" ON public.reservations USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='reservations' AND policyname='Allow public insert for booking') THEN
-    CREATE POLICY "Allow public insert for booking" ON public.reservations FOR INSERT TO anon WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='settings' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.settings TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='settings' AND policyname='Allow all operations on settings') THEN
-    CREATE POLICY "Allow all operations on settings" ON public.settings USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='settings' AND policyname='Allow public read for booking') THEN
-    CREATE POLICY "Allow public read for booking" ON public.settings FOR SELECT TO anon USING (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='sites' AND policyname='Allow all for authenticated users') THEN
-    CREATE POLICY "Allow all for authenticated users" ON public.sites TO authenticated USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='sites' AND policyname='Allow all operations on sites') THEN
-    CREATE POLICY "Allow all operations on sites" ON public.sites USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='sites' AND policyname='Allow public read for booking') THEN
-    CREATE POLICY "Allow public read for booking" ON public.sites FOR SELECT TO anon USING (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='fees' AND policyname='Allow all operations for authenticated admin') THEN
-    CREATE POLICY "Allow all operations for authenticated admin" ON public.fees USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='taxes' AND policyname='Allow all on taxes') THEN
-    CREATE POLICY "Allow all on taxes" ON public.taxes USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='tax_applications' AND policyname='Allow all on tax_applications') THEN
-    CREATE POLICY "Allow all on tax_applications" ON public.tax_applications USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='categories' AND policyname='allow all') THEN
-    CREATE POLICY "allow all" ON public.categories USING (true) WITH CHECK (true); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='site_categories' AND policyname='allow all') THEN
-    CREATE POLICY "allow all" ON public.site_categories USING (true) WITH CHECK (true); END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='broadcast_emails' AND policyname='Service role full access') THEN
-    CREATE POLICY "Service role full access" ON public.broadcast_emails USING (true); END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+     WHERE schemaname = 'public' AND tablename = 'profiles'
+       AND policyname = 'Users read their own profile'
+  ) THEN
+    CREATE POLICY "Users read their own profile" ON public.profiles
+      FOR SELECT TO authenticated USING (auth.uid() = id);
+  END IF;
 END $$;
 
 
 -- ============================================================
--- GRANTS  (reproduce live: schema usage + ALL on every table/sequence to the API roles.
--- These make the RLS-OFF tables reachable by the anon key, exactly as on live.)
+-- THE AUTHENTICATED POLICY SET  (security PR 5b-1)
+-- 87 permissive + 88 restrictive — 86 + 88 below, plus profiles' SELECT above.
 -- ============================================================
+--
+-- ⚠ THE PERMISSIVE AND RESTRICTIVE HALVES ARE NOT DUPLICATES OF EACH OTHER. DO NOT
+--   "DEDUPLICATE" THEM. ⚠
+--
+-- They look like the same predicates written twice, and every instinct says to delete one. Here
+-- is what each half does, because deleting the wrong one is silent:
+--
+--   PERMISSIVE policies are OR'd together. They are what GRANTS access — with the `{public}`
+--   allow-all policies gone, these are the only reason a logged-in admin can read anything at
+--   all. Drop these and the admin goes blind: every folio page, the guest directory, the POS
+--   and electric billing stop working at once, loudly.
+--
+--   RESTRICTIVE policies are AND'd. They are what ENFORCES the role. Drop these and NOTHING
+--   BREAKS — every page still works, every admin still sees their screens — and the ladder
+--   quietly stops biting wherever a permissive policy is more generous than intended. That is
+--   the failure this warning exists for: the dangerous half to delete is the half whose deletion
+--   has no symptoms.
+--
+--   The predicates mirror each other so that the failure mode of losing EITHER half is a
+--   redundant policy rather than an open one. That is a safety property of the pair, not
+--   evidence that one is spare.
+--
+-- PER COMMAND rather than one FOR ALL policy, deliberately: FOR ALL is checked by USING for
+-- DELETE and by WITH CHECK for INSERT, so a single policy cannot express a different minimum
+-- role per command — which is exactly what the money carve-outs need.
+--
+-- THE LADDER:
+--   config & pricing (14 tables) : SELECT staff+, write owner-only
+--   operational      (8 tables)  : staff+, with four carve-outs —
+--        folio_payments UPDATE (the void)            -> manager+
+--        reservations / folios DELETE                -> manager+
+--        electric_readings INSERT/UPDATE             -> manager+
+--        folio_payments / electric_readings DELETE   -> nobody (no policy AND no grant)
+--
+-- Changing a minimum here means changing it in BOTH halves and in the app's route→role map
+-- (lib/admin-pages.ts and each route's requireRole call). Lifted verbatim from
+-- db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql so the artifact and the
+-- database it reproduces cannot disagree.
+
+-- ------------------------------------------------------------
+-- PERMISSIVE — what each role MAY do (86)
+-- ------------------------------------------------------------
+
+-- addons: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select addons" ON public.addons;
+CREATE POLICY "authenticated select addons" ON public.addons
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert addons" ON public.addons;
+CREATE POLICY "authenticated insert addons" ON public.addons
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update addons" ON public.addons;
+CREATE POLICY "authenticated update addons" ON public.addons
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete addons" ON public.addons;
+CREATE POLICY "authenticated delete addons" ON public.addons
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- blocked_dates: select=staff insert=staff update=staff delete=staff
+DROP POLICY IF EXISTS "authenticated select blocked_dates" ON public.blocked_dates;
+CREATE POLICY "authenticated select blocked_dates" ON public.blocked_dates
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert blocked_dates" ON public.blocked_dates;
+CREATE POLICY "authenticated insert blocked_dates" ON public.blocked_dates
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update blocked_dates" ON public.blocked_dates;
+CREATE POLICY "authenticated update blocked_dates" ON public.blocked_dates
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete blocked_dates" ON public.blocked_dates;
+CREATE POLICY "authenticated delete blocked_dates" ON public.blocked_dates
+  FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- cancellation_rules: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "authenticated select cancellation_rules" ON public.cancellation_rules
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "authenticated insert cancellation_rules" ON public.cancellation_rules
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "authenticated update cancellation_rules" ON public.cancellation_rules
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "authenticated delete cancellation_rules" ON public.cancellation_rules
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- categories: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select categories" ON public.categories;
+CREATE POLICY "authenticated select categories" ON public.categories
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert categories" ON public.categories;
+CREATE POLICY "authenticated insert categories" ON public.categories
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update categories" ON public.categories;
+CREATE POLICY "authenticated update categories" ON public.categories
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete categories" ON public.categories;
+CREATE POLICY "authenticated delete categories" ON public.categories
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- discounts: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select discounts" ON public.discounts;
+CREATE POLICY "authenticated select discounts" ON public.discounts
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert discounts" ON public.discounts;
+CREATE POLICY "authenticated insert discounts" ON public.discounts
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update discounts" ON public.discounts;
+CREATE POLICY "authenticated update discounts" ON public.discounts
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete discounts" ON public.discounts;
+CREATE POLICY "authenticated delete discounts" ON public.discounts
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- electric_readings: select=staff insert=manager update=manager delete=nobody
+DROP POLICY IF EXISTS "authenticated select electric_readings" ON public.electric_readings;
+CREATE POLICY "authenticated select electric_readings" ON public.electric_readings
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert electric_readings" ON public.electric_readings;
+CREATE POLICY "authenticated insert electric_readings" ON public.electric_readings
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "authenticated update electric_readings" ON public.electric_readings;
+CREATE POLICY "authenticated update electric_readings" ON public.electric_readings
+  FOR UPDATE TO authenticated USING ((select app.at_least('manager'))) WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "authenticated delete electric_readings" ON public.electric_readings;
+-- no DELETE policy: denied to authenticated by absence. Service-role only.
+
+-- fees: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select fees" ON public.fees;
+CREATE POLICY "authenticated select fees" ON public.fees
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert fees" ON public.fees;
+CREATE POLICY "authenticated insert fees" ON public.fees
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update fees" ON public.fees;
+CREATE POLICY "authenticated update fees" ON public.fees
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete fees" ON public.fees;
+CREATE POLICY "authenticated delete fees" ON public.fees
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- folio_line_items: select=staff insert=staff update=staff delete=staff
+DROP POLICY IF EXISTS "authenticated select folio_line_items" ON public.folio_line_items;
+CREATE POLICY "authenticated select folio_line_items" ON public.folio_line_items
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert folio_line_items" ON public.folio_line_items;
+CREATE POLICY "authenticated insert folio_line_items" ON public.folio_line_items
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update folio_line_items" ON public.folio_line_items;
+CREATE POLICY "authenticated update folio_line_items" ON public.folio_line_items
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete folio_line_items" ON public.folio_line_items;
+CREATE POLICY "authenticated delete folio_line_items" ON public.folio_line_items
+  FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- folio_payments: select=staff insert=staff update=manager delete=nobody
+DROP POLICY IF EXISTS "authenticated select folio_payments" ON public.folio_payments;
+CREATE POLICY "authenticated select folio_payments" ON public.folio_payments
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert folio_payments" ON public.folio_payments;
+CREATE POLICY "authenticated insert folio_payments" ON public.folio_payments
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update folio_payments" ON public.folio_payments;
+CREATE POLICY "authenticated update folio_payments" ON public.folio_payments
+  FOR UPDATE TO authenticated USING ((select app.at_least('manager'))) WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "authenticated delete folio_payments" ON public.folio_payments;
+-- no DELETE policy: denied to authenticated by absence. Service-role only.
+
+-- folios: select=staff insert=staff update=staff delete=manager
+DROP POLICY IF EXISTS "authenticated select folios" ON public.folios;
+CREATE POLICY "authenticated select folios" ON public.folios
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert folios" ON public.folios;
+CREATE POLICY "authenticated insert folios" ON public.folios
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update folios" ON public.folios;
+CREATE POLICY "authenticated update folios" ON public.folios
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete folios" ON public.folios;
+CREATE POLICY "authenticated delete folios" ON public.folios
+  FOR DELETE TO authenticated USING ((select app.at_least('manager')));
+
+-- guests: select=staff insert=staff update=staff delete=staff
+DROP POLICY IF EXISTS "authenticated select guests" ON public.guests;
+CREATE POLICY "authenticated select guests" ON public.guests
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert guests" ON public.guests;
+CREATE POLICY "authenticated insert guests" ON public.guests
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update guests" ON public.guests;
+CREATE POLICY "authenticated update guests" ON public.guests
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete guests" ON public.guests;
+CREATE POLICY "authenticated delete guests" ON public.guests
+  FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- min_stay_rules: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "authenticated select min_stay_rules" ON public.min_stay_rules
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "authenticated insert min_stay_rules" ON public.min_stay_rules
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "authenticated update min_stay_rules" ON public.min_stay_rules
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "authenticated delete min_stay_rules" ON public.min_stay_rules
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- pricing_rules: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select pricing_rules" ON public.pricing_rules;
+CREATE POLICY "authenticated select pricing_rules" ON public.pricing_rules
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert pricing_rules" ON public.pricing_rules;
+CREATE POLICY "authenticated insert pricing_rules" ON public.pricing_rules
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update pricing_rules" ON public.pricing_rules;
+CREATE POLICY "authenticated update pricing_rules" ON public.pricing_rules
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete pricing_rules" ON public.pricing_rules;
+CREATE POLICY "authenticated delete pricing_rules" ON public.pricing_rules
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- product_categories: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select product_categories" ON public.product_categories;
+CREATE POLICY "authenticated select product_categories" ON public.product_categories
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert product_categories" ON public.product_categories;
+CREATE POLICY "authenticated insert product_categories" ON public.product_categories
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update product_categories" ON public.product_categories;
+CREATE POLICY "authenticated update product_categories" ON public.product_categories
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete product_categories" ON public.product_categories;
+CREATE POLICY "authenticated delete product_categories" ON public.product_categories
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- products: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select products" ON public.products;
+CREATE POLICY "authenticated select products" ON public.products
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert products" ON public.products;
+CREATE POLICY "authenticated insert products" ON public.products
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update products" ON public.products;
+CREATE POLICY "authenticated update products" ON public.products
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete products" ON public.products;
+CREATE POLICY "authenticated delete products" ON public.products
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- reservation_addons: select=staff insert=staff update=staff delete=staff
+DROP POLICY IF EXISTS "authenticated select reservation_addons" ON public.reservation_addons;
+CREATE POLICY "authenticated select reservation_addons" ON public.reservation_addons
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert reservation_addons" ON public.reservation_addons;
+CREATE POLICY "authenticated insert reservation_addons" ON public.reservation_addons
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update reservation_addons" ON public.reservation_addons;
+CREATE POLICY "authenticated update reservation_addons" ON public.reservation_addons
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete reservation_addons" ON public.reservation_addons;
+CREATE POLICY "authenticated delete reservation_addons" ON public.reservation_addons
+  FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- reservations: select=staff insert=staff update=staff delete=manager
+DROP POLICY IF EXISTS "authenticated select reservations" ON public.reservations;
+CREATE POLICY "authenticated select reservations" ON public.reservations
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert reservations" ON public.reservations;
+CREATE POLICY "authenticated insert reservations" ON public.reservations
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated update reservations" ON public.reservations;
+CREATE POLICY "authenticated update reservations" ON public.reservations
+  FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated delete reservations" ON public.reservations;
+CREATE POLICY "authenticated delete reservations" ON public.reservations
+  FOR DELETE TO authenticated USING ((select app.at_least('manager')));
+
+-- settings: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select settings" ON public.settings;
+CREATE POLICY "authenticated select settings" ON public.settings
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert settings" ON public.settings;
+CREATE POLICY "authenticated insert settings" ON public.settings
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update settings" ON public.settings;
+CREATE POLICY "authenticated update settings" ON public.settings
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete settings" ON public.settings;
+CREATE POLICY "authenticated delete settings" ON public.settings
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- site_categories: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select site_categories" ON public.site_categories;
+CREATE POLICY "authenticated select site_categories" ON public.site_categories
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert site_categories" ON public.site_categories;
+CREATE POLICY "authenticated insert site_categories" ON public.site_categories
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update site_categories" ON public.site_categories;
+CREATE POLICY "authenticated update site_categories" ON public.site_categories
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete site_categories" ON public.site_categories;
+CREATE POLICY "authenticated delete site_categories" ON public.site_categories
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- sites: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select sites" ON public.sites;
+CREATE POLICY "authenticated select sites" ON public.sites
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert sites" ON public.sites;
+CREATE POLICY "authenticated insert sites" ON public.sites
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update sites" ON public.sites;
+CREATE POLICY "authenticated update sites" ON public.sites
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete sites" ON public.sites;
+CREATE POLICY "authenticated delete sites" ON public.sites
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- tax_applications: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select tax_applications" ON public.tax_applications;
+CREATE POLICY "authenticated select tax_applications" ON public.tax_applications
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert tax_applications" ON public.tax_applications;
+CREATE POLICY "authenticated insert tax_applications" ON public.tax_applications
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update tax_applications" ON public.tax_applications;
+CREATE POLICY "authenticated update tax_applications" ON public.tax_applications
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete tax_applications" ON public.tax_applications;
+CREATE POLICY "authenticated delete tax_applications" ON public.tax_applications
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- taxes: select=staff insert=owner update=owner delete=owner
+DROP POLICY IF EXISTS "authenticated select taxes" ON public.taxes;
+CREATE POLICY "authenticated select taxes" ON public.taxes
+  FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "authenticated insert taxes" ON public.taxes;
+CREATE POLICY "authenticated insert taxes" ON public.taxes
+  FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated update taxes" ON public.taxes;
+CREATE POLICY "authenticated update taxes" ON public.taxes
+  FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "authenticated delete taxes" ON public.taxes;
+CREATE POLICY "authenticated delete taxes" ON public.taxes
+  FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+
+-- ------------------------------------------------------------
+-- RESTRICTIVE — what makes the set above BITE (88). See the warning above.
+-- ------------------------------------------------------------
+
+-- addons
+DROP POLICY IF EXISTS "role gate select addons" ON public.addons;
+CREATE POLICY "role gate select addons" ON public.addons
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert addons" ON public.addons;
+CREATE POLICY "role gate insert addons" ON public.addons
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update addons" ON public.addons;
+CREATE POLICY "role gate update addons" ON public.addons
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete addons" ON public.addons;
+CREATE POLICY "role gate delete addons" ON public.addons
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- blocked_dates
+DROP POLICY IF EXISTS "role gate select blocked_dates" ON public.blocked_dates;
+CREATE POLICY "role gate select blocked_dates" ON public.blocked_dates
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert blocked_dates" ON public.blocked_dates;
+CREATE POLICY "role gate insert blocked_dates" ON public.blocked_dates
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update blocked_dates" ON public.blocked_dates;
+CREATE POLICY "role gate update blocked_dates" ON public.blocked_dates
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete blocked_dates" ON public.blocked_dates;
+CREATE POLICY "role gate delete blocked_dates" ON public.blocked_dates
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- cancellation_rules
+DROP POLICY IF EXISTS "role gate select cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "role gate select cancellation_rules" ON public.cancellation_rules
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "role gate insert cancellation_rules" ON public.cancellation_rules
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "role gate update cancellation_rules" ON public.cancellation_rules
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete cancellation_rules" ON public.cancellation_rules;
+CREATE POLICY "role gate delete cancellation_rules" ON public.cancellation_rules
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- categories
+DROP POLICY IF EXISTS "role gate select categories" ON public.categories;
+CREATE POLICY "role gate select categories" ON public.categories
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert categories" ON public.categories;
+CREATE POLICY "role gate insert categories" ON public.categories
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update categories" ON public.categories;
+CREATE POLICY "role gate update categories" ON public.categories
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete categories" ON public.categories;
+CREATE POLICY "role gate delete categories" ON public.categories
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- discounts
+DROP POLICY IF EXISTS "role gate select discounts" ON public.discounts;
+CREATE POLICY "role gate select discounts" ON public.discounts
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert discounts" ON public.discounts;
+CREATE POLICY "role gate insert discounts" ON public.discounts
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update discounts" ON public.discounts;
+CREATE POLICY "role gate update discounts" ON public.discounts
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete discounts" ON public.discounts;
+CREATE POLICY "role gate delete discounts" ON public.discounts
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- electric_readings
+DROP POLICY IF EXISTS "role gate select electric_readings" ON public.electric_readings;
+CREATE POLICY "role gate select electric_readings" ON public.electric_readings
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert electric_readings" ON public.electric_readings;
+CREATE POLICY "role gate insert electric_readings" ON public.electric_readings
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "role gate update electric_readings" ON public.electric_readings;
+CREATE POLICY "role gate update electric_readings" ON public.electric_readings
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('manager'))) WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "role gate delete electric_readings" ON public.electric_readings;
+CREATE POLICY "role gate delete electric_readings" ON public.electric_readings
+  AS RESTRICTIVE FOR DELETE TO authenticated USING (false);
+
+-- fees
+DROP POLICY IF EXISTS "role gate select fees" ON public.fees;
+CREATE POLICY "role gate select fees" ON public.fees
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert fees" ON public.fees;
+CREATE POLICY "role gate insert fees" ON public.fees
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update fees" ON public.fees;
+CREATE POLICY "role gate update fees" ON public.fees
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete fees" ON public.fees;
+CREATE POLICY "role gate delete fees" ON public.fees
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- folio_line_items
+DROP POLICY IF EXISTS "role gate select folio_line_items" ON public.folio_line_items;
+CREATE POLICY "role gate select folio_line_items" ON public.folio_line_items
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert folio_line_items" ON public.folio_line_items;
+CREATE POLICY "role gate insert folio_line_items" ON public.folio_line_items
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update folio_line_items" ON public.folio_line_items;
+CREATE POLICY "role gate update folio_line_items" ON public.folio_line_items
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete folio_line_items" ON public.folio_line_items;
+CREATE POLICY "role gate delete folio_line_items" ON public.folio_line_items
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- folio_payments
+DROP POLICY IF EXISTS "role gate select folio_payments" ON public.folio_payments;
+CREATE POLICY "role gate select folio_payments" ON public.folio_payments
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert folio_payments" ON public.folio_payments;
+CREATE POLICY "role gate insert folio_payments" ON public.folio_payments
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update folio_payments" ON public.folio_payments;
+CREATE POLICY "role gate update folio_payments" ON public.folio_payments
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('manager'))) WITH CHECK ((select app.at_least('manager')));
+DROP POLICY IF EXISTS "role gate delete folio_payments" ON public.folio_payments;
+CREATE POLICY "role gate delete folio_payments" ON public.folio_payments
+  AS RESTRICTIVE FOR DELETE TO authenticated USING (false);
+
+-- folios
+DROP POLICY IF EXISTS "role gate select folios" ON public.folios;
+CREATE POLICY "role gate select folios" ON public.folios
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert folios" ON public.folios;
+CREATE POLICY "role gate insert folios" ON public.folios
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update folios" ON public.folios;
+CREATE POLICY "role gate update folios" ON public.folios
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete folios" ON public.folios;
+CREATE POLICY "role gate delete folios" ON public.folios
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('manager')));
+
+-- guests
+DROP POLICY IF EXISTS "role gate select guests" ON public.guests;
+CREATE POLICY "role gate select guests" ON public.guests
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert guests" ON public.guests;
+CREATE POLICY "role gate insert guests" ON public.guests
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update guests" ON public.guests;
+CREATE POLICY "role gate update guests" ON public.guests
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete guests" ON public.guests;
+CREATE POLICY "role gate delete guests" ON public.guests
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- min_stay_rules
+DROP POLICY IF EXISTS "role gate select min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "role gate select min_stay_rules" ON public.min_stay_rules
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "role gate insert min_stay_rules" ON public.min_stay_rules
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "role gate update min_stay_rules" ON public.min_stay_rules
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete min_stay_rules" ON public.min_stay_rules;
+CREATE POLICY "role gate delete min_stay_rules" ON public.min_stay_rules
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- pricing_rules
+DROP POLICY IF EXISTS "role gate select pricing_rules" ON public.pricing_rules;
+CREATE POLICY "role gate select pricing_rules" ON public.pricing_rules
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert pricing_rules" ON public.pricing_rules;
+CREATE POLICY "role gate insert pricing_rules" ON public.pricing_rules
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update pricing_rules" ON public.pricing_rules;
+CREATE POLICY "role gate update pricing_rules" ON public.pricing_rules
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete pricing_rules" ON public.pricing_rules;
+CREATE POLICY "role gate delete pricing_rules" ON public.pricing_rules
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- product_categories
+DROP POLICY IF EXISTS "role gate select product_categories" ON public.product_categories;
+CREATE POLICY "role gate select product_categories" ON public.product_categories
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert product_categories" ON public.product_categories;
+CREATE POLICY "role gate insert product_categories" ON public.product_categories
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update product_categories" ON public.product_categories;
+CREATE POLICY "role gate update product_categories" ON public.product_categories
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete product_categories" ON public.product_categories;
+CREATE POLICY "role gate delete product_categories" ON public.product_categories
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- products
+DROP POLICY IF EXISTS "role gate select products" ON public.products;
+CREATE POLICY "role gate select products" ON public.products
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert products" ON public.products;
+CREATE POLICY "role gate insert products" ON public.products
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update products" ON public.products;
+CREATE POLICY "role gate update products" ON public.products
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete products" ON public.products;
+CREATE POLICY "role gate delete products" ON public.products
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- reservation_addons
+DROP POLICY IF EXISTS "role gate select reservation_addons" ON public.reservation_addons;
+CREATE POLICY "role gate select reservation_addons" ON public.reservation_addons
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert reservation_addons" ON public.reservation_addons;
+CREATE POLICY "role gate insert reservation_addons" ON public.reservation_addons
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update reservation_addons" ON public.reservation_addons;
+CREATE POLICY "role gate update reservation_addons" ON public.reservation_addons
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete reservation_addons" ON public.reservation_addons;
+CREATE POLICY "role gate delete reservation_addons" ON public.reservation_addons
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('staff')));
+
+-- reservations
+DROP POLICY IF EXISTS "role gate select reservations" ON public.reservations;
+CREATE POLICY "role gate select reservations" ON public.reservations
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert reservations" ON public.reservations;
+CREATE POLICY "role gate insert reservations" ON public.reservations
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate update reservations" ON public.reservations;
+CREATE POLICY "role gate update reservations" ON public.reservations
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('staff'))) WITH CHECK ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate delete reservations" ON public.reservations;
+CREATE POLICY "role gate delete reservations" ON public.reservations
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('manager')));
+
+-- settings
+DROP POLICY IF EXISTS "role gate select settings" ON public.settings;
+CREATE POLICY "role gate select settings" ON public.settings
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert settings" ON public.settings;
+CREATE POLICY "role gate insert settings" ON public.settings
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update settings" ON public.settings;
+CREATE POLICY "role gate update settings" ON public.settings
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete settings" ON public.settings;
+CREATE POLICY "role gate delete settings" ON public.settings
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- site_categories
+DROP POLICY IF EXISTS "role gate select site_categories" ON public.site_categories;
+CREATE POLICY "role gate select site_categories" ON public.site_categories
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert site_categories" ON public.site_categories;
+CREATE POLICY "role gate insert site_categories" ON public.site_categories
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update site_categories" ON public.site_categories;
+CREATE POLICY "role gate update site_categories" ON public.site_categories
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete site_categories" ON public.site_categories;
+CREATE POLICY "role gate delete site_categories" ON public.site_categories
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- sites
+DROP POLICY IF EXISTS "role gate select sites" ON public.sites;
+CREATE POLICY "role gate select sites" ON public.sites
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert sites" ON public.sites;
+CREATE POLICY "role gate insert sites" ON public.sites
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update sites" ON public.sites;
+CREATE POLICY "role gate update sites" ON public.sites
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete sites" ON public.sites;
+CREATE POLICY "role gate delete sites" ON public.sites
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- tax_applications
+DROP POLICY IF EXISTS "role gate select tax_applications" ON public.tax_applications;
+CREATE POLICY "role gate select tax_applications" ON public.tax_applications
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert tax_applications" ON public.tax_applications;
+CREATE POLICY "role gate insert tax_applications" ON public.tax_applications
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update tax_applications" ON public.tax_applications;
+CREATE POLICY "role gate update tax_applications" ON public.tax_applications
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete tax_applications" ON public.tax_applications;
+CREATE POLICY "role gate delete tax_applications" ON public.tax_applications
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+-- taxes
+DROP POLICY IF EXISTS "role gate select taxes" ON public.taxes;
+CREATE POLICY "role gate select taxes" ON public.taxes
+  AS RESTRICTIVE FOR SELECT TO authenticated USING ((select app.at_least('staff')));
+DROP POLICY IF EXISTS "role gate insert taxes" ON public.taxes;
+CREATE POLICY "role gate insert taxes" ON public.taxes
+  AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate update taxes" ON public.taxes;
+CREATE POLICY "role gate update taxes" ON public.taxes
+  AS RESTRICTIVE FOR UPDATE TO authenticated USING ((select app.at_least('owner'))) WITH CHECK ((select app.at_least('owner')));
+DROP POLICY IF EXISTS "role gate delete taxes" ON public.taxes;
+CREATE POLICY "role gate delete taxes" ON public.taxes
+  AS RESTRICTIVE FOR DELETE TO authenticated USING ((select app.at_least('owner')));
+
+
+-- ============================================================
+-- GRANTS
+-- ============================================================
+-- GRANTS AND POLICIES ARE INDEPENDENT GATES. A policy is only ever consulted if the role
+-- already holds the table privilege, so closing one and leaving the other open leaves a live
+-- re-entry point. PR 5a learned this the expensive way on `profiles`: the table had RLS and no
+-- write policy, and `authenticated` still held UPDATE from the project's default privileges —
+-- unreachable that day, waiting for the first permissive policy anyone ever pasted onto it.
+-- Both gates are closed here, for every role.
+
+-- USAGE ON SCHEMA public stays granted to anon, deliberately. Removing it makes PostgREST fail
+-- during schema introspection — 500s instead of clean permission-denied — and it is the TABLE
+-- privileges below that gate the data, not schema usage.
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- ALL to the two roles that legitimately hold data privileges. `anon` is NOT in this list and
+-- must not be added: since PR 6 nothing reaches the database as anon. The camper booking flow
+-- runs through server-side service-role code, the public pages read server-side, and the admin
+-- runs as `authenticated`. This line used to read `TO anon, authenticated, service_role`, and
+-- that single word is what made every provisioned client's database world-readable.
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+
+-- Carve-outs, applied AFTER the blanket grant above so the blanket cannot undo them.
+--
+-- The two never-delete tables: payment history and electric readings are voided, never removed.
+-- A policy denying DELETE is the right answer and the revoked grant is the second lock (PR 5b-1).
+REVOKE DELETE ON public.folio_payments FROM authenticated;
+REVOKE DELETE ON public.electric_readings FROM authenticated;
+
+-- profiles: SELECT and nothing more (PR 5a). Writes go through service-role code only — the
+-- Owner's account screen and onboarding's Owner-seed. Without the REVOKE, `authenticated` would
+-- hold UPDATE on the very column that decides what `authenticated` is allowed to do.
+-- REVOKE FROM authenticated BY NAME: `REVOKE ... FROM PUBLIC` does not remove a grant held by a
+-- named role, and the project's default privileges grant `authenticated` arwdDxtm by name.
+REVOKE ALL ON public.profiles FROM anon;
+REVOKE ALL ON public.profiles FROM PUBLIC;
+REVOKE ALL ON public.profiles FROM authenticated;
+GRANT SELECT ON public.profiles TO authenticated;
+
+-- anon holds nothing. This is not belt-and-braces for the omission above — it is REQUIRED.
+-- A fresh Supabase project ships default privileges that grant anon arwdDxtm on every table
+-- created in `public`, so every table above already carries an anon grant by the time this file
+-- reaches this line, whether or not anyone ever wrote GRANT ... TO anon. Schema-wide rather than
+-- a list of table names so nothing added later is missed.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
+
+-- ⚠ THIS BLOCK GOVERNS THE FUTURE, NOT THE PRESENT — DO NOT REMOVE IT. ⚠
+--
+-- Everything above closes today's catalogue. This closes tomorrow's. Supabase's stock default
+-- privileges re-grant anon full access to every NEWLY CREATED table in `public`, so without
+-- these four lines the next migration that adds a table silently reopens anon's access to it —
+-- and only to it, so the tables anyone thinks to check still look correct. The symptom is a hole
+-- in one table nobody looked at, months later.
+--
+-- Both forms are needed: the unqualified one applies to the role running this file, the
+-- FOR ROLE postgres one to the role that owns objects created through the Supabase dashboard
+-- and the Management API. Removing either leaves half the door open.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;
 
 
 -- ============================================================
 -- STORAGE BUCKETS + POLICIES  (generic infra — every client needs these)
--- Wrapped best-effort: the Supabase Management API (/database/query) used by the
--- onboarding tool can't reach the `storage` schema, so this section no-ops there
--- (onboarding provisions buckets via the Storage REST API and policies separately).
--- In the SQL editor, `storage` is reachable and this runs normally. The EXCEPTION
--- rolls back only this subtransaction, so the public-schema tables above still commit.
 -- ============================================================
+-- Wrapped best-effort: the Supabase Management API (/database/query) used by the onboarding tool
+-- can't reach the `storage` schema, so this section no-ops there (onboarding provisions buckets
+-- via the Storage REST API and the same policies separately — app/api/onboard/route.ts, which
+-- MUST be kept in step with the policies below). In the SQL editor, `storage` is reachable and
+-- this runs normally. The EXCEPTION rolls back only this subtransaction, so the public-schema
+-- work above still commits.
+--
+-- PUBLIC READ, ROLE-GATED WRITE (PR 6). Both buckets are marked public and the booking site
+-- displays these images, so SELECT stays open to everyone — that part is unchanged. What changed
+-- is the other three verbs. The previous policies were role `{public}` for INSERT, UPDATE and
+-- DELETE with names that claimed otherwise ("Allow admin upload to logos"), which meant any
+-- visitor with the publishable key could upload, overwrite and DELETE every logo and site photo
+-- on a provisioned client. The delete half of that is worse than the upload half.
+--
+-- THE TWO BUCKETS ARE GATED DIFFERENTLY, deliberately:
+--   logos       — written only by /admin/settings, an Owner page                    -> owner
+--   site-photos — written by /admin/sites (Owner) AND /admin/send-email, a MANAGER
+--                 page (broadcast-email images)                                     -> manager
+-- Gating site-photos at owner would break a Manager's broadcast-email image upload.
 DO $$ BEGIN
   INSERT INTO storage.buckets (id, name, public) VALUES ('logos', 'logos', true) ON CONFLICT (id) DO NOTHING;
   INSERT INTO storage.buckets (id, name, public) VALUES ('site-photos', 'site-photos', true) ON CONFLICT (id) DO NOTHING;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow public read on logos') THEN
-    CREATE POLICY "Allow public read on logos" ON storage.objects FOR SELECT USING (bucket_id = 'logos'); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow upload on logos') THEN
-    CREATE POLICY "Allow upload on logos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'logos'); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow public read on site-photos') THEN
-    CREATE POLICY "Allow public read on site-photos" ON storage.objects FOR SELECT USING (bucket_id = 'site-photos'); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='objects' AND policyname='Allow upload on site-photos') THEN
-    CREATE POLICY "Allow upload on site-photos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'site-photos'); END IF;
+  -- Drop the unrestricted set by every name it has been provisioned under, so re-running this
+  -- file on a client created from an older copy actually closes the hole rather than adding
+  -- eight new policies alongside the eight open ones.
+  DROP POLICY IF EXISTS "Allow public read on logos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow read on logos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow upload on logos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow update on logos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow delete on logos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow public read on site-photos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow read on site-photos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow upload on site-photos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow update on site-photos" ON storage.objects;
+  DROP POLICY IF EXISTS "Allow delete on site-photos" ON storage.objects;
+
+  -- Reads: unchanged behaviour, explicit about it.
+  DROP POLICY IF EXISTS "public read logos" ON storage.objects;
+  CREATE POLICY "public read logos" ON storage.objects
+    AS PERMISSIVE FOR SELECT TO public USING (bucket_id = 'logos');
+  DROP POLICY IF EXISTS "public read site-photos" ON storage.objects;
+  CREATE POLICY "public read site-photos" ON storage.objects
+    AS PERMISSIVE FOR SELECT TO public USING (bucket_id = 'site-photos');
+
+  -- Writes: authenticated only, role-gated. app.at_least() is SECURITY DEFINER and resolves the
+  -- caller's role from their JWT here exactly as it does in the public-schema policies.
+  DROP POLICY IF EXISTS "owner write logos" ON storage.objects;
+  CREATE POLICY "owner write logos" ON storage.objects
+    AS PERMISSIVE FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'logos' AND (SELECT app.at_least('owner')));
+  DROP POLICY IF EXISTS "owner update logos" ON storage.objects;
+  CREATE POLICY "owner update logos" ON storage.objects
+    AS PERMISSIVE FOR UPDATE TO authenticated
+    USING (bucket_id = 'logos' AND (SELECT app.at_least('owner')))
+    WITH CHECK (bucket_id = 'logos' AND (SELECT app.at_least('owner')));
+  DROP POLICY IF EXISTS "owner delete logos" ON storage.objects;
+  CREATE POLICY "owner delete logos" ON storage.objects
+    AS PERMISSIVE FOR DELETE TO authenticated
+    USING (bucket_id = 'logos' AND (SELECT app.at_least('owner')));
+
+  DROP POLICY IF EXISTS "manager write site-photos" ON storage.objects;
+  CREATE POLICY "manager write site-photos" ON storage.objects
+    AS PERMISSIVE FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'site-photos' AND (SELECT app.at_least('manager')));
+  DROP POLICY IF EXISTS "manager update site-photos" ON storage.objects;
+  CREATE POLICY "manager update site-photos" ON storage.objects
+    AS PERMISSIVE FOR UPDATE TO authenticated
+    USING (bucket_id = 'site-photos' AND (SELECT app.at_least('manager')))
+    WITH CHECK (bucket_id = 'site-photos' AND (SELECT app.at_least('manager')));
+  DROP POLICY IF EXISTS "manager delete site-photos" ON storage.objects;
+  CREATE POLICY "manager delete site-photos" ON storage.objects
+    AS PERMISSIVE FOR DELETE TO authenticated
+    USING (bucket_id = 'site-photos' AND (SELECT app.at_least('manager')));
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'Storage provisioning skipped (storage schema not reachable in this context); handled separately by onboarding.';
 END $$;
@@ -800,8 +1677,9 @@ END $$;
 
 -- ============================================================
 -- SETTINGS BOOTSTRAP ROW  (exactly one; required — 38 code sites do settings.single()).
--- Neutral placeholders only. No admin_password (login uses the ADMIN_PASSWORD env var,
--- set per-client by onboarding). No Cady data.
+-- Neutral placeholders only. No Cady data, and no credential of any kind — the admin_password
+-- column no longer exists (see the settings table above), and login is per-user Supabase Auth
+-- against an account onboarding seeds into `profiles`.
 -- ============================================================
 INSERT INTO settings (
   park_name, park_tagline, park_email, park_phone, park_address, park_website, park_location,
@@ -841,8 +1719,27 @@ WHERE NOT EXISTS (SELECT 1 FROM settings);
 
 -- ============================================================
 -- DONE.  Next steps for onboarding a new client:
---   1. Set the ADMIN_PASSWORD env var (per-client) in Vercel — this is the admin login secret.
---   2. Fill in park details on the admin Settings page.
---   3. Add sites, then products/add-ons/fees/taxes as needed.
---   4. Configure Square + verify the email sending domain.
+--   1. Seed the client's first Owner — an auth.users row plus a matching `profiles` row with
+--      role 'owner'. This schema provisions ZERO accounts, so until it happens nobody can sign
+--      in at all. Onboarding does it over the service-role admin API (PR 7-3); by hand it is
+--      scripts/seed-user.mjs, which is also the break-glass path if every Owner is locked out.
+--   2. Disable public signup on the new Supabase project (Auth settings → `disable_signup`).
+--      The role model already fails closed for a signed-up stranger — app.at_least() returns
+--      false with no `profiles` row — but leaving signup on lets anyone mint an `authenticated`
+--      JWT against the project, and that is a gate that should not be left open.
+--   3. Fill in park details on the admin Settings page.
+--   4. Add sites, then products/add-ons/fees/taxes as needed.
+--   5. Configure Square + verify the email sending domain.
+--
+-- VERIFY the posture landed (run against the new project; these are the numbers to match):
+--   select count(*) from information_schema.role_table_grants
+--     where table_schema='public' and grantee='anon';                        -- expect 0
+--   select count(*) from pg_policies where schemaname='public'
+--     and roles::text='{public}';                                            -- expect 0
+--   select permissive, count(*) from pg_policies where schemaname='public'
+--     and roles::text='{authenticated}' group by 1;                          -- expect 87 / 88
+--   select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+--     where n.nspname='public' and c.relkind='r' and not c.relrowsecurity;   -- expect 0
+--   select pg_get_function_identity_arguments(oid) from pg_proc
+--     where proname='increment_discount_usage';                              -- expect p_code text
 -- ============================================================
