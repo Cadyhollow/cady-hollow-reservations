@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { checkSeasonSpan } from '@/lib/bookability'
+import { checkSeasonSpan, resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
 import Image from 'next/image'
 import { cardSurchargeFor } from '@/lib/pricing'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
@@ -170,6 +170,7 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
   const [hasSignature, setHasSignature] = useState(false)
   const [sameDayBlocked, setSameDayBlocked] = useState(false)
   const [seasonMessage, setSeasonMessage] = useState('')
+  const [horizonMessage, setHorizonMessage] = useState('')
   const [sameDayMessage, setSameDayMessage] = useState('')
 
   const site = {
@@ -203,6 +204,26 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
     const verdict = checkSeasonSpan(arrival, departure, settings)
     if (!verdict.bookable) setSeasonMessage(verdict.message)
   }, [settings, arrival, departure])
+  // The booking horizon, re-checked here because this page's dates come from URL parameters and
+  // the search that would have caught them is skippable. NOT the enforcement — /api/payment is,
+  // and a guest who gets past this is refused there with no charge attempted. This exists so that
+  // someone who arrives on a crafted or stale link is told why up front, instead of filling in
+  // their card details and being rejected at the end.
+  //
+  // No slack, matching the date picker on the landing page: the browser holds to the park's true
+  // window and the server allows one day past it, so anything this page accepts, create accepts.
+  useEffect(() => {
+    if (!arrival) return
+    const maxDays = resolveMaxAdvanceDays(settings?.max_advance_days)
+    if (maxDays === null) return
+    const today = new Date().toISOString().split('T')[0]
+    const last = horizonLastArrival(maxDays, today)
+    if (arrival > last) {
+      setHorizonMessage(
+        `We accept reservations up to ${maxDays} day${maxDays === 1 ? '' : 's'} in advance. Please choose an arrival date on or before ${last}.`
+      )
+    }
+  }, [settings, arrival])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
   const [earlyChecked, setEarlyChecked] = useState(false)
@@ -491,6 +512,32 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
             {settings?.season_start && settings?.season_end && (
               <p className="text-sm mt-4" style={{ color: 'var(--accent-color)' }}>We are open from {settings.season_start} through {settings.season_end}</p>
             )}
+            <button onClick={() => window.location.href = '/'} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Choose Different Dates</button>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  if (horizonMessage) {
+    return (
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
+          {settings?.logo_url && (
+            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+            </div>
+          )}
+          <div>
+            <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
+            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center px-4 py-16">
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <div className="text-5xl mb-4">🗓️</div>
+            <h2 className="text-[var(--text-primary)] text-2xl font-bold mb-3">That&apos;s Further Out Than We Book</h2>
+            <p className="text-[var(--text-muted)] text-base leading-relaxed">{horizonMessage}</p>
             <button onClick={() => window.location.href = '/'} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Choose Different Dates</button>
           </div>
         </div>

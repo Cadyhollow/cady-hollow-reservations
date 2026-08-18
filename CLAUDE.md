@@ -9,7 +9,7 @@ The **live, revenue-generating** park: book.cadyhollow.com, real guests, real mo
 
 ## ⚠️ Two landmines — know these cold
 1. **`.env.local` points at the LIVE production database** with a working service key. Tests run against production. **Never run a test that writes** (insert/update/delete, including settings mutations like `withSeason()`/`withGates()`). Safe tests read fixtures and invalidate `SQUARE_ACCESS_TOKEN` so acceptances die at Square before any insert. *(This should be fixed by separating test creds from prod — until then, treat it as armed.)*
-2. **Cady lacks features the template has** (e.g. the booking horizon → no `settings.max_advance_days` column). **Never wholesale-copy a file from the template** — you'd import code that selects a missing column and take all bookings offline. **Cherry-pick** the specific functions, and **grep the diff** to prove nothing extra rode along.
+2. **Cady lacks features the template has** (e.g. Square self-serve → no `square_connections` table). **Never wholesale-copy a file from the template** — you'd import code that selects a missing column and take all bookings offline. **Cherry-pick** the specific functions, and **grep the diff** to prove nothing extra rode along. *(The booking horizon used to be this example and no longer is — it was ported 2026-08-18, column first, code second. That ordering is the rule the example was teaching.)*
 
 ## Never touch
 - Fee model (`booking-quote.ts`, `pricing.ts`, `ledger.ts`) — Cady's fee model differs; empty diff required.
@@ -41,22 +41,25 @@ Confirm `pwd` + `git remote -v` + branch. Branch off `main`; never commit or mer
 ### The two reservation-insert routes
 - `app/api/payment/route.ts` — public/guest. Imports `checkBookability, nightsBetween, ruleAppliesToSite` from `@/lib/bookability`, plus `computeBookingQuote/checkDiscount/resolveNightlyRate`, `cardSurchargeFor`, `sendConfirmationEmails`, and `SQUARE_API_BASE` from `@/lib/square-env`.
 - `app/api/manual-booking/route.ts` — staff. Gated by `await requireRole(request, 'staff')` and **that is its only gate**: it does **not** call `checkBookability`, `checkSeason`, or any horizon check. Staff can book any date today. Know this before assuming a public-path fix covers the park.
-- `app/api/availability/route.ts` — Cady **does** have this (imports `checkSeason, fetchDateFacts, checkDateFacts, resolveMinNights, ruleAppliesToSite, DEFAULT_CLOSED_MESSAGE`). It feeds the calendar, so a season/date change that skips it makes the calendar disagree with the booking gate.
+- `app/api/availability/route.ts` — Cady **does** have this. It does **not** call `checkBookability`; it composes the pieces itself (`checkSeasonSpan, checkHorizon, fetchDateFacts, checkDateFacts, resolveMinNights, ruleAppliesToSite, DEFAULT_CLOSED_MESSAGE`), so **every new date rule has to be wired here a second time** or search and create drift. It feeds the calendar, so a season/date change that skips it makes the calendar disagree with the booking gate.
 - Other routes that write `reservations`: `app/api/admin-card-payment/route.ts`, `app/api/receipt/route.ts`, `app/api/reservation-cancel/route.ts`, `app/api/send-waiver/route.ts`, `app/api/sign/[token]/route.ts`, `app/api/sync-guests/route.ts`. A date-constraint change touches the first two insert paths; the rest are listed so a "which routes write bookings" question doesn't get re-derived under pressure.
 
 ### Settings save
-- `app/admin/settings/page.tsx` → `handleSave()` (~line 409); client-side Supabase write (`from('settings').update(payload).eq('id', settingsId)` / `.insert(payload)`). Guarded by RLS only. Same shape as the template but **different line numbers and a different column set** — never diff-copy the file.
+- `app/admin/settings/page.tsx` → `handleSave()` (~line 430); client-side Supabase write (`from('settings').update(payload).eq('id', settingsId)` / `.insert(payload)`). Guarded by RLS only. Same shape as the template but **different line numbers and a different column set** — never diff-copy the file.
 
 ### Fee model — empty diff required
 `lib/booking-quote.ts`, `lib/pricing.ts`, `lib/ledger.ts`. Guard test: `lib/booking-quote.test.ts`. Cady's arithmetic differs from the template's; a "sync from template" here is a money bug.
 
 ### What Cady does and does NOT have (verified against `origin/main`, 2026-08-18)
 **Does not have — do not reference these or any column they read:**
-- Booking horizon: no `max_advance_days` anywhere, no `checkHorizon`/`resolveMaxAdvanceDays`, no `HorizonOverride`.
-- Whole-stay season: no `checkSeasonSpan`, no `isNightInSeason`, no hardened `parseMonthDay`, no `SeasonOverride`.
+- Horizon/season **staff overrides**: no `allowBeyondHorizon`, no `useHorizonOverride`/`HorizonOverrideNotice`, no `SeasonOverride`. Deliberate, not missing — Cady's staff path (`/api/manual-booking`) applies no date rules at all, so staff can already book any date and there is nothing to override.
 - Square self-serve: no `square_connections`, no `lib/square-credentials.ts`, no `getSquareCredentials`, no `lib/square-oauth.ts`.
 - Terminal poll-recording: no `settleTerminalCheckout`.
 - Square OAuth routes: no `app/api/square/*` (the template's OAuth/connect endpoints).
+
+**Has (ported from the template — public path only):**
+- Booking horizon: `max_advance_days` on `settings` (**NULL on the live park = no limit**), `checkHorizon`/`resolveMaxAdvanceDays`/`horizonLastArrival`/`HORIZON_SERVER_SLACK_DAYS` in `lib/bookability.ts`, wired into `checkBookability`, `/api/availability`, the `HomeClient` arrival picker, the `/book` interstitial, and the Settings "Booking Window" field. Arrival-only; the server allows 1 day of slack, the client none.
+- Whole-stay season: `checkSeasonSpan`, `isNightInSeason`, hardened `parseMonthDay`, `seasonLastNight`, `monthDayLabel` — all in `lib/bookability.ts`.
 
 **Has, and the template does not — so template code will not know about these:**
 `lib/season.ts`, `lib/contracts.ts` + `lib/contract-server.ts`, `lib/electric-periods.ts`, `lib/tax-applications.ts`, `lib/applies-to.ts`, `lib/statement-html.ts`, `lib/supabase-cookie.ts`, `lib/supabase.ts`; routes `app/api/seasonal-contracts`, `app/api/seasonals`, `app/api/guest-notes`, `app/api/packet`; a top-level `components/` directory, `docs/`, and a root `database-setup.sql`.

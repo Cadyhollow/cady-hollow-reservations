@@ -100,35 +100,6 @@ jobs:
           echo "$HITS"
           exit 1
 
-      # THE TRAP GUARD. Cady's database has no max_advance_days column - it never got the
-      # booking horizon. Code that selects that column takes every booking on
-      # book.cadyhollow.com offline. This is the "never wholesale-copy from the template"
-      # rule, made automatic.
-      #
-      # ZERO TOLERANCE - there is no override label, on purpose. If Cady ever legitimately
-      # gains the horizon, the only way past this check is to delete it in the same pull
-      # request. That is loud, visible and reviewable, which is exactly the point: the
-      # column and the guard have to move together or not at all.
-      #
-      # Prose is excluded (*.md), because CLAUDE.md has to be able to NAME the trap in
-      # order to warn about it. So is this workflow file, which names it too.
-      - name: "Cady has no booking horizon — that code must never land here"
-        run: |
-          # awk, not grep - see the note on the secret check above. The two-grep
-          # version of this silently scanned nothing, which for THIS check would have
-          # meant the trap guard was decorative.
-          git diff "$BASE...HEAD" -- . ':(exclude)*.md' ':(exclude).github/workflows/guardrails.yml' \
-            | awk '/^\+\+\+/ { next } /^\+/ { print }' > /tmp/added-code.txt
-          echo "added lines of code scanned: $(wc -l < /tmp/added-code.txt)"
-          HITS=$(grep -nE 'max_advance_days|checkHorizon|resolveMaxAdvanceDays|horizonLastArrival|HORIZON_SERVER_SLACK_DAYS|HorizonOverride' \
-                 /tmp/added-code.txt || true)
-          if [ -n "$HITS" ]; then
-            echo "::error::STOP. This pull request adds booking-horizon code to Cady. Cady's live database has no max_advance_days column, so this would break every booking on book.cadyhollow.com the moment it deploys. This almost always means a file was copied wholesale from the template instead of cherry-picked. See OPS.md section 4, rule 9."
-            echo "$HITS" | cut -c1-160
-            exit 1
-          fi
-          echo "OK - no booking-horizon code in this pull request."
-
       # OPS.md section 4, rule 6 — test writes never touch a production database.
       #
       # Cady's .env.local points at the LIVE park, so its tests are NOT run in CI at all -

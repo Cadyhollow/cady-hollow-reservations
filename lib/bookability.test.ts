@@ -17,6 +17,11 @@ import {
   isNightInSeason,
   checkSeasonSpan,
   nightsBetween,
+  addDays,
+  resolveMaxAdvanceDays,
+  horizonLastArrival,
+  checkHorizon,
+  HORIZON_SERVER_SLACK_DAYS,
   checkDateFacts,
   resolveMinNights,
   ruleAppliesToSite,
@@ -338,4 +343,151 @@ test('min-stay: search and create resolve the same number for the same site', ()
   assert.equal(shownAtSearch, enforcedAtCreate)
   assert.ok(nightsBetween('2026-07-01', '2026-07-02') < enforcedAtCreate, 'a 1-night URL is rejected')
   assert.ok(nightsBetween('2026-07-01', '2026-07-04') >= enforcedAtCreate, 'a 3-night stay passes')
+})
+
+// --- horizon: what counts as a horizon at all --------------------------------
+
+test('resolveMaxAdvanceDays: unset means no limit', () => {
+  // The value the column was added to Cady with, and the steady state until Charissa sets a
+  // window. This is the assertion that makes the migration safe to run on the LIVE park
+  // mid-season: NULL behaves exactly as the column not existing did.
+  assert.equal(resolveMaxAdvanceDays(null), null)
+  assert.equal(resolveMaxAdvanceDays(undefined), null)
+  assert.equal(resolveMaxAdvanceDays(''), null)
+})
+
+test('resolveMaxAdvanceDays: a real horizon is kept', () => {
+  assert.equal(resolveMaxAdvanceDays(395), 395, "Cady's intended window, ~13 months")
+  assert.equal(resolveMaxAdvanceDays(365), 365)
+  assert.equal(resolveMaxAdvanceDays(1), 1, 'one day is the smallest usable window')
+  assert.equal(resolveMaxAdvanceDays(1095), 1095)
+  assert.equal(resolveMaxAdvanceDays('180'), 180, 'a numeric string is accepted')
+})
+
+test('resolveMaxAdvanceDays: garbage FAILS OPEN, never closed', () => {
+  // A park whose horizon value is nonsense keeps taking bookings. The alternative — treating an
+  // unreadable value as a limit — takes a live campground offline over a bad settings row, which
+  // is a far worse failure than accepting a booking further out than the owner wanted.
+  assert.equal(resolveMaxAdvanceDays(0), null, 'zero is a cleared field, not "today only"')
+  assert.equal(resolveMaxAdvanceDays(-30), null)
+  assert.equal(resolveMaxAdvanceDays(30.5), null, 'fractions are not days')
+  assert.equal(resolveMaxAdvanceDays(NaN), null)
+  assert.equal(resolveMaxAdvanceDays('soon'), null)
+  assert.equal(resolveMaxAdvanceDays({}), null)
+  // THE WORST CASE. Number(true) is 1, so without the typeof gate a boolean landing in this
+  // column — a mis-wired toggle, a JSON body with max_advance_days: true — would resolve to a ONE
+  // DAY window and shut Cady's online booking down to same-day only, looking like valid config.
+  assert.equal(resolveMaxAdvanceDays(true), null)
+  assert.equal(resolveMaxAdvanceDays(false), null)
+})
+
+// --- horizon: the gate -------------------------------------------------------
+
+const TODAY = '2026-08-18'
+
+test('horizon: no horizon set means every date is bookable', () => {
+  // DORMANT-WHEN-NULL, the property the whole rollout rests on. `{}` is the literal shape of
+  // Cady's settings row as read right after the migration, before anyone opens the Settings page.
+  assert.equal(checkHorizon('2031-07-04', null, TODAY).bookable, true, 'null settings')
+  assert.equal(checkHorizon('2031-07-04', {}, TODAY).bookable, true, 'column present, never set')
+  assert.equal(checkHorizon('2031-07-04', { max_advance_days: null }, TODAY).bookable, true)
+  assert.equal(checkHorizon('2031-07-04', undefined, TODAY).bookable, true, 'no settings row at all')
+})
+
+test('horizon: the boundary day itself is bookable', () => {
+  // today + 180 must be ACCEPTED. This is the off-by-one that would make the date picker offer a
+  // day the server refuses, and it is the single most likely bug in this feature.
+  const h = { max_advance_days: 180 }
+  assert.equal(horizonLastArrival(180, TODAY), '2027-02-14')
+  assert.equal(checkHorizon('2027-02-14', h, TODAY).bookable, true, 'the last bookable day')
+  assert.equal(checkHorizon('2027-02-13', h, TODAY).bookable, true, 'the day before')
+  assert.equal(checkHorizon(TODAY, h, TODAY).bookable, true, 'today')
+})
+
+test('horizon: past the boundary is refused, with the client applying no slack', () => {
+  const h = { max_advance_days: 180 }
+  const r = checkHorizon('2027-02-15', h, TODAY)
+  assert.equal(r.bookable, false)
+  assert.equal(r.reason, 'beyond-horizon')
+  assert.match(r.message, /180 days in advance/)
+  assert.match(r.message, /2027-02-14/, 'the message quotes the TRUE last bookable date')
+})
+
+test('horizon: the server allows exactly one day of slack, and no more', () => {
+  // The timezone concession. `settings` has no park timezone, so the server's UTC "today" can be
+  // a day ahead of the park's — and must not reject an arrival the picker legitimately offered.
+  // One day open, two days closed.
+  const h = { max_advance_days: 30 }
+  const slack = HORIZON_SERVER_SLACK_DAYS
+  assert.equal(slack, 1, 'if this changes, the reasoning in bookability.ts needs rereading')
+  assert.equal(horizonLastArrival(30, TODAY), '2026-09-17')
+  assert.equal(checkHorizon('2026-09-17', h, TODAY, slack).bookable, true, 'the true boundary')
+  assert.equal(checkHorizon('2026-09-18', h, TODAY, slack).bookable, true, 'one day of slack')
+  assert.equal(checkHorizon('2026-09-19', h, TODAY, slack).bookable, false, 'two days is beyond')
+  // The client, with no slack, stops a day earlier — so anything the client offers, the server
+  // takes. That is the direction the asymmetry must run, and /api/availability uses the SAME
+  // slack as /api/payment so search is never stricter than create.
+  assert.equal(checkHorizon('2026-09-18', h, TODAY, 0).bookable, false, 'client is stricter')
+})
+
+test('horizon: the slack date is never advertised to the guest', () => {
+  // A rejected guest must be told the owner's window, not the internal tolerance, or the park
+  // appears to accept a date its own calendar refuses.
+  const r = checkHorizon('2027-01-01', { max_advance_days: 30 }, TODAY, HORIZON_SERVER_SLACK_DAYS)
+  assert.equal(r.bookable, false)
+  assert.match(r.message, /2026-09-17/, 'the true horizon')
+  assert.doesNotMatch(r.message, /2026-09-18/, 'not the slack-extended one')
+})
+
+test('horizon: ARRIVAL only — a stay that ends beyond the window is fine', () => {
+  // With a 30-day horizon a guest arriving on day 29 for two weeks is booking a departure ~43
+  // days out, and that must be accepted: the horizon is about how far ahead you may plan, not
+  // when your trip ends. Checking the departure too would silently shorten the window by the
+  // length of the stay.
+  const h = { max_advance_days: 30 }
+  assert.equal(checkHorizon('2026-09-16', h, TODAY, 0).bookable, true, 'arrival inside')
+  // Sanity: the departure this implies really is outside the window, so the test is meaningful.
+  assert.ok('2026-09-30' > horizonLastArrival(30, TODAY), 'the departure is genuinely beyond')
+})
+
+test('horizon: one day reads as singular', () => {
+  const r = checkHorizon('2026-08-25', { max_advance_days: 1 }, TODAY, 0)
+  assert.equal(r.bookable, false)
+  assert.match(r.message, /up to 1 day in advance/, 'not "1 days"')
+})
+
+test('horizon: garbage settings let every date through', () => {
+  // Same fail-open property as resolveMaxAdvanceDays, at the gate rather than the parser.
+  for (const bad of [0, -1, 'soon', 12.5, NaN, true]) {
+    assert.equal(
+      checkHorizon('2031-07-04', { max_advance_days: bad as any }, TODAY, 0).bookable,
+      true,
+      `max_advance_days=${String(bad)} must not close the park`
+    )
+  }
+})
+
+test("horizon: Cady's intended 395-day window lands where an owner expects", () => {
+  // ~13 months, the value Charissa plans to set. Pinned so a future change to the arithmetic
+  // shows up as this test failing rather than as guests being turned away a day early.
+  const h = { max_advance_days: 395 }
+  assert.equal(horizonLastArrival(395, TODAY), '2027-09-17')
+  assert.equal(checkHorizon('2027-09-17', h, TODAY, 0).bookable, true, 'the last bookable day')
+  assert.equal(checkHorizon('2027-09-18', h, TODAY, 0).bookable, false, 'the day after')
+})
+
+test('horizon: a long window still lands on the right calendar day', () => {
+  // 365 across a leap year, and 1095 across two, are the values an owner is most likely to type.
+  // addDays parses at UTC noon precisely so these do not drift by a day; this pins that.
+  assert.equal(horizonLastArrival(365, '2027-06-01'), '2028-05-31', 'through 2028-02-29')
+  assert.equal(horizonLastArrival(1095, '2026-01-01'), '2028-12-31')
+  assert.equal(checkHorizon('2028-05-31', { max_advance_days: 365 }, '2027-06-01', 0).bookable, true)
+  assert.equal(checkHorizon('2028-06-01', { max_advance_days: 365 }, '2027-06-01', 0).bookable, false)
+})
+
+test('horizon: a malformed arrival cannot fabricate a window', () => {
+  // addDays returns its input unchanged on an unparseable date, so nothing here can widen the
+  // horizon. checkBookability rejects a malformed range before this runs anyway.
+  assert.equal(addDays('', 400), '')
+  assert.equal(checkHorizon('not-a-date', { max_advance_days: 30 }, TODAY, 0).bookable, false)
 })

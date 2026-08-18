@@ -5,7 +5,7 @@ import CampgroundMap from './components/CampgroundMap'
 // Safe in the browser bundle: lib/bookability.ts has no imports of its own and no Supabase
 // client. The picker's warning is derived by the SAME arithmetic the server enforces with, so
 // the two cannot drift and offer a stay create would refuse.
-import { isNightInSeason, checkSeasonSpan, seasonLastNight, monthDayLabel } from '@/lib/bookability'
+import { resolveMaxAdvanceDays, horizonLastArrival, isNightInSeason, checkSeasonSpan, seasonLastNight, monthDayLabel } from '@/lib/bookability'
 
 type Site = {
   id: string
@@ -72,6 +72,7 @@ export default function HomeClient({
   const siteTypes = initialSiteTypes
   const categories = initialCategories
   const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
+  const [outOfWindow, setOutOfWindow] = useState<string | null>(null)
   const [outOfSeason, setOutOfSeason] = useState<string | null>(null)
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
   const [openCategories, setOpenCategories] = useState<Set<number | 'uncategorized'>>(new Set())
@@ -79,6 +80,19 @@ export default function HomeClient({
   const selectedSiteRef = useRef<HTMLDivElement>(null)
 
   const today = new Date().toISOString().split('T')[0]
+
+  // The booking horizon, as the calendar sees it.
+  //
+  // NO SLACK here, on purpose. The server allows one day past this (it has no park timezone —
+  // see HORIZON_SERVER_SLACK_DAYS), so the picker being the stricter of the two guarantees that
+  // every date it offers is a date /api/payment will honour. The asymmetry must never run the
+  // other way: a calendar that offers a day the charge route refuses is a guest filling in their
+  // card details to be told no.
+  //
+  // null when the park has set no window, in which case the input gets no `max` at all and
+  // behaves exactly as it did before this feature.
+  const maxAdvanceDays = resolveMaxAdvanceDays(settings?.max_advance_days)
+  const horizonMaxDate = maxAdvanceDays === null ? null : horizonLastArrival(maxAdvanceDays, today)
 
   // The closed season, as the picker sees it.
   //
@@ -119,11 +133,32 @@ export default function HomeClient({
     // is refused, which is the hole this closes. Advisory only — /api/payment refuses it too.
     if (stayOutOfSeason) {
       setOutOfSeason(settings?.closed_season_message || 'We are closed for the season.')
+      setOutOfWindow(null)
       setSameDayBlock(null)
       setStep(2)
       return
     }
     setOutOfSeason(null)
+
+    // The horizon, checked explicitly rather than relying on the input's `max`.
+    //
+    // `min`/`max` on <input type="date"> are ADVISORY: they grey out days in the native picker
+    // and mark the field :invalid, but they do not stop a value that arrives by paste, by
+    // autofill, or from a browser whose picker ignores them. Neither this nor the input attribute
+    // is the enforcement — /api/payment is — but a guest should be told here rather than after
+    // choosing a site.
+    //
+    // ARRIVAL only. A stay that starts inside the window and ends outside it is fine; see the
+    // note on checkHorizon.
+    if (horizonMaxDate && arrival > horizonMaxDate) {
+      setOutOfWindow(
+        `We accept reservations up to ${maxAdvanceDays} day${maxAdvanceDays === 1 ? '' : 's'} in advance. Please choose an arrival date on or before ${horizonMaxDate}.`
+      )
+      setSameDayBlock(null)
+      setStep(2)
+      return
+    }
+    setOutOfWindow(null)
 
     if (settings?.same_day_cutoff_time && arrival === today) {
       const clean = settings.same_day_cutoff_time.trim().toUpperCase()
@@ -155,6 +190,11 @@ export default function HomeClient({
     const fetchedSites: Site[] = data.sites || []
     setSites(fetchedSites)
     setIsClosed(data.closed || false)
+    // The route's own horizon verdict. The guard above should have caught this already, so
+    // reaching here means the two disagreed — a stale settings prop in the browser, or a search
+    // fired before the page had settings. The server's answer wins, and the guest sees the same
+    // wording either way.
+    if (data.outOfWindow) setOutOfWindow(data.horizonMessage || null)
     // The route's own season verdict. `closed` now reflects the WHOLE STAY, so it fires for a
     // stay that begins in season and runs past closing, not just an out-of-season arrival.
     if (data.closed) setOutOfSeason(data.closedMessage || null)
@@ -421,7 +461,10 @@ export default function HomeClient({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
             <div>
               <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Arrival Date</label>
-              <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={today} value={arrival}
+              {/* max grays out everything past the park's booking window. `undefined` when no
+                  window is set, so the attribute is absent and the calendar is unbounded exactly
+                  as it was before. Advisory only — handleSearch checks it too. */}
+              <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={today} max={horizonMaxDate || undefined} value={arrival}
                 onClick={openDatePicker}
                 onChange={e => { setArrival(e.target.value); if (departure && departure <= e.target.value) setDeparture('') }} />
               {arrivalOutOfSeason && (
@@ -430,6 +473,9 @@ export default function HomeClient({
                     ? `We are closed on this date. The last night you can book is ${lastNightLabel}.`
                     : 'We are closed on this date.'}
                 </p>
+              )}
+              {horizonMaxDate && (
+                <p className="text-xs mt-1 text-[var(--text-muted)]">Booking open through {horizonMaxDate}</p>
               )}
               {seasonConfigured && !arrivalOutOfSeason && (
                 <p className="text-xs mt-1 text-[var(--text-muted)]">
@@ -525,6 +571,12 @@ export default function HomeClient({
               {settings?.season_start && settings?.season_end && (
                 <p className="text-sm" style={{ color: 'var(--accent-color)' }}>We are open from {settings.season_start} through {settings.season_end}</p>
               )}
+            </div>
+          ) : outOfWindow ? (
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+              <div className="text-6xl mb-4">🗓️</div>
+              <p className="text-[var(--text-primary)] text-xl font-bold mb-3">That&apos;s Further Out Than We Book</p>
+              <p className="text-[var(--text-muted)] text-base">{outOfWindow}</p>
             </div>
           ) : sameDayBlock ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
