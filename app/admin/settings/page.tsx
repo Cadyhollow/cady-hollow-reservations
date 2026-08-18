@@ -2,6 +2,9 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+// The same parser the season gate uses, so what Settings accepts and what enforcement can read
+// are the same set by construction.
+import { parseMonthDay } from '@/lib/bookability'
 import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
 import TaxCheckboxList from '@/components/TaxCheckboxList'
 import toast, { Toaster } from 'react-hot-toast'
@@ -407,6 +410,31 @@ export default function SettingsPage() {
   }
 
   async function handleSave() {
+    // ── SEASON TEXT IS VALIDATED HERE, AND THIS IS WHAT MAKES FAIL-OPEN SAFE ────────────────
+    //
+    // checkSeasonSpan treats an unreadable season as "no season" and keeps taking bookings,
+    // because a park going dark on every date is a worse failure than one that misses a closure.
+    // That default is only defensible if a mistyped season is caught the moment it is typed —
+    // otherwise the park writes "Oct 11th!", saves happily, and discovers months later that its
+    // closed period never existed.
+    //
+    // So the same parser the gate uses runs here, and refuses the save. The message names the
+    // offending value and shows a form that works, because "invalid date" would leave an owner
+    // guessing which of the two fields is wrong and why.
+    //
+    // Both bounds are optional — a park with no season configured is a real, supported state —
+    // but anything non-empty has to be readable.
+    for (const [label, value] of [
+      ['Season Opens', form.season_start],
+      ['Season Closes', form.season_end],
+    ] as const) {
+      const text = String(value ?? '').trim()
+      if (text !== '' && !parseMonthDay(text)) {
+        toast.error(`${label}: "${text}" isn't a date we recognize — try "October 11".`)
+        return
+      }
+    }
+
     setSaving(true)
     const payload = {
       park_name: form.park_name,
