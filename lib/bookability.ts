@@ -156,12 +156,27 @@ export function addDays(date: string, days: number): string {
 // so this never bit here, but it made the season code wrong in a way nobody could see, and any
 // future reconfiguration would have hit it.
 //
-// A season is a recurring annual window, so it is decided entirely by month and day:
+// A season is a recurring annual window, so it is decided entirely by month and day. The two
+// bounds are NOT symmetric, and that asymmetry is the whole point of this function:
 //
-//   normal (May 1 → Oct 11)   in season when  start <= date <= end
-//   wrapped (Nov 1 → Mar 31)  in season when  date >= start OR date <= end
+//   season_start  the OPENING day — the first occupiable night, and the first allowed check-in.
+//   season_end    the CLOSING day — the last allowed CHECKOUT. The park takes no check-ins on
+//                 it and nobody sleeps there that night. The last occupiable night is the day
+//                 BEFORE it.
 //
-// Both bounds are inclusive: the park is open ON its first and last day.
+// So the window is half-open — inclusive of start, exclusive of end:
+//
+//   normal (May 1 → Oct 11)   occupiable when  date >= start AND date < end
+//   wrapped (Nov 1 → Mar 31)  occupiable when  date >= start OR  date < end
+//
+// For Cady's own May 1 → October 11 season the last occupiable night is October 10, and the last
+// stay of the year arrives October 10 and checks out October 11.
+//
+// WHY EXCLUSIVE RATHER THAN "end - 1". Decrementing the boundary looks equivalent and is not.
+// A wrapped season ending January 1 would decrement to December 31, and `date <= 1231` is every
+// day of the year — so a winter park would silently go from closed-in-January to open-always.
+// Comparing `< end` has no such edge: for end = January 1, `x < 0101` is simply never true.
+// Cady runs a summer season so this could not bite here, but the code would be wrong.
 //
 // Returns null — NOT false — when the season cannot be read at all, so the caller can tell
 // "definitely closed" apart from "no usable season configured".
@@ -185,9 +200,37 @@ export function isNightInSeason(
   const st = monthDayKey(start)
   const en = monthDayKey(end)
 
-  return st <= en
-    ? x >= st && x <= en
-    : x >= st || x <= en
+  // A park that opens and closes on the SAME day has no nights to sell — the one day it is open
+  // is a checkout day. Checked before the comparisons below because they read st > en as a
+  // wrap-around, which would turn a zero-night season into an always-open one.
+  if (st === en) return false
+
+  return st < en
+    ? x >= st && x < en
+    : x >= st || x < en
+}
+
+// The last occupiable night — the day before the closing day. FOR DISPLAY ONLY; the gate above
+// never decrements a boundary (see the note on why). Returns null when there is no readable
+// season, or when the season is the degenerate zero-night one.
+export function seasonLastNight(settings: SeasonSettings | null | undefined): MonthDay | null {
+  if (!settings?.season_start || !settings?.season_end) return null
+  const start = parseMonthDay(settings.season_start)
+  const end = parseMonthDay(settings.season_end)
+  if (!start || !end) return null
+  if (monthDayKey(start) === monthDayKey(end)) return null
+
+  // The calendar day before `end`, wrapping January 1 back to December 31.
+  if (end.day > 1) return { month: end.month, day: end.day - 1 }
+  const month = end.month === 1 ? 12 : end.month - 1
+  return { month, day: DAYS_IN_MONTH[month] }
+}
+
+// "October 10", for the season hint under the arrival picker.
+export function monthDayLabel(md: MonthDay | null): string {
+  if (!md) return ''
+  const name = MONTHS[md.month - 1]
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${md.day}`
 }
 
 // THE SEASON GATE. Every NIGHT of the stay must fall inside the open season.
