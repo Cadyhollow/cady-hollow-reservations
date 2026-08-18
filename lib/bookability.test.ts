@@ -89,10 +89,15 @@ test('season: a night inside the season is in season', () => {
   assert.equal(isNightInSeason('2026-07-04', SEASON), true)
 })
 
-test('season: boundaries are inclusive on both ends', () => {
-  assert.equal(isNightInSeason('2026-05-01', SEASON), true, 'opening day')
-  assert.equal(isNightInSeason('2026-10-15', SEASON), true, 'closing day')
-  assert.equal(isNightInSeason('2026-10-11', CADY), true, "Cady's own closing day")
+test('season: the bounds are ASYMMETRIC — start is a night, end is a checkout', () => {
+  // INVERTED. This used to assert both bounds were inclusive, i.e. that the park was occupiable
+  // ON its closing day. It is not: season_end is the last allowed CHECKOUT, so the last night a
+  // guest can occupy is the day before it. season_start is unchanged.
+  assert.equal(isNightInSeason('2026-05-01', SEASON), true, 'opening day is occupiable')
+  assert.equal(isNightInSeason('2026-10-14', SEASON), true, 'last occupiable night')
+  assert.equal(isNightInSeason('2026-10-15', SEASON), false, 'the closing day is a checkout, not a night')
+  assert.equal(isNightInSeason('2026-10-10', CADY), true, "Cady's last occupiable night")
+  assert.equal(isNightInSeason('2026-10-11', CADY), false, "Cady's closing day is a checkout")
 })
 
 test('season: the days just outside the boundaries are out', () => {
@@ -125,7 +130,8 @@ test('season: FIXED — a season spanning New Year is now bookable', () => {
   assert.equal(isNightInSeason('2026-11-01', WRAPPING), true, 'its own opening day')
   assert.equal(isNightInSeason('2026-12-20', WRAPPING), true, 'mid-season, before New Year')
   assert.equal(isNightInSeason('2027-01-15', WRAPPING), true, 'mid-season, after New Year')
-  assert.equal(isNightInSeason('2026-03-31', WRAPPING), true, 'its own closing day')
+  assert.equal(isNightInSeason('2026-03-30', WRAPPING), true, 'its last occupiable night')
+  assert.equal(isNightInSeason('2026-03-31', WRAPPING), false, 'its closing day is a checkout, not a night')
   assert.equal(isNightInSeason('2026-07-04', WRAPPING), false, 'genuinely out of season')
 })
 
@@ -145,12 +151,34 @@ test('season span: a stay wholly inside the season is fine', () => {
   assert.equal(checkSeasonSpan('2026-07-01', '2026-07-08', CADY).bookable, true)
 })
 
-test('season span: THE CHECKOUT BOUNDARY — arrive on the last open day, leave the next', () => {
-  // The stay occupies the nights arrival … departure-1. With Cady closing October 11, a guest
-  // arriving the 11th and leaving the 12th occupies exactly one night — October 11 — and must be
-  // ACCEPTED. Checking "through departure" would reject a normal checkout the park takes yearly.
-  assert.equal(checkSeasonSpan('2026-10-11', '2026-10-12', CADY).bookable, true)
-  assert.equal(checkSeasonSpan('2026-10-11', '2026-10-13', CADY).bookable, false, 'one night further is closed')
+test('season span: THE CLOSING DAY IS A CHECKOUT, NOT A NIGHT', () => {
+  // INVERTED. October 11 is Cady's last allowed CHECKOUT, not its last occupiable night. Arriving
+  // on it is a check-in on the day the park shuts, and a night spent in a closed park.
+  assert.equal(checkSeasonSpan('2026-10-11', '2026-10-12', CADY).bookable, false,
+    'checking IN on the closing day is refused')
+  assert.equal(checkSeasonSpan('2026-10-11', '2026-10-13', CADY).bookable, false, 'and further still')
+})
+
+test('season span: THE LAST VALID STAY — arrive October 10, check out October 11', () => {
+  // The stay the rule is built around. If this ever fails, Cady has lost its final night of trade.
+  assert.equal(checkSeasonSpan('2026-10-10', '2026-10-11', CADY).bookable, true)
+})
+
+test('season span: a one-day season has no nights to sell', () => {
+  // The half-open comparison reads start > end as a wrap-around, so without an explicit guard a
+  // park opening and closing the same day would flip to open every night of the year.
+  const SAME_DAY = { season_start: 'May 1', season_end: 'May 1' }
+  assert.equal(isNightInSeason('2026-05-01', SAME_DAY), false)
+  assert.equal(isNightInSeason('2026-11-11', SAME_DAY), false, 'and not the rest of the year either')
+})
+
+test('season span: a wrapping season CLOSING ON JANUARY 1 does not invert', () => {
+  // Why the gate compares `< end` instead of decrementing to `end - 1`. Decrementing January 1
+  // gives December 31, and "date <= December 31" is every day of the year.
+  const WINTER = { season_start: 'November 1', season_end: 'January 1' }
+  assert.equal(isNightInSeason('2026-12-31', WINTER), true, 'the last occupiable night')
+  assert.equal(isNightInSeason('2027-01-01', WINTER), false, 'the closing day is a checkout')
+  assert.equal(isNightInSeason('2027-01-15', WINTER), false, 'and January is CLOSED, not open')
 })
 
 test('season span: the opening boundary behaves the same way', () => {
@@ -172,7 +200,7 @@ test('season span: a long stay wholly inside ONE season occurrence is still acce
   // Keeps the endpoint-trap test honest: if the span check refused anything long, that test
   // would pass for the wrong reason.
   assert.equal(checkSeasonSpan('2026-05-01', '2026-10-11', CADY).bookable, true,
-    'the whole open season, opening day to closing day')
+    'every night of the season: check in on the opening day, check out on the closing day')
 })
 
 test('season span: a wrapping season is bookable straight across New Year', () => {

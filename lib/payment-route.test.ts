@@ -383,9 +383,10 @@ test('payment: a stay that runs PAST CLOSING is refused, and never reaches Squar
   assert.equal(r.status, 400)
 })
 
-test('payment: arriving on the last open day and leaving the next is accepted', { skip }, async (t) => {
-  // The off-by-one that would ship if the span were validated "through departure" instead of
-  // through departure-1: a guest checking out the morning after closing day is a normal booking.
+test('payment: CHECKING IN on the closing day is refused, and never reaches Square', { skip }, async (t) => {
+  // INVERTED. season_end is the last allowed CHECKOUT, so an arrival ON it is a check-in the day
+  // the park shuts. This asserts the real route refuses it rather than the browser merely
+  // discouraging it — read-only: a refusal returns before the insert.
   const season = await configuredSeason()
   if (!season) return t.skip('this park has no season configured')
   const end = parseMonthDay(season.season_end)
@@ -402,8 +403,31 @@ test('payment: arriving on the last open day and leaving the next is accepted', 
 
   const r = await post({ siteId: free.id, arrival, departure, nights: 1 })
 
+  assert.ok(r.gated, `a check-in on the closing day reached Square: ${JSON.stringify(r.json)}`)
+  assert.equal(r.json.reason, 'out-of-season', 'refused by the season gate specifically')
+})
+
+test('payment: THE LAST VALID STAY — arrive the day before closing, check out ON it', { skip }, async (t) => {
+  // The counterpart that keeps the fix from overshooting. If this ever fails, Cady has lost the
+  // last sellable night of its season.
+  const season = await configuredSeason()
+  if (!season) return t.skip('this park has no season configured')
+  const end = parseMonthDay(season.season_end)
+  if (!end) return t.skip('season_end is not readable')
+
+  const year = new Date().getFullYear() + 1
+  const departure = `${year}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`
+  const arrival = addDays(departure, -1)
+
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, arrival, departure)
+  const free = (sites || []).find((x: any) => checkDateFacts(x.id, facts).bookable)
+  if (!free) return t.skip('no free site on the last sellable night')
+
+  const r = await post({ siteId: free.id, arrival, departure, nights: 1 })
+
   assert.notEqual(r.json.reason, 'out-of-season',
-    `the checkout boundary was wrongly refused: ${JSON.stringify(r.json)}`)
+    `the last valid stay of the season was wrongly refused: ${JSON.stringify(r.json)}`)
 })
 
 test('availability: the search refuses the same past-closing stay the route does', { skip }, async (t) => {
