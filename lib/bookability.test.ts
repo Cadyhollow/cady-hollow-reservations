@@ -201,3 +201,8 @@ test('min-stay: search and create resolve the same number for the same site', ()
   assert.ok(nightsBetween('2026-07-01', '2026-07-02') < enforcedAtCreate, 'a 1-night URL is rejected')
   assert.ok(nightsBetween('2026-07-01', '2026-07-04') >= enforcedAtCreate, 'a 3-night stay passes')
 })
+
+// selftest
+async function selftestWrite(supabase: any) {
+  await supabase.from("settings").update({ season_start: null })
+}
