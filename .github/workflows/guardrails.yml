@@ -1,0 +1,164 @@
+# Guardrails — the load-bearing rules from resonation-ops/OPS.md section 4, enforced
+# automatically instead of remembered. Each step below names the rule it enforces and
+# says, in plain language, what to do when it fails.
+#
+# This file is CI configuration only (CI = the checks GitHub runs on a pull request).
+# Nothing imports it, it is not in a Next.js build path, and it never touches a
+# database. Adding it cannot change the running app.
+
+name: guardrails
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    name: guardrails
+    runs-on: ubuntu-latest
+    env:
+      BASE: origin/${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the branch this PR targets
+        run: |
+          git fetch --no-tags --prune origin \
+            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
+      - name: Show what this PR changes
+        run: git diff --name-status "$BASE...HEAD"
+
+      # OPS.md section 4, rule 5 — the credential boundary. Real keys are placed by the
+      # human and never committed. .env*.local is exactly where they sit locally, so it
+      # must never reach the repo.
+      - name: "Rule 4.5 — no environment file may be committed"
+        run: |
+          HITS=$(git diff --name-only --diff-filter=ACMR "$BASE...HEAD" \
+                 | grep -E '(^|/)\.env.*\.local$' || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::This pull request adds or changes an environment file. Those hold real keys and must stay on your own machine, never in the repo. See OPS.md section 4, rule 5."
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK - no .env*.local files in this pull request."
+
+      # OPS.md section 4, rule 5 — no secret-shaped VALUE in the added lines.
+      #
+      # Publishable/anon keys are NOT secret and are allowed. They are also JWTs that
+      # look exactly like a service-role key, so shape alone cannot tell them apart:
+      # a line that carries an anon/publishable marker is let through. That allowlist
+      # is the only thing separating the two, so widening it is a deliberate act.
+      #
+      # This workflow file is excluded from its own scan - it necessarily contains the
+      # patterns it looks for.
+      - name: "Rule 4.5 — no service-role key or long JWT in the diff"
+        run: |
+          # awk, not grep: in GNU grep's default dialect \+ is the "one or more"
+          # operator rather than a literal plus, so the obvious two-grep version of
+          # this silently produced an EMPTY file and the check passed everything.
+          # awk has no such dialect trap. The line count is printed so that a future
+          # silent-empty is visible in the log instead of looking like a clean pass.
+          git diff "$BASE...HEAD" -- . ':(exclude).github/workflows/guardrails.yml' \
+            | awk '/^\+\+\+/ { next } /^\+/ { print }' > /tmp/added.txt
+          echo "added lines scanned: $(wc -l < /tmp/added.txt)"
+          SUSPECT=$(grep -E 'SUPABASE_SERVICE_ROLE_KEY=.|sb_secret_[A-Za-z0-9_-]|eyJ[A-Za-z0-9_-]{40,}' /tmp/added.txt \
+                    | grep -viE 'NEXT_PUBLIC_|ANON_KEY|anon|publishable|sb_publishable_' || true)
+          if [ -n "$SUSPECT" ]; then
+            echo "::error::This pull request looks like it contains a real secret key. Secrets are placed by hand, never committed. If this is a false alarm, say so on the PR rather than working around it. See OPS.md section 4, rule 5."
+            echo "$SUSPECT" | cut -c1-120
+            exit 1
+          fi
+          echo "OK - no secret-shaped values added."
+
+      # OPS.md section 4, rule 1 — the fee model is untouchable. These three files decide
+      # what a guest is actually charged.
+      #
+      # Overridable ON PURPOSE but never by accident: a genuine fee change adds the label
+      # 'allow-fee-model-change' to the pull request, which is a visible, reviewable act.
+      - name: "Rule 4.1 — the fee model is untouchable"
+        env:
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'allow-fee-model-change') }}
+        run: |
+          HITS=$(git diff --name-only "$BASE...HEAD" \
+                 | grep -E '(^|/)lib/(booking-quote|pricing|ledger)\.ts$' || true)
+          if [ -z "$HITS" ]; then
+            echo "OK - fee model untouched."
+            exit 0
+          fi
+          if [ "$LABELLED" = "true" ]; then
+            echo "::warning::Fee-model files changed, allowed by the 'allow-fee-model-change' label:"
+            echo "$HITS"
+            exit 0
+          fi
+          echo "::error::This pull request changes the fee model - the code that decides what a guest pays. If that is genuinely what you want, add the label 'allow-fee-model-change' to this pull request and re-run this check. See OPS.md section 4, rule 1."
+          echo "$HITS"
+          exit 1
+
+      # THE TRAP GUARD. Cady's database has no max_advance_days column - it never got the
+      # booking horizon. Code that selects that column takes every booking on
+      # book.cadyhollow.com offline. This is the "never wholesale-copy from the template"
+      # rule, made automatic.
+      #
+      # ZERO TOLERANCE - there is no override label, on purpose. If Cady ever legitimately
+      # gains the horizon, the only way past this check is to delete it in the same pull
+      # request. That is loud, visible and reviewable, which is exactly the point: the
+      # column and the guard have to move together or not at all.
+      #
+      # Prose is excluded (*.md), because CLAUDE.md has to be able to NAME the trap in
+      # order to warn about it. So is this workflow file, which names it too.
+      - name: "Cady has no booking horizon — that code must never land here"
+        run: |
+          # awk, not grep - see the note on the secret check above. The two-grep
+          # version of this silently scanned nothing, which for THIS check would have
+          # meant the trap guard was decorative.
+          git diff "$BASE...HEAD" -- . ':(exclude)*.md' ':(exclude).github/workflows/guardrails.yml' \
+            | awk '/^\+\+\+/ { next } /^\+/ { print }' > /tmp/added-code.txt
+          echo "added lines of code scanned: $(wc -l < /tmp/added-code.txt)"
+          HITS=$(grep -nE 'max_advance_days|checkHorizon|resolveMaxAdvanceDays|horizonLastArrival|HORIZON_SERVER_SLACK_DAYS|HorizonOverride' \
+                 /tmp/added-code.txt || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::STOP. This pull request adds booking-horizon code to Cady. Cady's live database has no max_advance_days column, so this would break every booking on book.cadyhollow.com the moment it deploys. This almost always means a file was copied wholesale from the template instead of cherry-picked. See OPS.md section 4, rule 9."
+            echo "$HITS" | cut -c1-160
+            exit 1
+          fi
+          echo "OK - no booking-horizon code in this pull request."
+
+      # OPS.md section 4, rule 6 — test writes never touch a production database.
+      #
+      # Cady's .env.local points at the LIVE park, so its tests are NOT run in CI at all -
+      # running them is the risk. This is a static read of the test files instead: nothing
+      # is executed, the files are only searched for database-write calls.
+      #
+      # The receiver allowlist below skips things that are not the database - a cookie jar's
+      # jar.delete(name) is not a write to the park. Widening that list is a deliberate,
+      # reviewable act; do not widen it to silence a real finding.
+      - name: "Rule 4.6 — no test in this pull request may write to the database"
+        run: |
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE...HEAD" \
+                  | grep -E '\.test\.tsx?$' || true)
+          if [ -z "$FILES" ]; then
+            echo "OK - no test files changed."
+            exit 0
+          fi
+          FOUND=0
+          for f in $FILES; do
+            [ -f "$f" ] || continue
+            M=$(grep -nE '\.(insert|upsert|update|delete)\(' "$f" \
+                | grep -vE '\b(jar|cookies|cookieStore|headers|map|set|store|params|searchParams)\.(insert|upsert|update|delete)\(' || true)
+            if [ -n "$M" ]; then
+              echo "--- $f"
+              echo "$M"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "1" ]; then
+            echo "::error::A test file in this pull request contains a database write (insert/update/delete/upsert). Cady's test environment points at the LIVE production database, so a test that writes would change real guests' real bookings. Make the test read-only. See OPS.md section 4, rule 6."
+            exit 1
+          fi
+          echo "OK - no database writes in the test files this pull request touches."
