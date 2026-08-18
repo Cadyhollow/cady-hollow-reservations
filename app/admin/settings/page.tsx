@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
 // The same parser the season gate uses, so what Settings accepts and what enforcement can read
 // are the same set by construction.
-import { parseMonthDay } from '@/lib/bookability'
+import { parseMonthDay, resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
 import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
 import TaxCheckboxList from '@/components/TaxCheckboxList'
 import toast, { Toaster } from 'react-hot-toast'
@@ -95,6 +95,10 @@ const defaultSettings = {
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
+  // Blank, NOT a number. The column is NULL on the live park and NULL means "no window", so an
+  // owner who has never opened this field must see it empty and save it back as NULL. Seeding a
+  // default here would switch a date restriction on for a park that never asked for one.
+  max_advance_days: '',
   waiver_enabled: true,
   waiver_text: '',
   contract_text: '',
@@ -202,6 +206,13 @@ export default function SettingsPage() {
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
+        // Explicit null/undefined test rather than `|| ''`. A stored 0 is falsy, and `|| ''` would
+        // render it as "no window" — the owner would be shown a park with no horizon while the row
+        // actually held a value that lib/bookability.ts also reads as none. Same answer, arrived at
+        // by accident; this shows what is really stored.
+        max_advance_days: data.max_advance_days === null || data.max_advance_days === undefined
+          ? ''
+          : String(data.max_advance_days),
         waiver_enabled: data.waiver_enabled !== false,
         waiver_text: data.waiver_text || '',
         contract_text: data.contract_text || '',
@@ -409,7 +420,29 @@ export default function SettingsPage() {
     toast.success('Hero image removed.')
   }
 
+  // Bounds for the booking window. 1095 days is three years — past that an owner is almost
+  // certainly typing a year rather than a day count, and a horizon that long is indistinguishable
+  // from none. 0 is refused outright: lib/bookability.ts reads it as "no window" (a cleared field
+  // is far likelier than a park meaning same-day-only), so letting it be SAVED here would store a
+  // value whose meaning does not match what the owner just typed.
+  const HORIZON_MIN_DAYS = 1
+  const HORIZON_MAX_DAYS = 1095
+
   async function handleSave() {
+    // Validated before anything is sent, and it BLOCKS the save rather than silently coercing.
+    // This whole page writes one payload containing every column, so a quietly-corrected value
+    // would be saved alongside the owner's real edits with nothing to show it had been changed.
+    const rawHorizon = String(form.max_advance_days ?? '').trim()
+    let horizonDays: number | null = null
+    if (rawHorizon !== '') {
+      const n = Number(rawHorizon)
+      if (!Number.isInteger(n) || n < HORIZON_MIN_DAYS || n > HORIZON_MAX_DAYS) {
+        toast.error(`Booking window must be a whole number of days between ${HORIZON_MIN_DAYS} and ${HORIZON_MAX_DAYS}, or blank for no limit.`)
+        return
+      }
+      horizonDays = n
+    }
+
     // ── SEASON TEXT IS VALIDATED HERE, AND THIS IS WHAT MAKES FAIL-OPEN SAFE ────────────────
     //
     // checkSeasonSpan treats an unreadable season as "no season" and keeps taking bookings,
@@ -482,6 +515,9 @@ export default function SettingsPage() {
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
+      // NULL, not 0 and not '', when the field is blank — NULL is what lib/bookability.ts and the
+      // canonical schema both treat as "no window".
+      max_advance_days: horizonDays,
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
       contract_text: form.contract_text,
@@ -507,6 +543,13 @@ export default function SettingsPage() {
     setSaving(false)
     fetchSettings()
   }
+
+  // The window as the guest will see it, derived by the same two functions the gate and the date
+  // picker use — so the owner is previewing the real bound, not a second implementation of it.
+  const horizonPreviewDays = resolveMaxAdvanceDays(form.max_advance_days)
+  const horizonPreviewDate = horizonPreviewDays === null
+    ? null
+    : horizonLastArrival(horizonPreviewDays, new Date().toISOString().split('T')[0])
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="text-gray-500">Loading settings...</div></div>
 
@@ -882,6 +925,25 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Season Opens</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. May 1" value={form.season_start} onChange={e => setForm({ ...form, season_start: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Season Closes</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. October 11" value={form.season_end} onChange={e => setForm({ ...form, season_end: e.target.value })} /></div>
             <div className="md:col-span-2"><label className="block text-sm font-medium text-gray-700 mb-1">Closed Season Message</label><textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={2} value={form.closed_season_message} onChange={e => setForm({ ...form, closed_season_message: e.target.value })} /></div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Booking Window (days ahead)</label>
+              <input
+                type="number"
+                min={HORIZON_MIN_DAYS}
+                max={HORIZON_MAX_DAYS}
+                step="1"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="e.g. 395 (leave blank for no limit)"
+                value={form.max_advance_days}
+                onChange={e => setForm({ ...form, max_advance_days: e.target.value })}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                {form.max_advance_days === ''
+                  ? 'No limit — guests can book any future date.'
+                  : `Guests can book arrivals up to ${form.max_advance_days} day${form.max_advance_days === '1' ? '' : 's'} ahead${horizonPreviewDate ? ` (through ${horizonPreviewDate})` : ''}.`}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Applies to the arrival date only — a stay that starts inside the window may end outside it. Staff booking from the admin pages are not affected.</p>
+            </div>
           </div>
         </div>
 
