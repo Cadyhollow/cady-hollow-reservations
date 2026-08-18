@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { checkSeasonSpan } from '@/lib/bookability'
 import Image from 'next/image'
 import { cardSurchargeFor } from '@/lib/pricing'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
@@ -168,6 +169,7 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
   const [waiverChecked, setWaiverChecked] = useState(false)
   const [hasSignature, setHasSignature] = useState(false)
   const [sameDayBlocked, setSameDayBlocked] = useState(false)
+  const [seasonMessage, setSeasonMessage] = useState('')
   const [sameDayMessage, setSameDayMessage] = useState('')
 
   const site = {
@@ -192,6 +194,15 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
   // which is a comparison against the CAMPER'S clock: the server's timezone is not theirs, so
   // deciding it here keeps the answer the one the page has always given.
   useEffect(() => { checkSameDayCutoff(settings, arrival) }, [settings, arrival])
+  // The season, whole-stay. This page had NO season check at all, so a crafted or stale link to a
+  // closed week rendered the full booking page and the guest only found out at the charge. Not the
+  // enforcement — /api/payment refuses it regardless — but the guest should be told before they
+  // enter a card.
+  useEffect(() => {
+    if (!arrival || !departure) return
+    const verdict = checkSeasonSpan(arrival, departure, settings)
+    if (!verdict.bookable) setSeasonMessage(verdict.message)
+  }, [settings, arrival, departure])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
   const [earlyChecked, setEarlyChecked] = useState(false)
@@ -457,6 +468,35 @@ export default function BookingForm({ settings, fees, addons, earlyBlocked, late
 
   const camperTypeLabel = (val: string) =>
     CAMPER_TYPES.find(t => t.value === val)?.label || val
+
+  if (seasonMessage) {
+    return (
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
+          {settings?.logo_url && (
+            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+            </div>
+          )}
+          <div>
+            <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
+            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center px-4 py-16">
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <div className="text-5xl mb-4">❄️</div>
+            <h2 className="text-[var(--text-primary)] text-2xl font-bold mb-3">We&apos;re Closed for These Dates</h2>
+            <p className="text-[var(--text-muted)] text-base leading-relaxed">{seasonMessage}</p>
+            {settings?.season_start && settings?.season_end && (
+              <p className="text-sm mt-4" style={{ color: 'var(--accent-color)' }}>We are open from {settings.season_start} through {settings.season_end}</p>
+            )}
+            <button onClick={() => window.location.href = '/'} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Choose Different Dates</button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   if (sameDayBlocked) {
     return (

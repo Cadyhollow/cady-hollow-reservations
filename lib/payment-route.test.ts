@@ -36,7 +36,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { fetchDateFacts, checkDateFacts, checkSeason } from './bookability.ts'
+import { fetchDateFacts, checkDateFacts, isNightInSeason, parseMonthDay, addDays } from './bookability.ts'
 import { computeBookingQuote, resolveNightlyRate } from './booking-quote.ts'
 import { ruleAppliesToSite } from './bookability.ts'
 
@@ -245,7 +245,7 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
   if (!free) return t.skip('no free site in the sample week — nothing to prove the negative with')
   // The season must actually contain the sample week, or this asserts the wrong thing.
   const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+  if (isNightInSeason(arrival, st) === false) {
     return t.skip('sample week falls outside the configured season')
   }
 
@@ -282,7 +282,7 @@ test('payment: a forged price is refused before any charge', { skip }, async (t)
   const free = (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable)
   if (!free) return t.skip('no free site in the sample week')
   const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+  if (isNightInSeason(arrival, st) === false) {
     return t.skip('sample week falls outside the configured season')
   }
 
@@ -309,7 +309,7 @@ test('payment: an unknown discount code is refused', { skip }, async (t) => {
   const free = (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable)
   if (!free) return t.skip('no free site in the sample week')
   const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+  if (isNightInSeason(arrival, st) === false) {
     return t.skip('sample week falls outside the configured season')
   }
 
@@ -325,4 +325,95 @@ test('payment: an unknown discount code is refused', { skip }, async (t) => {
   assert.equal(r.gated, true, 'a forged discount reached Square')
   assert.equal(r.json.reason, 'discount-invalid',
     `expected the discount check to refuse it, got: ${JSON.stringify(r.json)}`)
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE CLOSED SEASON — whole-stay, hard block, public path
+//
+// The defect these cover was LIVE on book.cadyhollow.com and took money: checkBookability passed
+// the ARRIVAL alone to the season gate, so a stay that began in season and ran past the October
+// closing was accepted and charged, and a guest could occupy a site for weeks after the park had
+// shut.
+//
+// ── THESE TESTS WRITE NOTHING ────────────────────────────────────────────────────────────────
+//
+// This suite runs against the LIVE production database. The template's equivalents set and
+// restore the season around each test; doing that here would mutate the real park's configuration
+// and, for those seconds, show real guests on book.cadyhollow.com the wrong season.
+//
+// They do not need to. Cady HAS a real season configured, so a stay that straddles its own
+// closing date is craftable from the park's own settings with no write at all — the tests read
+// the season and pick dates around it. A refusal returns before the reservation insert, and the
+// server is started with an invalid Square token, so nothing is charged and nothing is stored.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// The park's real season, or null when it has none configured.
+async function configuredSeason() {
+  const { data } = await supabase
+    .from('settings').select('season_start, season_end').limit(1).single()
+  if (!data?.season_start || !data?.season_end) return null
+  return data
+}
+
+// A date inside the season and a departure past its close, in a year far enough ahead that the
+// site is certainly free — derived from the park's own settings, never hardcoded.
+function straddlingDates(season: any, year: number) {
+  const end = parseMonthDay(season.season_end)
+  if (!end) return null
+  const close = `${year}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`
+  return { arrival: addDays(close, -6), departure: addDays(close, 9), close }
+}
+
+test('payment: a stay that runs PAST CLOSING is refused, and never reaches Square', { skip }, async (t) => {
+  const season = await configuredSeason()
+  if (!season) return t.skip('this park has no season configured')
+  const d = straddlingDates(season, new Date().getFullYear() + 1)
+  if (!d) return t.skip('season_end is not readable')
+
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, d.arrival, d.departure)
+  const free = (sites || []).find((x: any) => checkDateFacts(x.id, facts).bookable)
+  if (!free) return t.skip('no free site across the closing date')
+
+  const r = await post({ siteId: free.id, arrival: d.arrival, departure: d.departure, nights: 15 })
+
+  assert.ok(r.gated, `a stay running past closing reached Square: ${JSON.stringify(r.json)}`)
+  assert.equal(r.json.reason, 'out-of-season', 'refused by the season gate specifically')
+  assert.equal(r.status, 400)
+})
+
+test('payment: arriving on the last open day and leaving the next is accepted', { skip }, async (t) => {
+  // The off-by-one that would ship if the span were validated "through departure" instead of
+  // through departure-1: a guest checking out the morning after closing day is a normal booking.
+  const season = await configuredSeason()
+  if (!season) return t.skip('this park has no season configured')
+  const end = parseMonthDay(season.season_end)
+  if (!end) return t.skip('season_end is not readable')
+
+  const year = new Date().getFullYear() + 1
+  const arrival = `${year}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`
+  const departure = addDays(arrival, 1)
+
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, arrival, departure)
+  const free = (sites || []).find((x: any) => checkDateFacts(x.id, facts).bookable)
+  if (!free) return t.skip('no free site on the closing date')
+
+  const r = await post({ siteId: free.id, arrival, departure, nights: 1 })
+
+  assert.notEqual(r.json.reason, 'out-of-season',
+    `the checkout boundary was wrongly refused: ${JSON.stringify(r.json)}`)
+})
+
+test('availability: the search refuses the same past-closing stay the route does', { skip }, async (t) => {
+  const season = await configuredSeason()
+  if (!season) return t.skip('this park has no season configured')
+  const d = straddlingDates(season, new Date().getFullYear() + 1)
+  if (!d) return t.skip('season_end is not readable')
+
+  const res = await fetch(`${BASE}/api/availability?arrival=${d.arrival}&departure=${d.departure}`)
+  const json: any = await res.json()
+  assert.equal(json.closed, true, `search offered a stay running past closing: ${JSON.stringify(json)}`)
+  assert.ok(Array.isArray(json.sites) && json.sites.length === 0)
 })
