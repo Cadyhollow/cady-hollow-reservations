@@ -11,6 +11,7 @@ import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -489,7 +490,14 @@ export default function GuestAccountPage() {
   const ledgerFoldDate = ledgerHasFold ? ledgerEvents[ledgerFoldIndex].sub : ''
   const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
 
-  const filteredProducts = products.filter(p => p.category === activeCategory)
+  // Sorted for DISPLAY only — the products, their prices and the Add-to-Tab behaviour are
+  // untouched. Shares byNameAsc with the category tiles so the two orderings cannot drift, and
+  // `numeric: true` keeps an item like "3 candy bars" with the numbers rather than between
+  // "2" and "20".
+  const filteredProducts = products
+    .filter(p => p.category === activeCategory)
+    .slice()
+    .sort((a, b) => byNameAsc(a.name, b.name))
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading account...</div>
   if (!guest) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Guest not found.</div>
@@ -660,18 +668,9 @@ const supabase = createBrowserSupabase()
         {/* Add Items panel */}
         <div style={{ width: 'min(420px, 100%)', background: '#C9D2D9', borderLeft: '1px solid #b8c4cc', display: activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           {activeCategory === '' ? (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', ...POS_TILE_GRID }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#4a6275', marginBottom: 4 }}>Select a category</div>
-              {categories.map(cat => (
-                <button key={cat} onClick={() => setActiveCategory(cat)}
-                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 12, padding: '18px 20px', fontSize: 16, fontWeight: 700, cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 6px rgba(46,107,138,0.3)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#245875')}
-                  onMouseLeave={e => (e.currentTarget.style.background = '#2E6B8A')}
-                >
-                  <span>{cat}</span>
-                  <span style={{ fontSize: 20, opacity: 0.7 }}>›</span>
-                </button>
-              ))}
+              <PosCategoryTiles categories={categories} onSelect={setActiveCategory} />
             </div>
           ) : (
             <>
