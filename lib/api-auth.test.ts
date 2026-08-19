@@ -147,6 +147,11 @@ const GATED: [string, string][] = [
   ['POST', '/api/guests/balances'],
   ['GET', '/api/me'],
   ['POST', '/api/manual-booking'],
+  // The To-Do board's two routes. Both gate themselves with requireRole(request, 'staff') as
+  // their first statement — middleware.ts's matcher is ['/admin/:path*'] and never sees /api/*,
+  // so an ungated route here would be open to anyone who guessed the URL.
+  ['GET', '/api/profiles/assignable'],
+  ['POST', '/api/tasks/generate'],
   ['POST', '/api/receipt'],
   ['POST', '/api/refund'],
   ['POST', '/api/reservation-cancel'],

@@ -20,6 +20,7 @@ type Site = {
   max_rv_length: number | null
   hookups: string
   is_available: boolean
+  needs_prep?: boolean
   base_rate: number
   description: string
   display_order: number
@@ -39,6 +40,7 @@ const emptySite = {
   max_rv_length: '',
   hookups: 'full',
   is_available: true,
+  needs_prep: false,
   base_rate: '',
   description: '',
   display_order: 0,
@@ -62,12 +64,30 @@ export default function SitesPage() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
 
+  // Whether this park's `sites` table has needs_prep at all — the To-Do board's phase-2 column.
+  //
+  // WHY DETECT RATHER THAN ASSUME: the To-Do migration is applied per park, and writing a column
+  // that does not exist fails the WHOLE site save — which would stop an owner editing a nightly
+  // rate. Read from a loaded row, so it self-activates the moment the migration lands and needs
+  // no second deploy.
+  const [hasPrepColumn, setHasPrepColumn] = useState(false)
+  // The park's check-in-prep master switch, read only so this page can tell whether the
+  // "no sites marked" warning is relevant.
+  const [checkinPrepEnabled, setCheckinPrepEnabled] = useState(false)
+
   useEffect(() => { fetchSites(); fetchCategories() }, [])
 
   async function fetchSites() {
     const { data } = await supabase.from('sites').select('*').order('display_order')
     setSites(data || [])
+    if (data && data.length > 0) setHasPrepColumn('needs_prep' in data[0])
     setLoading(false)
+
+    // select('*'), not a named column list: on a park without the To-Do columns a named
+    // `checkin_prep_enabled` would make PostgREST error and this read return nothing at all.
+    // Read-only — this page never writes settings.
+    const { data: st } = await supabase.from('settings').select('*').limit(1).maybeSingle()
+    setCheckinPrepEnabled(!!st?.checkin_prep_enabled)
     // Fetch site_categories for all sites
     const { data: sc } = await supabase.from('site_categories').select('*')
     if (sc) {
@@ -112,6 +132,7 @@ export default function SitesPage() {
       max_rv_length: site.max_rv_length?.toString() || '',
       hookups: site.hookups,
       is_available: site.is_available,
+      needs_prep: site.needs_prep || false,
       base_rate: (site.base_rate / 100).toString(),
       description: site.description || '',
       display_order: site.display_order,
@@ -146,6 +167,9 @@ export default function SitesPage() {
       max_rv_length: form.max_rv_length ? parseInt(form.max_rv_length as string) : null,
       hookups: form.site_type === 'rv_site' ? form.hookups : 'none',
       is_available: form.is_available,
+      // Guarded — see hasPrepColumn. Spreads to nothing on a park without the column, so the save
+      // behaves exactly as it did before the To-Do board existed.
+      ...(hasPrepColumn ? { needs_prep: form.needs_prep } : {}),
       base_rate: Math.round(parseFloat(form.base_rate as string) * 100),
       description: form.description,
       display_order: form.display_order,
@@ -247,6 +271,24 @@ export default function SitesPage() {
         </div>
       </div>
 
+      {/* ── THE SILENT-TRAP GUARD ────────────────────────────────────────────────────────────
+          sites.needs_prep defaults to FALSE on all 40 sites, so the moment an owner switches
+          check-in prep on in the To-Do board's "Manage reminders" view, NOTHING happens until
+          they mark some sites. Without this banner the only symptom is no prep tasks ever
+          appearing — which looks like a broken feature rather than a setting nobody finished.
+
+          Shown only while it is true, so it disappears the instant a site is marked. */}
+      {hasPrepColumn && checkinPrepEnabled && sites.length > 0 && !sites.some(s => s.needs_prep) && (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Check-in prep is on, but no sites are marked as needing prep.</p>
+          <p className="text-sm text-amber-800 mt-1">
+            No prep tasks will appear on the To-Do board until at least one site is marked.
+            Edit a site below and switch on &ldquo;Needs prep before check-in&rdquo; — usually cabins and
+            rooms, rarely tent or RV sites.
+          </p>
+        </div>
+      )}
+
       {/* Category Manager */}
       {showCategoryForm && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
@@ -334,6 +376,19 @@ export default function SitesPage() {
               </button>
               <label className="text-sm font-medium text-gray-700">Available for booking</label>
             </div>
+            {/* To-Do board: does this site need preparing before a guest arrives?
+                Shown whenever this park has the column, WITHOUT requiring check-in prep to be
+                switched on first — a park should be able to mark its cabins before turning the
+                feature on, because the alternative is switching it on, getting nothing, and
+                having no way to see why. The banner at the top covers the other order. */}
+            {hasPrepColumn && (
+              <div className="flex items-center gap-3">
+                <button type="button" role="switch" aria-checked={!!form.needs_prep} aria-label="Needs prep before check-in" onClick={() => setForm({ ...form, needs_prep: !form.needs_prep })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.needs_prep ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
+                  <span style={{ position: 'absolute', top: '3px', left: form.needs_prep ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+                </button>
+                <label className="text-sm font-medium text-gray-700">Needs prep before check-in</label>
+              </div>
+            )}
             <div className="md:col-span-2 lg:col-span-3">
               <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
               <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Any extra details customers should know..." value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
