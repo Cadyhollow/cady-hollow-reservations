@@ -31,6 +31,7 @@ type ArrivalGuest = {
 }
 
 import WaiverActions from './reservations/WaiverActions'
+import TodoPanel from './TodoPanel'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
@@ -64,6 +65,11 @@ export default function AdminDashboard() {
   const [walkinCountToday, setWalkinCountToday] = useState(0)
   const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
   const [seasonalStats, setSeasonalStats] = useState<{ season_year: number; total: number; signed: number; unsigned: number } | null>(null)
+  // Whether this park has the `tasks` table, as reported by TodoPanel once it knows. Drives the
+  // LAYOUT only: before the To-Do migration is applied the panel renders nothing, and the
+  // quick-action buttons below must take the full width back rather than sit in part of a row
+  // with an empty column beside them.
+  const [todoAvailable, setTodoAvailable] = useState(false)
 
   useEffect(() => {
     const stored = localStorage.getItem('resonation_dashboard_view')
@@ -460,6 +466,16 @@ export default function AdminDashboard() {
         )}
       </div>
 
+      {/* Two-column row: everything that was here before on the LEFT, the shared To-Do board on
+          the RIGHT. Nothing below is restyled or removed — the seasonal banner and the quick-link
+          grid are exactly as they were, only nested one level deeper.
+
+          `items-start` so the two columns size independently: the To-Do panel scrolls inside its
+          own fixed height and must not stretch the left column. Below `lg` this collapses to one
+          column and the board stacks underneath the buttons. */}
+      <div className={`grid gap-6 items-start mb-8 ${todoAvailable ? 'grid-cols-1 lg:grid-cols-12' : 'grid-cols-1'}`}>
+        <div className={todoAvailable ? 'lg:col-span-7' : ''}>
+
       {/* Owner-only seasonal contracts card — summit-gated. Hidden for staff view,
           non-summit plans, and when there are no seasonal campers. */}
       {dashboardView === 'owner' && planAtLeast(plan, 'summit') && seasonalStats && seasonalStats.total > 0 && (
@@ -486,7 +502,7 @@ export default function AdminDashboard() {
       {/* Quick links — color-coded by task type (money → lookup → admin), one soft
           family extended from the info tiles, heroicons, fixed placement so staff
           learn color + position. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-5 mb-8">
+      <div className={`grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-5 mb-8 ${todoAvailable ? 'lg:grid-cols-3' : ''}`}>
         {[
           // Everyday money — warm hues, most prominent (first)
           { label: 'New Reservation', href: '/admin/new-reservation', Icon: PlusCircleIcon, bg: '#dcfce7', border: '#86efac', text: '#15803d' },
@@ -508,6 +524,15 @@ export default function AdminDashboard() {
             <p className="text-base font-bold" style={{ color: link.text }}>{link.label}</p>
           </Link>
         ))}
+      </div>
+
+        </div>
+
+        {/* RIGHT: the shared To-Do board. Renders null — and reports so — until this park has run
+            the To-Do migration. Admin only; there is no guest-facing counterpart. */}
+        <div className={todoAvailable ? 'lg:col-span-5' : ''}>
+          <TodoPanel onAvailability={setTodoAvailable} />
+        </div>
       </div>
 
       {/* Today's Check-In List */}
