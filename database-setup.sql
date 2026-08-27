@@ -257,7 +257,8 @@ CREATE TABLE IF NOT EXISTS guests (
   home_street text,
   home_city text,
   home_state text,
-  home_zip text
+  home_zip text,
+  party jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS taxes (
@@ -673,6 +674,7 @@ CREATE TABLE IF NOT EXISTS seasonal_contracts (
   camper_year integer,
   total_due_cents integer,
   staff_notes text,
+  charge_note text,
   sent_at timestamptz,
   signed_at timestamptz,
   CONSTRAINT seasonal_contracts_guest_id_season_year_key UNIQUE (guest_id, season_year)
