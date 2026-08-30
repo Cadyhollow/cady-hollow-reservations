@@ -87,7 +87,13 @@ export async function GET(request: NextRequest) {
     query = query.eq('site_type', siteType)
   }
 
-  const { data: sites, error } = await query
+  const { data: sitesRaw, error } = await query
+  // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY. A site sold for the SEASON has a camper
+  // living on it; offering it by the night double-books a real person. Filtered in memory
+  // rather than with .eq('is_seasonal_site', false) on purpose: `!== true` treats false,
+  // null and a MISSING COLUMN alike, so a park whose database has not had the seasonal-site
+  // migration behaves exactly as it did before this line existed.
+  const sites = (sitesRaw || []).filter((x: { is_seasonal_site?: boolean }) => x.is_seasonal_site !== true)
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

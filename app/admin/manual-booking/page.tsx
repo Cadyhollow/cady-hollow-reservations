@@ -88,7 +88,13 @@ function ManualBookingInner() {
   }
 
   async function fetchSites(arrivalDate?: string, departureDate?: string) {
-    const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    const { data: allSitesRaw } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY. A site sold for the SEASON has a camper
+    // living on it; offering it by the night double-books a real person. Filtered in memory
+    // rather than with .eq('is_seasonal_site', false) on purpose: `!== true` treats false,
+    // null and a MISSING COLUMN alike, so a park whose database has not had the seasonal-site
+    // migration behaves exactly as it did before this line existed.
+    const allSites = (allSitesRaw || []).filter((x: { is_seasonal_site?: boolean }) => x.is_seasonal_site !== true)
     if (!arrivalDate || !departureDate || !allSites) {
       setSites(allSites || [])
       setLoading(false)

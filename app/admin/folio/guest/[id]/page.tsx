@@ -1,24 +1,22 @@
 'use client'
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
-import { notVoided, sumLineTaxes } from '@/lib/ledger'
-import { cardSurchargeFor } from '@/lib/pricing'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
+import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { classifyLineItem, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { notVoided } from '@/lib/ledger'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
-import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
-import { createBrowserSupabase } from '@/lib/supabase-browser'
-import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
 const supabase = createBrowserSupabase()
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
@@ -45,6 +43,10 @@ type LineItem = {
   category: string
   charged_at: string
   notes?: string | null
+  /** Phase 4. Explicit lane tag / store signal — both come through select('*'). */
+  lane?: string | null
+  product_id?: string | null
+  /** PR 3c. A canceled charge. Displayed, never summed. */
   voided?: boolean | null
 }
 
@@ -56,6 +58,7 @@ type Payment = {
   status: string
   note: string
   paid_at: string
+  lane?: string | null
 }
 
 type Product = {
@@ -87,6 +90,14 @@ export default function GuestAccountPage() {
   const router = useRouter()
   const guestId = params.id as string
 
+  const { role, roleLoaded } = useRole()
+
+  // Manager+ for anything that moves money — refunds and voids. PRESENTATION ONLY: /api/refund
+  // and /api/reservation-refund call requireRole(request, 'manager') and the RLS policy on
+  // folio_payments UPDATE is manager+ too, so a Staff caller is refused twice over whether or
+  // not the button was drawn. `roleLoaded` keeps it hidden until the answer arrives.
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
+
   const [guest, setGuest] = useState<Guest | null>(null)
   const [folio, setFolio] = useState<Folio | null>(null)
   const [lineItems, setLineItems] = useState<LineItem[]>([])
@@ -104,11 +115,15 @@ export default function GuestAccountPage() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [cashTendered, setCashTendered] = useState('')
   const [maxCreditAmount, setMaxCreditAmount] = useState(0)
+  // Phase 4 PR 3b. Read in its OWN query, never folded into the settings select above: a tenant
+  // that has not run the Phase 4 migration has no billing_mode column, and widening that select
+  // would break this page — the folio — for them. Every failure path lands on 'combined'.
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
+  const [electricItemIds, setElectricItemIds] = useState<Set<string>>(new Set())
+  const [assigningLane, setAssigningLane] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
-  const cardRef = useRef<SquareCardHandle>(null)
-  const [cardReady, setCardReady] = useState(false)
   const [terminalStatus, setTerminalStatus] = useState('idle')
   const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [paymentNote, setPaymentNote] = useState('')
@@ -137,6 +152,8 @@ export default function GuestAccountPage() {
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
     // Find or create a standing folio for this guest using guest_id
@@ -173,10 +190,10 @@ export default function GuestAccountPage() {
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at'),
       // Refund rows count here too — the same widening the main folio, the reservations pane
-      // and every revenue query already had. Filtering to 'completed' dropped both halves of a
+      // and every revenue query already had. Filtering to 'completed' dropped BOTH halves of a
       // refund: the negative row AND the original, whose status flips to 'refunded' /
-      // 'partially_refunded' when it is refunded. So a refunded guest account read as though
-      // the money were still paid, and its credit balance was overstated by the refund.
+      // 'partially_refunded' when it is refunded. So a refunded guest account understated what
+      // had been paid and overstated the balance due.
       //
       // The arithmetic below is already signed — paymentsTotal sums `amount - surcharge_amount`
       // and a refund row is negative in both — so including these rows SUBTRACTS them. Widening
@@ -186,6 +203,38 @@ export default function GuestAccountPage() {
     ])
     setLineItems(items || [])
     setPayments(pmts || [])
+
+    // The electric signal for lane classification — the readings that point at these charges.
+    // Not the category: see the note in lib/ledger-lanes.ts about 'Fees' colliding with the POS.
+    const ids = (items || []).map((i: LineItem) => i.id)
+    if (ids.length) {
+      const { data: readings } = await supabase
+        .from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', ids)
+      setElectricItemIds(new Set(((readings || []) as { folio_line_item_id: string }[])
+        .map(r => r.folio_line_item_id).filter(Boolean)))
+    } else {
+      setElectricItemIds(new Set())
+    }
+  }
+
+  /**
+   * Attribute an existing UNTAGGED payment to a lane — Phase 4 PR 3b, Part D.
+   *
+   * Pure tidy-up. It moves nothing between accounts and changes no amount: it sets `lane` on a
+   * payment, so a payment taken before lanes existed (or through an older path) can be filed
+   * where it belongs. The account balance is untouched BY CONSTRUCTION — the row's amount is
+   * never read, let alone written; only which lane it offsets changes.
+   *
+   * PR 3c widened it from "file an unassigned payment" to "file OR MOVE one", so a credit
+   * defaulted onto the wrong lane can be corrected. Same gate (canMoveMoney), same guarantee.
+   */
+  async function assignPaymentLane(paymentId: string, lane: string) {
+    if (!folio || !lane) return
+    setAssigningLane(paymentId)
+    const { error } = await supabase.from('folio_payments').update({ lane }).eq('id', paymentId)
+    setAssigningLane('')
+    if (error) { alert('Could not file that payment: ' + error.message); return }
+    await loadFolioData(folio.id)
   }
 
   async function addProduct(product: Product, overridePrice?: number, qty: number = 1, notes: string = '') {
@@ -241,13 +290,6 @@ export default function GuestAccountPage() {
   // Seeded at the full remaining. A guest-account payment is an electric bill, a storage fee,
   // a prepayment — nothing a cancellation policy governs — so there is no percentage to apply,
   // exactly as on the main folio's own payment rows.
-  // PR 5b-2 follow-up: refunds and voids are Manager+. Staff legitimately work this page to take
-  // payments and ring up items, so the page stays Staff-level and only these actions are hidden.
-  // The server refuses them regardless — /api/refund and /api/reservation-refund answer 403, and
-  // the void is a raw folio_payments UPDATE that the 5b-1 RLS policy gates at manager.
-  const { role, roleLoaded } = useRole()
-  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
-
   function openRefund(payment: any) {
     if (!folio) return
     const { remainingCents } = folioPaymentRefundable(payment, payments)
@@ -265,25 +307,14 @@ export default function GuestAccountPage() {
 
   async function voidPayment(id: string) {
     if (!confirm('Void this payment?')) return
-    // Checked, not discarded. Voiding is a raw folio_payments UPDATE and the PR 5b-1 policy gates
-    // it at manager, so a Staff session is refused here. RLS hides the row rather than raising,
-    // so an empty result IS the refusal — without asking for the updated row back this reported
-    // success and then silently un-voided itself on the next reload.
-    const { data: voided, error: voidError } = await supabase
-      .from('folio_payments').update({ status: 'voided' }).eq('id', id).select('id')
-
-    if (voidError || !voided?.length) {
-      alert('You do not have permission to void payments.')
-      return
-    }
-
+    await supabase.from('folio_payments').update({ status: 'voided' }).eq('id', id)
     await loadFolioData(folio!.id)
   }
 
   async function sendToTerminal() {
     if (!folio) return
-    const surchargeAmount = !waiveFee
-      ? cardSurchargeFor(paymentAmountCents, totalDue, folioNonTaxBase, cardSurcharge)
+    const surchargeAmount = cardSurcharge > 0 && !waiveFee
+      ? Math.round(paymentAmountCents * (cardSurcharge / 100))
       : 0
     const totalCharge = paymentAmountCents + surchargeAmount
     setTerminalStatus('waiting')
@@ -343,8 +374,8 @@ export default function GuestAccountPage() {
         return
       }
     }
-    const surchargeAmount = paymentMethod === 'card' && !waiveFee
-      ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge)
+    const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
+      ? Math.round(baseAmount * (cardSurcharge / 100))
       : 0
     const totalAmount = baseAmount + surchargeAmount
     setSavingPayment(true)
@@ -368,62 +399,22 @@ export default function GuestAccountPage() {
     await loadFolioData(folio.id)
   }
 
-  // Manual (keyed) card — tokenize in-browser then charge server-side via Square.
-  // The API records the folio_payment (with square_payment_id); we just reload.
-  async function chargeManualCard() {
-    if (!folio || !cardRef.current?.ready) return
-    const baseAmount = Math.round(parseFloat(paymentAmount || '0') * 100)
-    if (!baseAmount || baseAmount <= 0) return
-    // Prepayment onto a zero balance becomes credit — enforce the credit cap (warn, allow override).
-    const isPrepay = totalDue === 0
-    if (isPrepay && maxCreditAmount > 0 && baseAmount > maxCreditAmount) {
-      if (!confirm('This will add a credit of $' + (baseAmount/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
-        return
-      }
-    }
-    setSavingPayment(true)
-    const result = await cardRef.current.tokenize()
-    if (!result.ok) { alert(result.error); setSavingPayment(false); return }
-    const surchargeAmount = !waiveFee ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge) : 0
-    const totalAmount = baseAmount + surchargeAmount
-    const res = await fetch('/api/admin-card-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sourceId: result.token,
-        folioId: folio.id,
-        amount: totalAmount,
-        surchargeAmount,
-        note: paymentNote,
-        guestName: guest?.name || folio.guest_name || '',
-      }),
-    })
-    const data = await res.json()
-    if (data.success) {
-      setShowPayment(false)
-      setPaymentAmount('')
-      setCashTendered('')
-      setPaymentNote('')
-      setPaymentMethod('cash')
-      setWaiveFee(false)
-      setCardEntryMode('terminal')
-      setCardReady(false)
-      await loadFolioData(folio.id)
-    } else {
-      alert(data.error || 'Card payment failed')
-      setSavingPayment(false)
-    }
-  }
-
-  // Phase D: voided charges drop out of the balance AND the inline ledger (via
-  // activeItems), mirroring folio/[id]. Admin still sees them elsewhere; 0 voided today.
-  const activeItems = lineItems.filter(notVoided)
-  const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
+  // ⚠ PHASE 4 PR 3c — A VOIDED CHARGE MUST NEVER COUNT TOWARD A BALANCE. This filter was
+  // missing here and nowhere else: lib/ledger.ts exports `notVoided` and every other balance in
+  // the app applies it, but this page summed line items raw. A camper with a canceled seasonal
+  // packet showed the canceled fee as still owing, and a member of staff reading this page would
+  // have asked them for money they do not owe.
+  //
+  // APPLIED IN BOTH BILLING MODES, deliberately, and it is the one change in this PR that is not
+  // gated on `separated`: a canceled charge is wrong to count anywhere, and a combined park with
+  // a voided row has exactly the same bug. On a folio with no voided rows the filter removes
+  // nothing and the figure is identical to before.
+  //
+  // Filtered at the SUM, not at the query — the rows stay in the history below, struck through,
+  // so the audit trail still shows the charge was deliberately canceled rather than missing.
+  const itemsTotal = lineItems.filter(notVoided).reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
-  // Non-tax base for the card surcharge: balance minus POS tax baked into line totals
-  // (0 today; correct-by-construction for T3). cashTotal for the cap is totalDue.
-  const folioNonTaxBase = totalDue - sumLineTaxes(lineItems)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   // The part of this payment that lands beyond what is owed, and therefore becomes an
@@ -433,7 +424,7 @@ export default function GuestAccountPage() {
   // became the workaround.
   const creditPortionCents = Math.max(0, paymentAmountCents - totalDue)
   const creditExceedsCap = maxCreditAmount > 0 && creditPortionCents > maxCreditAmount
-  const surchargePreview = paymentMethod === 'card' && !waiveFee ? cardSurchargeFor(paymentAmountCents, totalDue, folioNonTaxBase, cardSurcharge) : 0
+  const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   // ---- Chronological ledger: charges + payments interleaved with a running balance ----
   type LedgerEvent = {
@@ -451,6 +442,9 @@ export default function GuestAccountPage() {
     // Negative on refund rows, hence the sign check at render.
     feeAmount?: number
     amount: number
+    /** PR 3c. A canceled charge: still DISPLAYED (struck through) as the audit trail, but
+     *  excluded from the running balance and from every total. */
+    voided?: boolean
     itemId?: string
     paymentId?: string
     // The row itself, and what it can still hand back. Same guard the main folio uses: the
@@ -458,15 +452,11 @@ export default function GuestAccountPage() {
     payment?: any
     refundableCents?: number
     balanceAfter: number
-    voided?: boolean
   }
   const ledgerEvents: LedgerEvent[] = []
   let _lOrder = 0
-  // Phase C1 — DISPLAY iterates ALL line items so voided rows stay visible (admin
-  // audit trail, Decision 2d); the running balance below skips voided charges so the
-  // math is unchanged. Balance headline still uses activeItems. No-op today (0 voided).
   lineItems.forEach((item) => {
-    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0, voided: item.voided === true })
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, voided: !notVoided(item), itemId: item.id, balanceAfter: 0 })
   })
   payments.forEach((p) => {
     // A refund row is itself a payment event with a negative amount; folioPaymentRefundable
@@ -477,7 +467,9 @@ export default function GuestAccountPage() {
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
   ledgerEvents.forEach(ev => {
-    if (ev.kind === 'charge') { if (!ev.voided) _lBal += ev.amount }
+    // A voided charge moves the balance by nothing — it is shown for the record only.
+    if (ev.voided) { ev.balanceAfter = _lBal; return }
+    if (ev.kind === 'charge') _lBal += ev.amount
     else _lBal -= ev.amount
     ev.balanceAfter = _lBal
   })
@@ -490,10 +482,98 @@ export default function GuestAccountPage() {
   const ledgerFoldDate = ledgerHasFold ? ledgerEvents[ledgerFoldIndex].sub : ''
   const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
 
-  // Sorted for DISPLAY only — the products, their prices and the Add-to-Tab behaviour are
-  // untouched. Shares byNameAsc with the category tiles so the two orderings cannot drift, and
-  // `numeric: true` keeps an item like "3 candy bars" with the numbers rather than between
-  // "2" and "20".
+  // ── PHASE 4 PR 3b: THE LANE VIEW ─────────────────────────────────────────────────────────
+  //
+  // ONLY for a SEASONAL camper at a SEPARATED park. Every other folio — combined mode, a
+  // transient guest's account, a reservation folio — falls through to the flat ledger below,
+  // which is untouched.
+  //
+  // ⚠ IT REGROUPS; IT NEVER FILTERS. Every charge, payment and refund in `ledgerEvents` appears
+  // in exactly one group, so the audit trail this page exists for is complete either way. The
+  // grand total is still `totalDue` / `overpaid` — the same figures the flat view prints — so
+  // the two views cannot disagree about what is owed.
+  const laneView = billingMode === 'separated' && !!guest?.is_seasonal
+  const laneOf = (ev: LedgerEvent): Lane | 'unassigned' => {
+    if (ev.itemId) {
+      const item = lineItems.find(i => i.id === ev.itemId)
+      return item ? classifyLineItem({ ...item, id: item.id }, { electricLineItemIds: electricItemIds }) : 'other'
+    }
+    const lane = ev.payment?.lane
+    return lane === 'electric' || lane === 'store' || lane === 'seasonal' || lane === 'other' ? lane : 'unassigned'
+  }
+  const ledgerRow = (ev: LedgerEvent) => {
+                const isPay = ev.kind === 'payment'
+                const balPositive = ev.balanceAfter > 0
+                const balZero = ev.balanceAfter === 0
+                const balText = balZero ? 'settled' : balPositive ? 'balance due' : 'credit'
+                const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
+                return (
+                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 500, textDecoration: ev.voided ? 'line-through' : 'none', color: ev.voided ? '#9ca3af' : undefined }}>
+                        {ev.label}
+                        {ev.voided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px', textDecoration: 'none', verticalAlign: 'middle' }}>VOIDED</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
+                      {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
+                      {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
+                      {/* Informational only — already excluded from the amount at right and
+                          from every total. Cash and check carry no fee, so this is blank.
+                          "plus … charged": the fee is added on top of the base, and the amount
+                          at right is the base. See the staff folio for the full reasoning. */}
+                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
+                    </div>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: ev.voided ? '#9ca3af' : isPay ? '#15803d' : '#111827', textDecoration: ev.voided ? 'line-through' : 'none' }}>
+                      {/* A refund is a payment event with a NEGATIVE amount, so the literal
+                          '−' was prepended to an already-negative number: "−$-36.00". This
+                          could not render before — the query filtered refund rows out — so
+                          widening the filter above is exactly what exposes it. Same fix the
+                          main folio got in C1: take the magnitude, let one sign carry the
+                          meaning. '−' reduces the balance, '+' gives money back. */}
+                      {isPay && ev.amount < 0 ? '+' : isPay ? '−' : ''}${(Math.abs(ev.amount)/100).toFixed(2)}
+                    </div>
+                    <div style={{ width: 92, textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
+                      <div style={{ fontSize: 10, color: '#9ca3af' }}>{balText}</div>
+                    </div>
+                    <div style={{ width: 28, flexShrink: 0, textAlign: 'right' }}>
+                      {ev.itemId && (
+                        <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
+                      )}
+                      {/* Gated on what is still refundable, like every other surface — not on
+                          the row's status, which flips to 'partially_refunded' after the first
+                          partial and used to retire the button for good. */}
+                      {ev.payment && (ev.refundableCents || 0) > 0 && canMoveMoney && (
+                        <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, marginRight: 6 }}>Refund</button>
+                      )}
+                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
+                        <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
+                      )}
+                    </div>
+                  </div>
+                )
+  }
+
+  const LANE_SECTIONS: { key: Lane | 'unassigned'; label: string; blurb: string }[] = [
+    { key: 'electric', label: 'Electric', blurb: 'Metered electricity' },
+    { key: 'store', label: 'Store', blurb: 'Camp store purchases' },
+    { key: 'seasonal', label: 'Seasonal', blurb: 'Site fee for the season' },
+    { key: 'other', label: 'Other charges', blurb: 'Anything not in a lane above' },
+    { key: 'unassigned', label: 'Not assigned to a lane', blurb: 'Credits and payments that belong to the account rather than one lane — file them in a tap' },
+  ]
+  const laneGroups = LANE_SECTIONS.map(sec => {
+    const events = ledgerEvents.filter(ev => laneOf(ev) === sec.key)
+    // Voided charges are shown in the group but excluded from its subtotal, exactly as they are
+    // excluded from itemsTotal — otherwise a lane would disagree with the account it rolls up to.
+    const charges = events.filter(e => e.kind === 'charge' && !e.voided).reduce((s, e) => s + e.amount, 0)
+    const paid = events.filter(e => e.kind === 'payment').reduce((s, e) => s + e.amount, 0)
+    return { ...sec, events, charges, paid, subtotal: charges - paid }
+  }).filter(g => g.events.length > 0)
+
+  // Sorted for DISPLAY only — the underlying products, their prices and the Add-to-Tab
+  // behaviour are untouched. Shares byNameAsc with the category tiles so the two orderings
+  // cannot drift, and `numeric: true` keeps an item like "3 candy bars" with the numbers
+  // instead of between "2" and "20".
   const filteredProducts = products
     .filter(p => p.category === activeCategory)
     .slice()
@@ -535,7 +615,7 @@ export default function GuestAccountPage() {
         {/* Account tab */}
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
 
-          {ledgerEvents.length > 0 && (
+          {ledgerEvents.length > 0 && !laneView && (
             <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
                 <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
@@ -554,78 +634,7 @@ export default function GuestAccountPage() {
                 </button>
               )}
 
-              {visibleLedger.map((ev) => {
-                const isPay = ev.kind === 'payment'
-                const isVoided = ev.voided === true
-                const balPositive = ev.balanceAfter > 0
-                const balZero = ev.balanceAfter === 0
-                const balText = balZero ? 'settled' : balPositive ? 'balance due' : 'credit'
-                const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
-                return (
-                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isVoided ? '#f9fafb' : isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent', opacity: isVoided ? 0.6 : 1 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500, textDecoration: isVoided ? 'line-through' : 'none', color: isVoided ? '#9ca3af' : 'inherit' }}>
-                        {ev.label}
-                        {isVoided && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 5px', textDecoration: 'none', verticalAlign: 'middle' }}>VOIDED</span>}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
-                      {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
-                      {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
-                      {/* Informational only — already excluded from the amount at right and
-                          from every total. Cash and check carry no fee, so this is blank.
-import { createBrowserSupabase } from '@/lib/supabase-browser'
-
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
-const supabase = createBrowserSupabase()
-                          "plus … charged": the fee is added on top of the base, and the amount
-                          at right is the base. See the staff folio for the full reasoning. */}
-                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
-                    </div>
-                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isVoided ? '#9ca3af' : isPay ? '#15803d' : '#111827', textDecoration: isVoided ? 'line-through' : 'none' }}>
-                      {/* A refund is a payment event with a NEGATIVE amount, so the literal
-                          '−' was prepended to an already-negative number: "−$-36.00". This
-                          could not render before — the query filtered refund rows out — so
-                          widening the filter above is exactly what exposes it. Same fix the
-                          main folio got in C1: take the magnitude, let one sign carry the
-                          meaning. '−' reduces the balance, '+' gives money back. */}
-                      {isPay && ev.amount < 0 ? '+' : isPay ? '−' : ''}${(Math.abs(ev.amount)/100).toFixed(2)}
-                    </div>
-                    <div style={{ width: 92, textAlign: 'right' }}>
-                      {isVoided ? (
-                        <div style={{ fontSize: 10, color: '#9ca3af' }}>not counted</div>
-                      ) : (
-                        <>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
-                          <div style={{ fontSize: 10, color: '#9ca3af' }}>{balText}</div>
-                        </>
-                      )}
-                    </div>
-                    <div style={{ width: 28, flexShrink: 0, textAlign: 'right' }}>
-                      {ev.itemId && (
-                        ev.label.toLowerCase().includes('electric') ? (
-                          <span title="Electric charges are voided from the Electric Billing page → View History, not deleted here." style={{ fontSize: 13, color: '#9ca3af', cursor: 'help' }}>⚡</span>
-                        ) : (
-                          <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
-                        )
-                      )}
-                      {/* Gated on what is still refundable, like every other surface — not on
-                          the row's status, which flips to 'partially_refunded' after the first
-                          partial and used to retire the button for good. */}
-                      {ev.payment && (ev.refundableCents || 0) > 0 && canMoveMoney && (
-                        <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, marginRight: 6 }}>Refund</button>
-                      )}
-                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
-                        <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
+              {visibleLedger.map(ledgerRow)}
 
               <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
@@ -644,15 +653,111 @@ const supabase = createBrowserSupabase()
             </div>
           )}
 
+          {/* ── THE LANE VIEW (separated + seasonal only) ────────────────────────────────
+              The SAME events as the flat ledger above, regrouped. Nothing is filtered out: every
+              charge, payment and refund appears in exactly one section, so this page is still the
+              complete audit trail it exists to be. The grand total is the same `totalDue` /
+              `overpaid` the flat view prints. */}
+          {ledgerEvents.length > 0 && laneView && (
+            <div style={{ marginBottom: 12 }}>
+              {laneGroups.map(group => (
+                <div key={group.key} style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', background: '#f8fafb' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#374151' }}>{group.label}</div>
+                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{group.blurb}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: group.subtotal > 0 ? '#b45309' : '#15803d' }}>
+                        ${(Math.abs(group.subtotal) / 100).toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#9ca3af' }}>
+                        {group.key === 'unassigned'
+                          ? 'applied to the account'
+                          : group.subtotal > 0 ? 'due' : group.subtotal === 0 ? 'settled' : 'credit'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {group.events.map(ev => (
+                    <div key={ev.key}>
+                      {ledgerRow(ev)}
+                      {/* FILE OR MOVE a payment's lane (Part D, widened in PR 3c). Sets `lane`
+                          and nothing else: no amount moves, so the account balance cannot change
+                          — only which lane the money offsets. Offered on every payment row now,
+                          not just unassigned ones, so a credit filed onto the wrong lane can be
+                          corrected in a tap. */}
+                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 10px', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>
+                            {group.key === 'unassigned' ? 'File this payment under' : 'Move to'}
+                          </span>
+                          <select
+                            value=""
+                            disabled={assigningLane === ev.paymentId}
+                            onChange={e => e.target.value && assignPaymentLane(ev.paymentId!, e.target.value)}
+                            style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                            <option value="">{group.key === 'unassigned' ? 'Choose a lane…' : 'Another lane…'}</option>
+                            {(['electric', 'store', 'seasonal'] as const)
+                              .filter(l => l !== group.key)
+                              .map(l => <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>)}
+                          </select>
+                          {assigningLane === ev.paymentId && <span style={{ fontSize: 11, color: '#9ca3af' }}>Filing…</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: '#6b7280' }}>Charges ${(group.charges / 100).toFixed(2)} · Payments ${(group.paid / 100).toFixed(2)}</span>
+                    <span style={{ fontWeight: 700 }}>${(Math.abs(group.subtotal) / 100).toFixed(2)}</span>
+                  </div>
+                </div>
+              ))}
+
+              {/* ONE grand total, and it is the SAME figure the flat view prints. */}
+              <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total charges</span>
+                  <span style={{ fontWeight: 600 }}>${(itemsTotal / 100).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total payments</span>
+                  <span style={{ fontWeight: 600, color: '#15803d' }}>${(paymentsTotal / 100).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: '1px solid #f3f4f6', marginTop: 6, paddingTop: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#374151' }}>{overpaid > 0 ? 'Account credit' : totalDue > 0 ? 'Balance due' : 'Settled'}</span>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: totalDue > 0 ? '#dc2626' : '#15803d' }}>${((overpaid > 0 ? overpaid : totalDue) / 100).toFixed(2)}</span>
+                </div>
+                {overpaid > 0 && (
+                  <p style={{ fontSize: 11, color: '#6b7280', margin: '6px 0 0' }}>
+                    Applies to any lane — it comes off their next charge.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {ledgerEvents.length === 0 && (
             <div style={{ textAlign: 'center', color: '#4a6275', padding: '3rem 0', fontSize: 14 }}>
               No charges yet. Tap Add Items to get started.
             </div>
           )}
 
+          {/* ── ONE PAYMENT FLOW (Phase 4 PR 3b, Part A) ────────────────────────────────
+              A separated park's seasonal camper goes to the LANE CHECKOUT, so there is exactly
+              one way to take their money and it always attributes it to a lane. Every other
+              folio — combined, transient, reservation — opens the same payment panel as before,
+              untouched. */}
+          {laneView ? (
+            <button onClick={() => router.push(`/admin/checkout?guestId=${guestId}`)} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+              {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
+            </button>
+          ) : (
           <button onClick={() => { setPaymentAmount(totalDue > 0 ? (totalDue/100).toFixed(2) : ''); setCashTendered(''); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
             {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
           </button>
+          )}
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
@@ -714,7 +819,7 @@ const supabase = createBrowserSupabase()
           <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
-              <button onClick={() => { setShowPayment(false); setCashTendered(''); setCardReady(false) }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
+              <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginBottom: 16 }}>
@@ -866,19 +971,9 @@ const supabase = createBrowserSupabase()
                   </div>
                 )}
               </div>
-            ) : paymentMethod === 'card' ? (
-              <div>
-                <label style={ml}>Card details</label>
-                <div style={{ marginBottom: 12 }}>
-                  <SquareCardField ref={cardRef} onReady={setCardReady} />
-                </div>
-                <button onClick={chargeManualCard} disabled={savingPayment || !cardReady || !paymentAmountCents} style={{ width: '100%', background: savingPayment || !cardReady || !paymentAmountCents ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: savingPayment || !cardReady || !paymentAmountCents ? 'default' : 'pointer' }}>
-                  {savingPayment ? 'Processing...' : surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : 'Charge card · $' + (paymentAmount || '0.00')}
-                </button>
-              </div>
             ) : (
               <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-                {savingPayment ? 'Recording...' : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
               </button>
             )}
           </div>

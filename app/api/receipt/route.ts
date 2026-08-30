@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
-import { sumLineTotals, buildLedger, buildStatement } from '@/lib/ledger'
-import { renderStatementHtml } from '@/lib/statement-html'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
+import { notVoided } from '@/lib/ledger'
+import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -17,8 +17,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { folioId, receiptType } = body
+    const { folioId, receiptType, preview, lane: laneParam } = body
     // receiptType: 'reservation' | 'walkup' | 'account'
+    //
+    // PR 4:
+    //   preview: true → RENDER AND RETURN, send nothing. This is what the printable receipt uses,
+    //     so a counter payment with no email on file still produces a receipt. Same renderer, so
+    //     the printed copy and the emailed copy can never differ.
+    //   lane: 'electric' | 'store' | 'seasonal' → a receipt for ONE lane only (Part D).
+    const isPreview = preview === true
+    const onlyLane: Lane | null =
+      (LANES as readonly string[]).includes(String(laneParam)) ? (laneParam as Lane) : null
 
     const { data: settings } = await supabase.from('settings').select('park_name, park_location, park_email').single()
     const campgroundName = settings?.park_name || 'Our Campground'
@@ -30,10 +39,27 @@ export async function POST(request: NextRequest) {
     const { data: folio } = await supabase.from('folios').select('*').eq('id', folioId).single()
     if (!folio) return NextResponse.json({ error: 'Folio not found' }, { status: 404 })
 
-    if (!folio.guest_email) return NextResponse.json({ error: 'No email on file for this guest' }, { status: 400 })
+    // Only SENDING needs an address. A printable receipt must still render for a walk-up with
+    // no email on file — which is most counter payments.
+    if (!isPreview && !folio.guest_email) {
+      return NextResponse.json({ error: 'No email on file for this guest' }, { status: 400 })
+    }
 
     // Load line items
-    const { data: lineItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
+    const { data: allLineItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
+
+    // ⚠ A CANCELED CHARGE MUST NEVER APPEAR ON A RECEIPT, in either format, in either billing
+    // mode, on a reservation receipt as much as a seasonal one. This route summed every line
+    // item raw, so a camper with a canceled packet received a receipt whose charges and balance
+    // were wrong — and which disagreed with the folio, which PR 3c had already corrected.
+    //
+    // OMITTED here rather than struck through: the internal folio strikes a voided row through
+    // because staff need to see the charge was deliberately canceled. A camper has no reason to
+    // see a charge that no longer exists.
+    //
+    // One filter, applied once, so both the totals and both rendered lists agree. On a folio with
+    // no voided rows it removes nothing and the receipt is unchanged.
+    const lineItems = (allLineItems || []).filter(notVoided)
 
     // Load payments
     // Includes refund rows: a booking refund is now a negative folio row and
@@ -41,7 +67,7 @@ export async function POST(request: NextRequest) {
     // having paid money that was handed back.
     const { data: payments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).in('status', ['completed', 'refunded', 'partially_refunded']).order('paid_at')
 
-    const itemsTotal = sumLineTotals(lineItems)
+    const itemsTotal = lineItems.reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (payments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const mostRecentPayment = payments && payments.length > 0 ? payments[payments.length - 1] : null
 
@@ -58,9 +84,46 @@ export async function POST(request: NextRequest) {
     // Include the reservation's own stay charge, not just folio line items.
     // Mirror the folio page: count booking-path money (amount_paid) + folio payments.
     const reservationCharge = reservation ? ((reservation as any).total_price || 0) : 0
+    // 0 when the column is absent (un-migrated tenant), so the stay line below is the whole
+    // charge exactly as it was before pets existed.
+    const resPetFee = reservation ? ((reservation as any).pet_fee || 0) : 0
+    const resPetCount = reservation ? ((reservation as any).pet_count || 0) : 0
     const chargesTotal = reservationCharge + itemsTotal
     const totalPaid = (reservation ? ((reservation as any).amount_paid || 0) : 0) + paymentsTotal
     const balanceRemaining = chargesTotal - totalPaid
+
+    // ── PR 4: IS THIS A LANE RECEIPT? ────────────────────────────────────────────────────────
+    //
+    // Only a SEASONAL camper's guest_account folio at a SEPARATED park. Everything else — a
+    // combined park, a transient guest's account, a reservation or walk-up — renders exactly as
+    // it does today. billing_mode is read in its own guarded query: a park without the Phase 4
+    // column must still get its receipt.
+    let billingMode: 'combined' | 'separated' = 'combined'
+    try {
+      const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
+      billingMode = normalizeBillingMode(modeRow?.billing_mode)
+    } catch { /* stays combined */ }
+
+    let guestIsSeasonal = false
+    if (folio.guest_id) {
+      const { data: g } = await supabase.from('guests').select('is_seasonal').eq('id', folio.guest_id).maybeSingle()
+      guestIsSeasonal = !!g?.is_seasonal
+    }
+
+    const laneReceipt = billingMode === 'separated' && guestIsSeasonal && !folio.reservation_id
+
+    // The electric signal, resolved the same way everywhere in Phase 4 — the readings that point
+    // at these charges, never the category.
+    let electricIds = new Set<string>()
+    if (laneReceipt && lineItems.length) {
+      const { data: readings } = await supabase
+        .from('electric_readings').select('folio_line_item_id')
+        .in('folio_line_item_id', lineItems.map((i: any) => i.id))
+      electricIds = new Set(((readings || []) as any[]).map(r => r.folio_line_item_id).filter(Boolean))
+    }
+    const laneOfItem = (i: any): Lane => classifyLineItem(i, { electricLineItemIds: electricIds })
+    const laneOfPayment = (p: any): Lane | null =>
+      (LANES as readonly string[]).includes(String(p.lane)) ? (p.lane as Lane) : null
 
     const isReservationType = receiptType === 'reservation' || folio.reservation_id
 
@@ -73,8 +136,12 @@ export async function POST(request: NextRequest) {
           (new Date((reservation as any).departure_date).getTime() -
            new Date((reservation as any).arrival_date).getTime()) / 86400000))
       : 0
+    // The STAY, with the pet fee taken out — otherwise "N nights @ $X" quietly includes a charge
+    // that has nothing to do with the nightly rate, and the arithmetic on the receipt does not
+    // hold up if the guest checks it.
+    const resStayCharge = reservationCharge - resPetFee
     const resNightlyRate = (reservation as any)?.base_nightly_rate
-      || (resNights > 0 ? Math.round(reservationCharge / resNights) : 0)
+      || (resNights > 0 ? Math.round(resStayCharge / resNights) : 0)
     const stayLabel = resNights > 0 && resNightlyRate > 0
       ? `Reservation stay — ${resNights} night${resNights !== 1 ? 's' : ''} @ ${money(resNightlyRate)}`
       : 'Reservation stay'
@@ -112,9 +179,8 @@ export async function POST(request: NextRequest) {
       </tr>`
     }).join('')
 
-    // Same split for the plain-text receipt (walk-up sales) so the two formats can't drift —
-    // a card payment is stored gross in both. The 'account' statement branch below renders
-    // via the shared renderStatementHtml and is deliberately left alone.
+    // Same split for the plain-text receipt (walk-up sales, seasonal accounts) so the two
+    // formats can't drift — a card payment is stored gross in both.
     const paymentRowsText = (payments || []).map((p: any) => {
       const fee = p.surcharge_amount || 0
       const head = `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}`
@@ -122,6 +188,126 @@ export async function POST(request: NextRequest) {
       const totalLabel = p.amount < 0 ? 'Total refunded' : 'Total charged'
       return `${head}: ${money(p.amount - fee)}\n    Transaction fee: ${money(fee)}\n    ${totalLabel}: ${money(p.amount)}`
     }).join('\n')
+
+    // ── THE LANE-GROUPED ACCOUNT RECEIPT ─────────────────────────────────────────────────────
+    //
+    // Mirrors what the camper's account now shows on the folio (PR 3c): each lane with its own
+    // charges, payments and subtotal, anything not filed against a lane shown HONESTLY as its
+    // own line, and ONE grand total that equals the account balance. Brought up to the house
+    // style — the same 🧾 theme the reservation receipt uses — with a plain-text part kept for
+    // the email so nothing regresses for a text-only client.
+    const LANE_LABELS: Record<Lane, string> = {
+      electric: 'Electric', store: 'Camp store', seasonal: 'Seasonal fee', other: 'Other charges',
+    }
+    const laneSections = (LANES as readonly Lane[])
+      .filter(l => !onlyLane || l === onlyLane)
+      .map(l => {
+        const items = lineItems.filter((i: any) => laneOfItem(i) === l)
+        const pays = (payments || []).filter((p: any) => laneOfPayment(p) === l)
+        const charges = items.reduce((s: number, i: any) => s + i.line_total, 0)
+        const paid = pays.reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+        return { lane: l, label: LANE_LABELS[l], items, pays, charges, paid, subtotal: charges - paid }
+      })
+      .filter(sec => sec.items.length > 0 || sec.pays.length > 0)
+
+    const unassignedPays = (payments || []).filter((p: any) => laneOfPayment(p) === null)
+    const unassignedTotal = unassignedPays.reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
+
+    // The grand total. With no lane filter this IS the account balance — every charge and every
+    // payment is in exactly one bucket, so the sections and the remainder reconcile to it.
+    const laneGrandTotal = onlyLane
+      ? laneSections.reduce((s, sec) => s + sec.subtotal, 0)
+      : itemsTotal - paymentsTotal
+
+    const laneSectionsHtml = laneSections.map(sec => `
+  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px;">
+      <h3 style="color:#ffffff;margin:0;font-size:16px;">${sec.label}</h3>
+      <span style="color:${sec.subtotal > 0 ? '#FCD34D' : '#4ADE80'};font-size:16px;font-weight:bold;">${sec.subtotal < 0 ? 'Credit ' : ''}${money(Math.abs(sec.subtotal))}</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;">
+      ${sec.items.map((i: any) => `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${i.description}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(i.line_total)}</td>
+      </tr>`).join('')}
+      ${sec.pays.map((p: any) => `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${p.method} — ${new Date(p.paid_at).toLocaleDateString()}</td>
+        <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">−${money(p.amount - (p.surcharge_amount || 0))}</td>
+      </tr>`).join('')}
+    </table>
+  </div>`).join('')
+
+    const unassignedHtml = (!onlyLane && unassignedTotal !== 0) ? `
+  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div>
+        <h3 style="color:#ffffff;margin:0 0 2px;font-size:16px;">Account credit</h3>
+        <p style="color:#6B7280;margin:0;font-size:12px;">Applies to any of the above</p>
+      </div>
+      <span style="color:#4ADE80;font-size:16px;font-weight:bold;">−${money(unassignedTotal)}</span>
+    </div>
+  </div>` : ''
+
+    const laneHtml = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#1C1C1C;font-family:Arial,sans-serif;">
+<div style="max-width:600px;margin:0 auto;background-color:#1C1C1C;">
+  <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
+    <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${campgroundName}</h1>
+    <p style="color:#9CA3AF;margin:0;font-size:14px;">${campgroundLocation}</p>
+  </div>
+  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:32px;text-align:center;">
+    <div style="font-size:48px;margin-bottom:16px;">🧾</div>
+    <h2 style="color:#ffffff;margin:0 0 8px;font-size:26px;">Receipt for ${folio.guest_name}</h2>
+    <p style="color:#9CA3AF;margin:0;font-size:14px;">${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}${onlyLane ? ' · ' + LANE_LABELS[onlyLane] : ''}</p>
+  </div>
+  ${laneSectionsHtml}
+  ${unassignedHtml}
+  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
+    <table style="width:100%;border-collapse:collapse;">
+      <tr>
+        <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">${laneGrandTotal < 0 ? 'Credit on account' : laneGrandTotal === 0 ? 'Balance' : 'Balance remaining'}</td>
+        <td style="padding:8px 0 4px;font-size:16px;font-weight:bold;text-align:right;color:${laneGrandTotal <= 0 ? '#4ADE80' : '#FCD34D'};">${laneGrandTotal === 0 ? '✓ Paid in full' : money(Math.abs(laneGrandTotal))}</td>
+      </tr>
+    </table>
+  </div>
+  <div style="padding:24px;text-align:center;">
+    <p style="color:#6B7280;font-size:12px;margin:0;">Thank you!</p>
+    <p style="color:#6B7280;font-size:12px;margin:8px 0 0;">${campgroundName}</p>
+  </div>
+</div>
+</body>
+</html>`
+
+    // Plain-text twin, so an email always carries a readable text part.
+    const laneText = `Receipt from ${campgroundName}
+${campgroundLocation}
+${'─'.repeat(40)}
+Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+Guest: ${folio.guest_name}${onlyLane ? '\n' + LANE_LABELS[onlyLane] + ' only' : ''}
+${'─'.repeat(40)}
+${laneSections.map(sec => `
+${sec.label.toUpperCase()}
+${sec.items.map((i: any) => `  ${i.description}: ${money(i.line_total)}`).join('\n')}
+${sec.pays.map((p: any) => `  ${p.method} ${new Date(p.paid_at).toLocaleDateString()}: -${money(p.amount - (p.surcharge_amount || 0))}`).join('\n')}
+  Subtotal: ${sec.subtotal < 0 ? 'Credit ' : ''}${money(Math.abs(sec.subtotal))}`).join('\n')}
+${(!onlyLane && unassignedTotal !== 0) ? `\nACCOUNT CREDIT (applies to any of the above): -${money(unassignedTotal)}\n` : ''}
+${'─'.repeat(40)}
+${laneGrandTotal < 0 ? 'Credit on account: ' + money(Math.abs(laneGrandTotal)) : laneGrandTotal === 0 ? 'PAID IN FULL' : 'Balance remaining: ' + money(laneGrandTotal)}
+${'─'.repeat(40)}
+Thank you!
+${campgroundName}`
+
+    // PREVIEW — render and RETURN, send nothing. The printable receipt renders exactly what an
+    // emailed one would, because it is the same renderer; there is no second receipt path.
+    if (isPreview) {
+      if (laneReceipt) return NextResponse.json({ html: laneHtml, text: laneText })
+      // For a reservation/walk-up preview, fall through to the shared builders below by
+      // returning after they are built — handled at the end of each branch.
+    }
 
     if (isReservationType) {
       // STYLED HTML RECEIPT — matches confirmation email theme
@@ -159,9 +345,14 @@ export async function POST(request: NextRequest) {
       ${reservation ? `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${stayLabel}</td>
-        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(reservationCharge)}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(resStayCharge)}</td>
       </tr>` : ''}
-      ${(lineItems || []).map((item: any) => `
+      ${resPetFee > 0 ? `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Pet fee${resPetCount > 1 ? ` (${resPetCount} pets)` : ''}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(resPetFee)}</td>
+      </tr>` : ''}
+      ${lineItems.map((item: any) => `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}</td>
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>
@@ -189,49 +380,28 @@ export async function POST(request: NextRequest) {
 </body>
 </html>`
 
-      await resend.emails.send({
+      if (isPreview) return NextResponse.json({ html })
+
+      await getResend().emails.send({
         from: `${campgroundName} <${fromEmail}>`,
         replyTo: replyToEmail,
         to: folio.guest_email,
         subject: `Receipt — ${campgroundName}${reservation ? ' · ' + reservation.arrival_date : ''}`,
         html,
       })
-    } else if (receiptType === 'account') {
-      // ACCOUNT RECEIPT — running-ledger statement, same format as the electric email
-      // (shared renderStatementHtml). showNotes on so per-line payment/item notes show.
-      const stmt = buildStatement(buildLedger(lineItems || [], payments || []), Date.now(), 90)
-      const statementHtml = renderStatementHtml(stmt, { showNotes: true })
-      const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#1C1C1C;font-family:Arial,sans-serif;">
-<div style="max-width:600px;margin:0 auto;background-color:#1C1C1C;">
-  <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
-    <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${campgroundName}</h1>
-    <p style="color:#9CA3AF;margin:0;font-size:14px;">${campgroundLocation}</p>
-  </div>
-  <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:32px;text-align:center;">
-    <div style="font-size:48px;margin-bottom:16px;">🧾</div>
-    <h2 style="color:#ffffff;margin:0 0 8px;font-size:26px;">Receipt for ${folio.guest_name}</h2>
-    <p style="color:#9CA3AF;margin:0;font-size:14px;">${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-  </div>
-${statementHtml}
-  <div style="padding:24px;text-align:center;">
-    <p style="color:#6B7280;font-size:12px;margin:0;">Thank you!</p>
-  </div>
-</div>
-</body>
-</html>`
-      const gmailFrom = process.env.RESEND_GMAIL_FROM || fromEmail
-      await resend.emails.send({
-        from: `${campgroundName} <${gmailFrom}>`,
+    } else if (laneReceipt) {
+      // The seasonal account at a separated park — styled, grouped by lane, with the plain-text
+      // twin as the email's text part.
+      await getResend().emails.send({
+        from: `${campgroundName} <${process.env.RESEND_GMAIL_FROM || fromEmail}>`,
         replyTo: replyToEmail,
         to: folio.guest_email,
         subject: `Receipt — ${campgroundName} · ${new Date().toLocaleDateString()}`,
-        html,
+        html: laneHtml,
+        text: laneText,
       })
     } else {
-      // PLAIN TEXT RECEIPT — for walk-up sales
+      // PLAIN TEXT RECEIPT — for walk-up sales, seasonal accounts
       const plainText = `Receipt from ${campgroundName}
 ${campgroundLocation}
 ${'─'.repeat(40)}
@@ -240,7 +410,7 @@ Guest: ${folio.guest_name}
 ${'─'.repeat(40)}
 
 CHARGES
-${(lineItems || []).map((item: any) => `${item.description}: ${money(item.line_total)}`).join('\n')}
+${lineItems.map((item: any) => `${item.description}: ${money(item.line_total)}`).join('\n')}
 
 Total charges: ${money(itemsTotal)}
 ${'─'.repeat(40)}
@@ -253,9 +423,11 @@ ${'─'.repeat(40)}
 Thank you!
 ${campgroundName}`
 
+      if (isPreview) return NextResponse.json({ text: plainText })
+
       const gmailFrom = process.env.RESEND_GMAIL_FROM || fromEmail
 
-      await resend.emails.send({
+      await getResend().emails.send({
         from: `${campgroundName} <${gmailFrom}>`,
         replyTo: replyToEmail,
         to: folio.guest_email,

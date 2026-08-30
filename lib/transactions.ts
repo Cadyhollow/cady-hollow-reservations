@@ -1,15 +1,14 @@
-import { createBrowserSupabase } from '@/lib/supabase-browser'
-
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
-const supabase = createBrowserSupabase()
 // Shared transaction source — the ONE place that assembles the unified payment
 // list (folio payments + reservation booking payments). Consumed by both
 // /admin/transactions and the Reports > Transactions tab so they can never drift.
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
+const supabase = createBrowserSupabase()
 
 export type UnifiedPayment = {
   id: string

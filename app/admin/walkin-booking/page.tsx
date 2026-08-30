@@ -123,7 +123,7 @@ export default function WalkInBookingPage() {
   useEffect(() => { fetchData() }, [])
 
   async function fetchData() {
-    const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
+    const [{ data: siteDataRaw }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
       supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
@@ -131,7 +131,8 @@ export default function WalkInBookingPage() {
       supabase.from('fees').select('*').eq('is_active', true),
       supabase.from('pricing_rules').select('*').eq('is_active', true),
     ])
-    setSites(siteData || [])
+    // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY — see the note in refetchSites below.
+    setSites((siteDataRaw || []).filter((x: { is_seasonal_site?: boolean }) => x.is_seasonal_site !== true))
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
@@ -141,7 +142,13 @@ export default function WalkInBookingPage() {
   }
 
   async function refetchSites(arrivalDate: string, departureDate: string) {
-    const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    const { data: allSitesRaw } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY. A site sold for the SEASON has a camper
+    // living on it; offering it by the night double-books a real person. Filtered in memory
+    // rather than with .eq('is_seasonal_site', false) on purpose: `!== true` treats false,
+    // null and a MISSING COLUMN alike, so a park whose database has not had the seasonal-site
+    // migration behaves exactly as it did before this line existed.
+    const allSites = (allSitesRaw || []).filter((x: { is_seasonal_site?: boolean }) => x.is_seasonal_site !== true)
     if (!arrivalDate || !departureDate || !allSites) { setSites(allSites || []); return }
     const { data: conflicts } = await supabase
       .from('reservations')

@@ -1,16 +1,15 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import toast, { Toaster } from 'react-hot-toast'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
 const supabase = createBrowserSupabase()
+import toast, { Toaster } from 'react-hot-toast'
 
 type Site = {
   id: string
@@ -20,12 +19,17 @@ type Site = {
   max_rv_length: number | null
   hookups: string
   is_available: boolean
-  needs_prep?: boolean
   base_rate: number
   description: string
   display_order: number
   photo_url: string | null
   photo_url_2: string | null
+  /** Optional: tenants that predate the pet migration have no such column. */
+  pet_friendly?: boolean
+  needs_prep?: boolean
+  /** R4b. Optional for the same reason: a tenant that has not run the migration has no column,
+   *  and undefined must keep meaning transient — how every site behaved before it existed. */
+  is_seasonal_site?: boolean
 }
 
 type Category = {
@@ -40,12 +44,14 @@ const emptySite = {
   max_rv_length: '',
   hookups: 'full',
   is_available: true,
-  needs_prep: false,
   base_rate: '',
   description: '',
   display_order: 0,
   photo_url: null as string | null,
   photo_url_2: null as string | null,
+  pet_friendly: false,
+  needs_prep: false,
+  is_seasonal_site: false,
 }
 
 export default function SitesPage() {
@@ -63,16 +69,28 @@ export default function SitesPage() {
   const [photo2File, setPhoto2File] = useState<File | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
-
-  // Whether this park's `sites` table has needs_prep at all — the To-Do board's phase-2 column.
-  //
-  // WHY DETECT RATHER THAN ASSUME: the To-Do migration is applied per park, and writing a column
-  // that does not exist fails the WHOLE site save — which would stop an owner editing a nightly
-  // rate. Read from a loaded row, so it self-activates the moment the migration lands and needs
-  // no second deploy.
+  // Whether this tenant's `sites` table has pet_friendly at all. The pet migration was
+  // deliberately not applied to live tenants (resonation-admin/db/2026-08-18-pet-fee.sql), and
+  // writing a column that does not exist fails the WHOLE site save — which would stop an owner
+  // editing a rate. Detected from a loaded row, so it self-activates once a tenant is migrated.
+  const [hasPetColumn, setHasPetColumn] = useState(false)
+  // Whether this tenant's `sites` table has needs_prep — the phase-2 To-Do column. Exactly the
+  // same reasoning as hasPetColumn directly above: the phase-2 migration is deliberately not
+  // applied to live tenants, and writing a column that does not exist fails the WHOLE site save.
   const [hasPrepColumn, setHasPrepColumn] = useState(false)
-  // The park's check-in-prep master switch, read only so this page can tell whether the
-  // "no sites marked" warning is relevant.
+  // Whether this tenant's `sites` table has is_seasonal_site — the R4b designation. Detected the
+  // same way as the two above, and for the same reason: writing a column that does not exist
+  // fails the WHOLE site save, which would stop an owner editing a rate. It self-activates the
+  // moment a tenant is migrated. See db/migrations/2026-08-30-seasonal-site-flag.sql.
+  const [hasSeasonalSiteColumn, setHasSeasonalSiteColumn] = useState(false)
+  /** Sites ticked for the bulk designation. Empty = the bulk bar is hidden. */
+  const [picked, setPicked] = useState<string[]>([])
+  const [bulkSaving, setBulkSaving] = useState(false)
+  // The park's master switch, read only so this page can tell whether the pet controls are worth
+  // showing and whether the "no pet-friendly sites" warning is relevant.
+  const [petsEnabled, setPetsEnabled] = useState(false)
+  // The park's check-in prep master switch, read only so this page can tell whether the
+  // "no sites marked" warning is relevant. Set from the same settings read as petsEnabled.
   const [checkinPrepEnabled, setCheckinPrepEnabled] = useState(false)
 
   useEffect(() => { fetchSites(); fetchCategories() }, [])
@@ -80,19 +98,21 @@ export default function SitesPage() {
   async function fetchSites() {
     const { data } = await supabase.from('sites').select('*').order('display_order')
     setSites(data || [])
+    if (data && data.length > 0) setHasPetColumn('pet_friendly' in data[0])
     if (data && data.length > 0) setHasPrepColumn('needs_prep' in data[0])
+    if (data && data.length > 0) setHasSeasonalSiteColumn('is_seasonal_site' in data[0])
     setLoading(false)
 
-    // select('*'), not a named column list: on a park without the To-Do columns a named
-    // `checkin_prep_enabled` would make PostgREST error and this read return nothing at all.
-    // Read-only — this page never writes settings.
-    const { data: st } = await supabase.from('settings').select('*').limit(1).maybeSingle()
+    // select('*'), not a named column list: on a tenant without the pet columns a named
+    // `pets_enabled` would make PostgREST error and this read return nothing.
+    const { data: st } = await supabase.from('settings').select('*').limit(1).single()
+    setPetsEnabled(!!st?.pets_enabled)
     setCheckinPrepEnabled(!!st?.checkin_prep_enabled)
     // Fetch site_categories for all sites
     const { data: sc } = await supabase.from('site_categories').select('*')
     if (sc) {
       const map: Record<string, number[]> = {}
-      sc.forEach((row) => {
+      sc.forEach((row: any) => {
         if (!map[row.site_id]) map[row.site_id] = []
         map[row.site_id].push(row.category_id)
       })
@@ -132,12 +152,14 @@ export default function SitesPage() {
       max_rv_length: site.max_rv_length?.toString() || '',
       hookups: site.hookups,
       is_available: site.is_available,
-      needs_prep: site.needs_prep || false,
       base_rate: (site.base_rate / 100).toString(),
       description: site.description || '',
       display_order: site.display_order,
       photo_url: site.photo_url || null,
       photo_url_2: site.photo_url_2 || null,
+      pet_friendly: site.pet_friendly || false,
+      needs_prep: site.needs_prep || false,
+      is_seasonal_site: site.is_seasonal_site || false,
     })
     setSelectedCategories(siteCategories[site.id] || [])
     setPhoto1File(null)
@@ -167,14 +189,18 @@ export default function SitesPage() {
       max_rv_length: form.max_rv_length ? parseInt(form.max_rv_length as string) : null,
       hookups: form.site_type === 'rv_site' ? form.hookups : 'none',
       is_available: form.is_available,
-      // Guarded — see hasPrepColumn. Spreads to nothing on a park without the column, so the save
-      // behaves exactly as it did before the To-Do board existed.
-      ...(hasPrepColumn ? { needs_prep: form.needs_prep } : {}),
       base_rate: Math.round(parseFloat(form.base_rate as string) * 100),
       description: form.description,
       display_order: form.display_order,
       photo_url,
       photo_url_2,
+      // Guarded — see hasPetColumn. Spreads to nothing on a tenant without the column, so the
+      // save behaves exactly as it did before the pet feature existed.
+      ...(hasPetColumn ? { pet_friendly: form.pet_friendly } : {}),
+      // Guarded the same way — see hasPrepColumn.
+      ...(hasPrepColumn ? { needs_prep: form.needs_prep } : {}),
+      // Guarded the same way — see hasSeasonalSiteColumn.
+      ...(hasSeasonalSiteColumn ? { is_seasonal_site: form.is_seasonal_site } : {}),
     }
 
     let siteId = editingSite?.id
@@ -249,6 +275,34 @@ export default function SitesPage() {
     toast.success(`Site ${site.site_number} ${!site.is_available ? 'activated' : 'deactivated'}`); fetchSites()
   }
 
+  /**
+   * Flip one site between seasonal and transient — R4b.
+   *
+   * ⚠ CONFIGURATION, NOT MONEY. It records how a park sells a site; it moves nothing and bills
+   * nobody. The Occupancy tab recomputes entirely from these flags, so this single toggle is all
+   * it takes to move a site between the seasonal program and the nightly inventory.
+   */
+  async function toggleSeasonalSite(site: Site) {
+    if (!hasSeasonalSiteColumn) return
+    const next = !site.is_seasonal_site
+    const { error } = await supabase.from('sites').update({ is_seasonal_site: next }).eq('id', site.id)
+    if (error) { toast.error('Could not change that site.'); return }
+    toast.success(`Site ${site.site_number} is now ${next ? 'seasonal' : 'transient'}`)
+    fetchSites()
+  }
+
+  /** The same change across every ticked site — a park designates many at once, not one by one. */
+  async function bulkDesignate(next: boolean) {
+    if (!hasSeasonalSiteColumn || picked.length === 0) return
+    setBulkSaving(true)
+    const { error } = await supabase.from('sites').update({ is_seasonal_site: next }).in('id', picked)
+    setBulkSaving(false)
+    if (error) { toast.error('Could not update those sites.'); return }
+    toast.success(`${picked.length} site${picked.length !== 1 ? 's' : ''} marked ${next ? 'seasonal' : 'transient'}`)
+    setPicked([])
+    fetchSites()
+  }
+
   async function handleDelete(site: Site) {
     if (!confirm(`Are you sure you want to delete Site ${site.site_number}? This cannot be undone.`)) return
     await supabase.from('site_categories').delete().eq('site_id', site.id)
@@ -272,10 +326,28 @@ export default function SitesPage() {
       </div>
 
       {/* ── THE SILENT-TRAP GUARD ────────────────────────────────────────────────────────────
-          sites.needs_prep defaults to FALSE on all 40 sites, so the moment an owner switches
-          check-in prep on in the To-Do board's "Manage reminders" view, NOTHING happens until
-          they mark some sites. Without this banner the only symptom is no prep tasks ever
-          appearing — which looks like a broken feature rather than a setting nobody finished.
+          sites.pet_friendly defaults to FALSE, so the moment an owner switches pets on in
+          Settings, every site is pet-hostile until they mark some. Without this banner the only
+          symptom is guests with pets seeing "no sites available" — which looks like the park
+          being full, not like a setting nobody finished. That is the whole reason this exists.
+
+          Shown only when pets are actually on and nothing is marked, so it disappears the
+          instant it stops being true. */}
+      {hasPetColumn && petsEnabled && sites.length > 0 && !sites.some(s => s.pet_friendly) && (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Pets are enabled, but no sites are marked pet-friendly.</p>
+          <p className="text-sm text-amber-800 mt-1">
+            Guests bringing pets will see <strong>no availability at all</strong> until at least one site is marked.
+            Edit a site below and switch on &ldquo;Allows pets&rdquo;.
+          </p>
+        </div>
+      )}
+
+      {/* ── THE SAME SILENT-TRAP GUARD, FOR CHECK-IN PREP ────────────────────────────────────
+          sites.needs_prep defaults to FALSE, so the moment an owner switches check-in prep on in
+          the To-Do board's Manage reminders view, NOTHING happens until they mark some sites.
+          Without this banner the only symptom is no prep tasks ever appearing — which looks like
+          a broken feature rather than a setting nobody finished.
 
           Shown only while it is true, so it disappears the instant a site is marked. */}
       {hasPrepColumn && checkinPrepEnabled && sites.length > 0 && !sites.some(s => s.needs_prep) && (
@@ -283,7 +355,7 @@ export default function SitesPage() {
           <p className="text-sm font-semibold text-amber-900">Check-in prep is on, but no sites are marked as needing prep.</p>
           <p className="text-sm text-amber-800 mt-1">
             No prep tasks will appear on the To-Do board until at least one site is marked.
-            Edit a site below and switch on &ldquo;Needs prep before check-in&rdquo; — usually cabins and
+            Edit a site below and switch on &ldquo;Needs prep before check-in&rdquo; — usually your cabins and
             rooms, rarely tent or RV sites.
           </p>
         </div>
@@ -371,21 +443,38 @@ export default function SitesPage() {
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="number" value={form.display_order} onChange={e => setForm({ ...form, display_order: parseInt(e.target.value) })} />
             </div>
             <div className="flex items-center gap-3 pt-6">
-              <button type="button" onClick={() => setForm({ ...form, is_available: !form.is_available })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_available ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
-                <span style={{ position: 'absolute', top: '3px', left: form.is_available ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
-              </button>
-              <label className="text-sm font-medium text-gray-700">Available for booking</label>
+              <button type="button" onClick={() => setForm({ ...form, is_available: !form.is_available })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_available ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.is_available ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+              <label htmlFor="is_available" className="text-sm font-medium text-gray-700">Available for booking</label>
             </div>
-            {/* To-Do board: does this site need preparing before a guest arrives?
-                Shown whenever this park has the column, WITHOUT requiring check-in prep to be
-                switched on first — a park should be able to mark its cabins before turning the
-                feature on, because the alternative is switching it on, getting nothing, and
-                having no way to see why. The banner at the top covers the other order. */}
+            {/* Hidden entirely until the tenant has the column AND the park charges for pets —
+                a park with pets off has no use for a per-site pet flag, and offering one would
+                imply the feature is active when it is not. */}
+            {hasPetColumn && petsEnabled && (
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setForm({ ...form, pet_friendly: !form.pet_friendly })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.pet_friendly ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.pet_friendly ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+                <label className="text-sm font-medium text-gray-700">Allows pets</label>
+              </div>
+            )}
+            {/* Phase-2 To-Do: does this site need preparing before a guest arrives?
+                Shown whenever the tenant has the column, WITHOUT requiring check-in prep to be
+                switched on first — unlike the pet flag above. That is deliberate: a park should
+                be able to mark its cabins before turning the feature on, because the alternative
+                is switching it on, getting nothing, and having no way to see why. The banner at
+                the top of this page covers the other order. */}
+            {/* R4b: how this site is SOLD — by the season or by the night. It drives the whole
+                Occupancy split, and a seasonal site is one an owner sells once a year rather than
+                a hundred times. */}
+            {hasSeasonalSiteColumn && (
+              <div className="flex items-center gap-3">
+                <button type="button" role="switch" aria-checked={!!form.is_seasonal_site} aria-label="Sold for the season" onClick={() => setForm({ ...form, is_seasonal_site: !form.is_seasonal_site })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_seasonal_site ? '#0072B2' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.is_seasonal_site ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+                <label className="text-sm font-medium text-gray-700">
+                  Seasonal site <span className="text-gray-400 font-normal">— sold for the season, not by the night</span>
+                </label>
+              </div>
+            )}
             {hasPrepColumn && (
               <div className="flex items-center gap-3">
-                <button type="button" role="switch" aria-checked={!!form.needs_prep} aria-label="Needs prep before check-in" onClick={() => setForm({ ...form, needs_prep: !form.needs_prep })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.needs_prep ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}>
-                  <span style={{ position: 'absolute', top: '3px', left: form.needs_prep ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
-                </button>
+                <button type="button" role="switch" aria-checked={!!form.needs_prep} aria-label="Needs prep before check-in" onClick={() => setForm({ ...form, needs_prep: !form.needs_prep })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.needs_prep ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.needs_prep ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
                 <label className="text-sm font-medium text-gray-700">Needs prep before check-in</label>
               </div>
             )}
@@ -450,6 +539,28 @@ export default function SitesPage() {
         </div>
       )}
 
+      {/* ── R4b BULK DESIGNATION ──────────────────────────────────────────────────
+          A park with 48 seasonal sites is not going to click 48 toggles, and a feature that
+          costs an afternoon to switch on is one that never gets switched on. Appears only when
+          something is ticked, so it is invisible to anyone not doing this. */}
+      {hasSeasonalSiteColumn && picked.length > 0 && (
+        <div className="mb-4 rounded-xl border px-4 py-3 flex flex-wrap items-center gap-3" style={{ background: '#F2F8FC', borderColor: '#B6D6EA' }}>
+          <span className="text-sm font-semibold" style={{ color: '#0072B2' }}>
+            {picked.length} site{picked.length !== 1 ? 's' : ''} selected
+          </span>
+          <button disabled={bulkSaving} onClick={() => bulkDesignate(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg text-white disabled:opacity-50" style={{ background: '#0072B2' }}>
+            {bulkSaving ? 'Saving…' : 'Mark Seasonal'}
+          </button>
+          <button disabled={bulkSaving} onClick={() => bulkDesignate(false)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50">
+            Mark Transient
+          </button>
+          <button onClick={() => setPicked(sites.map(s => s.id))} className="text-xs text-gray-500 hover:underline">Select all</button>
+          <button onClick={() => setPicked([])} className="text-xs text-gray-500 hover:underline ml-auto">Clear</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-12 text-gray-400">Loading sites...</div>
       ) : sites.length === 0 ? (
@@ -464,13 +575,30 @@ export default function SitesPage() {
                 {site.photo_url && (
                   <img src={site.photo_url} alt={`Site ${site.site_number}`} className="w-16 h-16 object-cover rounded-lg border border-gray-100 shrink-0" />
                 )}
+                {hasSeasonalSiteColumn && (
+                  <input type="checkbox" aria-label={`Select site ${site.site_number}`}
+                    checked={picked.includes(site.id)}
+                    onChange={e => setPicked(p => e.target.checked ? [...p, site.id] : p.filter(x => x !== site.id))}
+                    className="mt-1 shrink-0 w-4 h-4 accent-blue-600 cursor-pointer" />
+                )}
                 <div className={`w-3 h-3 rounded-full mt-1 shrink-0 ${site.is_available ? 'bg-green-500' : 'bg-gray-300'}`} />
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900">{siteTypeLabel(site.site_type)} {site.site_number}</p>
+                  <p className="font-semibold text-gray-900">
+                    {siteTypeLabel(site.site_type)} {site.site_number}
+                    {/* Never colour alone — the word is what says which it is. */}
+                    {hasSeasonalSiteColumn && site.is_seasonal_site && (
+                      <span className="ml-2 align-middle text-xs font-semibold rounded-full px-2 py-0.5" style={{ background: '#E6F0F7', color: '#0072B2' }}>Seasonal</span>
+                    )}
+                  </p>
                   <p className="text-sm text-gray-500">
                     {ampLabel(site.amp_service)} · {hookupLabel(site.hookups)}{site.max_rv_length ? ` · Max ${site.max_rv_length}ft` : ''}
                   </p>
                   <p className="text-sm font-semibold text-green-700 mt-0.5">${(site.base_rate / 100).toFixed(2)}/night</p>
+                  {/* Only meaningful while pets are on; shown per-site so the owner can scan the
+                      list and see which sites a guest with a dog will actually be offered. */}
+                  {hasPetColumn && petsEnabled && site.pet_friendly && (
+                    <span className="inline-block text-xs bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5 mt-1">🐾 Allows pets</span>
+                  )}
                   {siteCategories[site.id]?.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {siteCategories[site.id].map(catId => {
@@ -485,6 +613,15 @@ export default function SitesPage() {
                 <button onClick={() => toggleAvailability(site)} className={`text-xs px-3 py-1 rounded-full font-medium ${site.is_available ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
                   {site.is_available ? 'Mark Unavailable' : 'Mark Available'}
                 </button>
+                {hasSeasonalSiteColumn && (
+                  <button onClick={() => toggleSeasonalSite(site)}
+                    className="text-xs px-3 py-1 rounded-full font-medium border"
+                    style={site.is_seasonal_site
+                      ? { background: '#E6F0F7', color: '#0072B2', borderColor: '#B6D6EA' }
+                      : { background: '#fff', color: '#6b7280', borderColor: '#e5e7eb' }}>
+                    {site.is_seasonal_site ? 'Make Transient' : 'Make Seasonal'}
+                  </button>
+                )}
                 <button onClick={() => openEditForm(site)} className="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-medium">Edit</button>
                 <button onClick={() => handleDelete(site)} className="text-xs px-3 py-1 rounded-full bg-red-50 text-red-600 hover:bg-red-100 font-medium">Delete</button>
               </div>

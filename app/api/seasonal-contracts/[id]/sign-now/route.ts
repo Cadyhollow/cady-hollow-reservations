@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isSummit, freezePacket } from '@/lib/contract-server'
+import { isSummit, freezePacket, errMessage } from '@/lib/contract-server'
 import { requireRole } from '@/lib/require-role'
+
+
 
 // POST /api/seasonal-contracts/[id]/sign-now — summit-gated. In-person signing:
 // freeze the draft into a packet via freezePacket() (inherits the empty-doc guard,
@@ -9,7 +11,9 @@ import { requireRole } from '@/lib/require-role'
 // Does NOT email, and does NOT require the guest to have an email (a walk-up may
 // have none) — no requireEmail passed.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireRole(request, 'staff')
+  // MANAGER, raised from Cady's 'staff' (decided 2026-08-19). Signing in person freezes the
+  // draft into a packet and commits the agreement — the same act as sending, minus the email.
+  const denied = await requireRole(request, 'manager')
   if (denied) return denied
 
   try {
@@ -20,7 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const result = await freezePacket(id)
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
     return NextResponse.json({ ok: true, packet_id: result.packet_id })
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Something went wrong' }, { status: 500 })
+  } catch (e) {
+    return NextResponse.json({ error: errMessage(e, 'Something went wrong') }, { status: 500 })
   }
 }

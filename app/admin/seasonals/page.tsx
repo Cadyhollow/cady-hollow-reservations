@@ -1,10 +1,13 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
-import { currentSeasonYear } from '@/lib/season'
+import { sortSeasonsForPicker } from '@/lib/season'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import SeasonsManager from './SeasonsManager'
+import SeasonPicker, { useSeasons } from './SeasonPicker'
+import type { Season } from '@/lib/seasonal-types'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -43,44 +46,71 @@ export default function SeasonalsPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<Row[]>([])
-  const [year, setYear] = useState<number>(currentSeasonYear())
+  // Phase 2c: the list is filtered by SEASON. `seasonId` is the selection; the picker's default
+  // (the season containing today, else the newest) arrives from useSeasons.
+  const { seasons, loaded: seasonsLoaded, defaultId, reload: reloadSeasons } = useSeasons()
+  const [seasonId, setSeasonId] = useState('')
   const [signed, setSigned] = useState(0)
   const [total, setTotal] = useState(0)
   const [unsignedOnly, setUnsignedOnly] = useState(false)
   const [err, setErr] = useState('')
   // Clone-from-last-year flow: 'confirm' shows a preview count, 'done' the summary.
   const [cloneStep, setCloneStep] = useState<'idle' | 'confirm' | 'done'>('idle')
-  const [clonePreview, setClonePreview] = useState<{ from_year: number; to_year: number; would_create: number; would_skip: number } | null>(null)
+  const [clonePreview, setClonePreview] = useState<{ from_year: number; to_year: number; from_season_id: string; to_season_id: string; would_create: number; would_skip: number } | null>(null)
+  // The season being cloned FROM. Defaults to the most recent season before the selected one.
+  const [fromSeasonId, setFromSeasonId] = useState('')
   const [cloneResult, setCloneResult] = useState<{ created: number; skipped: number; errors: { guest_id: string; reason: string }[] } | null>(null)
   const [cloneBusy, setCloneBusy] = useState(false)
   const [cloneErr, setCloneErr] = useState('')
+  // Phase 2a: the seasons manager. Purely additive — nothing else on this page reads seasons yet.
+  const [seasonsOpen, setSeasonsOpen] = useState(false)
 
   // Batch-1 gate: decide on the freshly-loaded plan, never the state default.
   useEffect(() => {
     supabase.from('settings').select('plan').single().then(({ data }) => {
       if (!planAtLeast(data?.plan, 'summit')) router.replace('/admin')
     })
-  }, [])
+  }, [router])
 
-  async function load(y: number) {
+  // useCallback so the effect below can DECLARE this as a dependency instead of suppressing the
+  // warning. It is also called by the clone flow after a successful run, so it cannot be inlined.
+  useEffect(() => { if (!seasonId && defaultId) setSeasonId(defaultId) }, [defaultId, seasonId])
+
+  const load = useCallback(async (sid: string) => {
+    if (!sid) { setRows([]); setSigned(0); setTotal(0); setLoading(false); return }
     setLoading(true); setErr('')
     try {
-      const res = await fetch(`/api/seasonals/list?year=${y}`)
+      const res = await fetch(`/api/seasonals/list?season_id=${encodeURIComponent(sid)}`)
       const d = await res.json()
       if (!res.ok) { setErr(d.error || 'Could not load seasonals.'); setRows([]) }
       else { setRows(d.rows || []); setSigned(d.signed_count || 0); setTotal(d.total || 0) }
     } catch { setErr('Could not load seasonals.') }
     setLoading(false)
-  }
-  useEffect(() => { load(year) }, [year])
+  }, [])
+  useEffect(() => { if (seasonsLoaded) void load(seasonId) }, [load, seasonId, seasonsLoaded])
 
   // Preview first (writes nothing), then the staff confirms to actually create.
-  async function openClone() {
-    setCloneErr(''); setCloneResult(null); setClonePreview(null); setCloneStep('confirm'); setCloneBusy(true)
+  // The most recent season BEFORE the selected one, in picker order — the sensible "from".
+  const previousSeasonId = (() => {
+    const ordered = sortSeasonsForPicker(seasons)
+    const i = ordered.findIndex(s => s.id === seasonId)
+    return i >= 0 ? (ordered[i + 1]?.id || '') : (ordered[0]?.id || '')
+  })()
+
+  function openClone() {
+    setCloneErr(''); setCloneResult(null); setClonePreview(null)
+    setFromSeasonId(previousSeasonId)
+    setCloneStep('confirm')
+    if (previousSeasonId) void previewClone(previousSeasonId)
+  }
+
+  // Preview writes NOTHING — it only counts. Re-run whenever the "from" season changes.
+  async function previewClone(fromId: string) {
+    setCloneErr(''); setClonePreview(null); setCloneBusy(true)
     try {
       const res = await fetch('/api/seasonal-contracts/clone', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from_year: year - 1, to_year: year, preview: true }),
+        body: JSON.stringify({ from_season_id: fromId, to_season_id: seasonId, preview: true }),
       })
       const d = await res.json()
       if (!res.ok) setCloneErr(d.error || 'Could not preview.')
@@ -94,17 +124,20 @@ export default function SeasonalsPage() {
     try {
       const res = await fetch('/api/seasonal-contracts/clone', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from_year: year - 1, to_year: year }),
+        body: JSON.stringify({ from_season_id: fromSeasonId, to_season_id: seasonId }),
       })
       const d = await res.json()
       if (!res.ok) { setCloneErr(d.error || 'Clone failed.'); setCloneBusy(false); return }
       setCloneResult(d); setCloneStep('done')
-      await load(year)   // refresh the list so the new drafts are visible for review
+      await load(seasonId)   // refresh the list so the new drafts are visible for review
     } catch { setCloneErr('Clone failed.') }
     setCloneBusy(false)
   }
 
   function closeClone() { setCloneStep('idle'); setClonePreview(null); setCloneResult(null); setCloneErr('') }
+
+  const selectedSeason: Season | null = seasons.find(s => s.id === seasonId) || null
+  const nameOf = (id: string) => seasons.find(s => s.id === id)?.name || 'that season'
 
   const visible = unsignedOnly ? rows.filter(r => r.contract_status !== 'signed') : rows
 
@@ -114,7 +147,7 @@ export default function SeasonalsPage() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Seasonal Campers</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            {loading ? 'Loading…' : `${signed} of ${total} contracts signed for ${year}`}
+            {loading ? 'Loading…' : `${signed} of ${total} contracts signed for ${selectedSeason?.name || 'this season'}`}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -123,18 +156,21 @@ export default function SeasonalsPage() {
             style={{ background: '#2E6B8A' }}>
             + New Seasonal Camper
           </Link>
-          <select value={year} onChange={e => setYear(parseInt(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-            {[year + 1, year, year - 1, year - 2].map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
+          <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded} />
           <button onClick={() => setUnsignedOnly(v => !v)}
             className="px-3 py-2 text-xs font-medium rounded-lg border"
             style={unsignedOnly ? { background: '#fffbeb', borderColor: '#fde68a', color: '#b45309' } : { background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
             {unsignedOnly ? 'Showing unsigned' : 'Unsigned only'}
           </button>
+          <button onClick={() => setSeasonsOpen(true)}
+            className="px-3 py-2 text-xs font-medium rounded-lg border"
+            style={{ background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
+            Manage seasons
+          </button>
           <button onClick={openClone}
             className="px-3 py-2 text-xs font-semibold rounded-lg border text-white"
             style={{ background: '#15803d', borderColor: '#15803d' }}>
-            Clone from last year
+            Clone from previous season
           </button>
         </div>
       </div>
@@ -152,13 +188,16 @@ export default function SeasonalsPage() {
                 <th className="px-4 py-3">Waiver</th>
                 <th className="px-4 py-3 text-right">Balance</th>
                 <th className="px-4 py-3">Last note</th>
+                <th className="px-4 py-3 text-right">Payment</th>
               </tr>
             </thead>
             <tbody>
               {visible.map(r => (
                 <tr key={r.guest_id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <Link href={`/admin/seasonals/${r.guest_id}`} className="font-semibold text-gray-900 hover:underline">{r.name}</Link>
+                    {/* The season selected here TRAVELS. Without it the camper page fell back to its own
+                        default season, so a park working through 2027 clicked a name and landed on 2028. */}
+                    <Link href={`/admin/seasonals/${r.guest_id}${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`} className="font-semibold text-gray-900 hover:underline">{r.name}</Link>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{r.site_number || '—'}</td>
                   <td className="px-4 py-3">{statusPill(r.contract_status)}</td>
@@ -171,39 +210,66 @@ export default function SeasonalsPage() {
                     {r.balance_cents < 0 ? 'Credit ' + fmtMoney(-r.balance_cents) : fmtMoney(r.balance_cents)}
                   </td>
                   <td className="px-4 py-3 text-gray-500">{fmtDate(r.last_note_at)}</td>
+                  {/* Straight into this camper's Take-a-payment screen, with the SEASON carried
+                      through the same way the name link carries it (#64). */}
+                  <td className="px-4 py-3 text-right">
+                    <Link
+                      href={`/admin/checkout?guestId=${r.guest_id}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold border whitespace-nowrap"
+                      style={{ borderColor: '#bbf7d0', color: '#15803d', background: '#f0fdf4' }}>
+                      Pay
+                    </Link>
+                  </td>
                 </tr>
               ))}
               {!loading && visible.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
+      {seasonsOpen && <SeasonsManager defaultYear={selectedSeason?.year ?? new Date().getFullYear()} onClose={() => { setSeasonsOpen(false); void reloadSeasons() }} />}
+
       {cloneStep !== 'idle' && (
         <>
           <div className="fixed inset-0 bg-black/50 z-40" onClick={() => !cloneBusy && closeClone()} />
           <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[440px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">Clone last year’s seasonal contracts</h3>
+              <h3 className="text-lg font-bold text-gray-900">Clone from a previous season</h3>
             </div>
             <div className="px-6 py-4 text-sm text-gray-700 space-y-3">
               {cloneErr && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2">{cloneErr}</div>}
 
               {cloneStep === 'confirm' && (
-                cloneBusy && !clonePreview ? (
-                  <p className="text-gray-500">Checking {year - 1}…</p>
-                ) : clonePreview ? (
-                  <>
-                    <p>Create <strong>{clonePreview.would_create}</strong> new draft{clonePreview.would_create === 1 ? '' : 's'} for <strong>{clonePreview.to_year}</strong> from <strong>{clonePreview.from_year}</strong>’s seasonal campers.</p>
-                    {clonePreview.would_skip > 0 && <p className="text-gray-500">{clonePreview.would_skip} already have a {clonePreview.to_year} contract and will be skipped.</p>}
-                    {clonePreview.to_year !== currentSeasonYear() && (
-                      <p className="bg-amber-50 border border-amber-200 text-amber-800 rounded px-2 py-1.5 text-xs">⚠ You&rsquo;re creating <strong>{clonePreview.to_year}</strong> contracts, but the current season is <strong>{currentSeasonYear()}</strong>. Double-check the year.</p>
-                    )}
-                    <p className="text-xs text-gray-500">Drafts only — occupants and amount due carry over; site and rig are refreshed from each guest. Nothing is sent.</p>
-                  </>
-                ) : null
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Copy campers from</label>
+                    <SeasonPicker
+                      seasons={seasons.filter(x => x.id !== seasonId)}
+                      value={fromSeasonId}
+                      onChange={id => { setFromSeasonId(id); void previewClone(id) }}
+                      disabled={cloneBusy}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Into <strong>{selectedSeason?.name || 'the selected season'}</strong> — the season you have selected on the list.
+                    </p>
+                  </div>
+
+                  {!fromSeasonId ? (
+                    <p className="text-gray-500">There is no other season to copy from yet. Add one under <strong>Manage seasons</strong>.</p>
+                  ) : cloneBusy && !clonePreview ? (
+                    <p className="text-gray-500">Checking {nameOf(fromSeasonId)}…</p>
+                  ) : clonePreview ? (
+                    <>
+                      <p>Create <strong>{clonePreview.would_create}</strong> new draft{clonePreview.would_create === 1 ? '' : 's'} in <strong>{nameOf(clonePreview.to_season_id)}</strong> from <strong>{nameOf(clonePreview.from_season_id)}</strong>’s seasonal campers.</p>
+                      {clonePreview.would_skip > 0 && <p className="text-gray-500">{clonePreview.would_skip} already have a contract in {nameOf(clonePreview.to_season_id)} and will be skipped.</p>}
+                      <p className="text-xs text-gray-500">Drafts only — occupants and amount due carry over; site and rig are refreshed from each guest. Dates come from the season. Nothing is sent.</p>
+                    </>
+                  ) : null}
+                </>
               )}
 
               {cloneStep === 'done' && cloneResult && (
@@ -223,7 +289,7 @@ export default function SeasonalsPage() {
               {cloneStep === 'confirm' ? (
                 <>
                   <button onClick={closeClone} disabled={cloneBusy} className="px-4 py-2 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
-                  <button onClick={runClone} disabled={cloneBusy || !clonePreview || clonePreview.would_create === 0}
+                  <button onClick={runClone} disabled={cloneBusy || !fromSeasonId || !clonePreview || clonePreview.would_create === 0}
                     className="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
                     {cloneBusy ? 'Cloning…' : clonePreview ? `Create ${clonePreview.would_create} draft${clonePreview.would_create === 1 ? '' : 's'}` : 'Create'}
                   </button>
