@@ -6,6 +6,13 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Required by the Reports/lane modules ported from the template, which import each other
+    // with the .ts extension. That extension is not a style choice: those files are executed
+    // directly by `node --conditions=react-server --test`, whose ESM loader does no extension
+    // guessing, so `./ledger` fails with ERR_MODULE_NOT_FOUND at runtime. Safe with noEmit:
+    // nothing is written, so no emitted import path can be wrong.
+    "allowImportingTsExtensions": true,
+
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",

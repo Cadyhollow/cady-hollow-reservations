@@ -109,7 +109,12 @@ function NewReservationWizardInner() {
         supabase.from('products').select('*').eq('active', true).order('display_order'),
         supabase.from('product_categories').select('name').order('display_order'),
       ])
-      setSites(s.data || [])
+      // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY. A site sold for the SEASON has a camper
+      // living on it; offering it by the night double-books a real person. Filtered in memory
+      // rather than with .eq('is_seasonal_site', false) on purpose: `!== true` treats false,
+      // null and a MISSING COLUMN alike, so a park whose database has not had the seasonal-site
+      // migration behaves exactly as it did before this line existed.
+      setSites((s.data || []).filter((x: { is_seasonal_site?: boolean }) => x.is_seasonal_site !== true))
       setSettings(st.data || null)
       setFees(f.data || [])
       setAddons(a.data || [])

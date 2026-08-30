@@ -1,14 +1,17 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
-import { currentSeasonYear } from '@/lib/season'
+import SeasonPicker, { useSeasons } from '../SeasonPicker'
 import SeasonalSections from '../SeasonalSections'
 import AddressEditor from '../AddressEditor'
 import RigEditor from '../RigEditor'
 import PartyEditor from '../PartyEditor'
 import toast, { Toaster } from 'react-hot-toast'
+import type { SeasonalGuestData, SeasonalGuest } from '@/lib/seasonal-types'
+import type { Rig } from '../RigEditor'
+import type { Address } from '../AddressEditor'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
@@ -25,22 +28,30 @@ export default function SeasonalCamperPage() {
   const params = useParams()
   const router = useRouter()
   const guestId = params.guestId as string
-  const cy = currentSeasonYear()
-  const [year, setYear] = useState(cy)   // the season being viewed/acted on — a forced, visible choice
+  // Phase 2c: the SEASON being viewed/acted on — a forced, visible choice, and what decides which
+  // contract this page shows and sends. Replaces the year picker.
+  const { seasons, loaded: seasonsLoaded, defaultId } = useSeasons()
+  const [seasonId, setSeasonId] = useState('')
 
-  const [data, setData] = useState<any>(null)
+  const [data, setData] = useState<SeasonalGuestData | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
   // Rig editor
   const [rigOpen, setRigOpen] = useState(false)
-  const [rig, setRig] = useState<any>({})
+  const [rig, setRig] = useState<Rig>({})
   const [savingRig, setSavingRig] = useState(false)
 
   // Home address editor (writes to guests). Required for seasonal campers.
   const [addrOpen, setAddrOpen] = useState(false)
-  const [addr, setAddr] = useState<any>({})
+  const [addr, setAddr] = useState<Address>({})
   const [savingAddr, setSavingAddr] = useState(false)
+
+  // Party ROSTER editor (writes to guests.party). Standing camper info, exactly like rig and
+  // address above — NOT the per-contract `occupants` edited on the review screen at ./review.
+  const [partyOpen, setPartyOpen] = useState(false)
+  const [party, setParty] = useState<Occupant[]>([])
+  const [savingParty, setSavingParty] = useState(false)
 
   const [removing, setRemoving] = useState(false)
 
@@ -48,13 +59,8 @@ export default function SeasonalCamperPage() {
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
 
-  // Send-packet modal
-  const [modal, setModal] = useState(false)
-  const [draft, setDraft] = useState<any>(null)
-  const [occupants, setOccupants] = useState<Occupant[]>([])
-  const [totalDue, setTotalDue] = useState('')
-  const [opens, setOpens] = useState('')
-  const [closes, setCloses] = useState('')
+  // Shared by Resend and Cancel. The DRAFT send path now lives on the review screen
+  // (./review), so there is no modal state here any more.
   const [working, setWorking] = useState(false)
   const [sendResult, setSendResult] = useState<{ emailed: boolean; error?: string } | null>(null)
 
@@ -62,29 +68,55 @@ export default function SeasonalCamperPage() {
     supabase.from('settings').select('plan').single().then(({ data }) => {
       if (!planAtLeast(data?.plan, 'summit')) router.replace('/admin')
     })
-  }, [])
+  }, [router])
 
-  async function load() {
+  // useCallback so the effect can declare it, and because the send/resend/save flows all re-run
+  // it after a successful write.
+  // An incoming ?season_id= is the season the owner was already looking at on the list, so it
+  // wins over the picker's computed default. Read in an effect (not a lazy initializer) for the
+  // same hydration reason the rest of this area does.
+  const [urlSeasonId, setUrlSeasonId] = useState<string | null>(null)
+  useEffect(() => {
+    setUrlSeasonId(new URLSearchParams(window.location.search).get('season_id') || '')
+  }, [])
+  useEffect(() => {
+    if (seasonId || urlSeasonId === null) return          // wait until the URL has been read
+    if (urlSeasonId) setSeasonId(urlSeasonId)             // the season they came in on
+    else if (defaultId) setSeasonId(defaultId)            // otherwise the picker's default
+  }, [defaultId, seasonId, urlSeasonId])
+
+  const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const res = await fetch(`/api/seasonals/guest/${guestId}?year=${year}`)
+      const res = await fetch(`/api/seasonals/guest/${guestId}?season_id=${encodeURIComponent(seasonId)}`)
       const d = await res.json()
       if (!res.ok) setErr(d.error || 'Could not load camper.')
-      else { setData(d); setRig({ ...d.guest }); setAddr({ ...d.guest }) }
+      else { setData(d); setRig({ ...d.guest }); setAddr({ ...d.guest }); setParty(Array.isArray(d.guest?.party) ? d.guest.party : []) }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
-  }
-  useEffect(() => { load() }, [guestId, year])
+  }, [guestId, seasonId])
+  useEffect(() => { if (seasonsLoaded && seasonId) void load() }, [load, seasonsLoaded, seasonId])
+
+  // The review screen sends, then returns here with the outcome on the query string — the modal
+  // used to close in place and set this state directly. Read it once, show the same banner, and
+  // strip the params so a refresh (or a back-navigation) doesn't re-announce a stale send.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    const sent = q.get('sent')
+    if (sent === null) return
+    setSendResult({ emailed: sent === '1', error: q.get('err') || undefined })
+    router.replace(`/admin/seasonals/${guestId}`)
+  }, [router, guestId])
 
   async function saveRig() {
     setSavingRig(true)
     const { error } = await supabase.from('guests').update({
       camper_type: rig.camper_type || null,
-      camper_length: rig.camper_length ? parseInt(rig.camper_length) : null,
+      camper_length: rig.camper_length ? parseInt(String(rig.camper_length), 10) : null,
       camper_amperage: rig.camper_amperage || null,
       camper_make: rig.camper_make || null,
       camper_model: rig.camper_model || null,
-      camper_year: rig.camper_year ? parseInt(rig.camper_year) : null,
+      camper_year: rig.camper_year ? parseInt(String(rig.camper_year), 10) : null,
     }).eq('id', guestId)
     setSavingRig(false)
     if (error) { toast.error('Could not save rig: ' + error.message); return } // keep the editor open
@@ -102,6 +134,27 @@ export default function SeasonalCamperPage() {
     setSavingAddr(false)
     if (error) { toast.error('Could not save address: ' + error.message); return } // keep the editor open
     setAddrOpen(false); await load()
+  }
+
+  // Saves the STANDING roster onto the guest, the same shape as saveRig/saveAddr above.
+  //
+  // ⚠ THIS DOES NOT REACH AN ALREADY-SENT PACKET, AND THAT IS THE POINT. A sent packet is a
+  // frozen legal document: its occupants were copied onto the contract at send and nothing here
+  // rewrites them. The roster is what the NEXT draft is seeded from. To change the party on a
+  // packet that has gone out but is not yet signed, use “Cancel packet”, edit, and send again.
+  //
+  // Blank rows are dropped on save rather than stored: an unnamed occupant is a half-typed row,
+  // and the contract renderer would silently discard it anyway (buildContractVars filters empty
+  // names) — so the roster and the contract agree about who is on it.
+  async function saveParty() {
+    setSavingParty(true)
+    const cleaned = party
+      .map(o => ({ name: (o.name || '').trim(), kind: o.kind === 'child' ? 'child' as const : 'adult' as const }))
+      .filter(o => o.name)
+    const { error } = await supabase.from('guests').update({ party: cleaned }).eq('id', guestId)
+    setSavingParty(false)
+    if (error) { toast.error('Could not save party: ' + error.message); return } // keep the editor open
+    setParty(cleaned); setPartyOpen(false); await load()
   }
 
   // Remove from the Seasonals roster — just unchecks is_seasonal. Keeps the guest
@@ -135,58 +188,36 @@ export default function SeasonalCamperPage() {
     setNote(''); await load()
   }
 
-  async function openSendModal() {
-    // Backstop against an off-year send: the year is already visible in the picker
-    // and the button, but confirm if it deviates from the computed current season.
-    if (year !== cy && !window.confirm(`Creating a ${year} contract — the current season is ${cy}. Is that right?`)) return
-    setWorking(true); setSendResult(null)
-    const res = await fetch('/api/seasonal-contracts/create', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guest_id: guestId, season_year: year }),
-    })
-    const d = await res.json()
-    setWorking(false)
-    if (!res.ok) { setErr(d.error || 'Could not open packet.'); return }
-    const c = d.contract
-    setDraft(c)
-    setOccupants(Array.isArray(c.occupants) ? c.occupants : [])
-    setTotalDue(c.total_due_cents != null ? (c.total_due_cents / 100).toFixed(2) : '')
-    setOpens(c.season_opens || '')
-    setCloses(c.season_closes || '')
-    setModal(true)
+  // The draft send path. Phase 1.5 replaced the old modal — which showed the party, dates and
+  // total but never the DOCUMENTS — with a full review screen that renders the real contract and
+  // waiver before anything is frozen. This only navigates; the draft is created there.
+  function goToReview() {
+    if (!seasonId) return
+    // Phase 2c: the review screen is opened BY SEASON, which is what lets this camper hold a
+    // Spring and a Fall and still land on the right contract. The off-year confirm the modal
+    // carried is gone with the year picker — the season is named on the button itself now, so
+    // there is no ambiguous number to mistake.
+    router.push(`/admin/seasonals/${guestId}/review?season_id=${encodeURIComponent(seasonId)}`)
   }
 
-  async function saveAndSend() {
-    if (!draft) return
+  // Retract a sent-but-unsigned packet. The route voids the packet's signature rows (killing the
+  // camper's link) and puts the contract back to 'draft' — so after load() the header shows the
+  // green “Review & send …” button again and the normal review screen handles the re-send. No separate
+  // re-send UI is needed, and freezePacket mints a brand-new packet_id when it runs.
+  async function cancelPacket() {
+    const id = data?.currentContract?.id
+    if (!id) return
+    if (!window.confirm(
+      `Cancel the ${selectedSeason?.name || ''} packet?\n\n` +
+      `The link already emailed to ${data?.guest?.name || 'this camper'} will stop working, and the packet goes back to a draft you can edit.\n\n` +
+      `You will need to send it again afterwards. Anything already signed is not affected.`
+    )) return
     setWorking(true); setSendResult(null)
-    // 1) Persist the staff-edited fields FIRST. Send FREEZES the contract into a
-    // legal document, so if this save fails we ABORT — never send on top of unsaved
-    // edits (that would freeze wrong data). Editor stays open; nothing is sent.
-    const saveRes = await fetch(`/api/seasonal-contracts/${draft.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        occupants,
-        total_due_cents: totalDue ? Math.round(parseFloat(totalDue) * 100) : null,
-        season_opens: opens || null,
-        season_closes: closes || null,
-      }),
-    })
-    if (!saveRes.ok) {
-      let msg = 'Could not save the edits — packet NOT sent.'
-      try { const e = await saveRes.json(); if (e?.error) msg = `Could not save the edits (${e.error}) — packet NOT sent.` } catch {}
-      setWorking(false)
-      toast.error(msg)
-      return
-    }
-    // 2) Edits are confirmed saved → only now freeze + send.
-    const res = await fetch(`/api/seasonal-contracts/${draft.id}/send`, { method: 'POST' })
-    const d = await res.json()
+    const res = await fetch(`/api/seasonal-contracts/${id}/cancel`, { method: 'POST' })
+    const d = await res.json().catch(() => ({}))
     setWorking(false)
-    if (!res.ok || !d.ok) { setSendResult({ emailed: false, error: d.error || 'Send failed.' }); return }
-    // Packet is committed (emailed or not) → close the modal; the banner + reloaded
-    // status show the outcome, and a failed email can be retried with Resend.
-    setSendResult({ emailed: !!d.emailed, error: d.error || undefined })
-    setModal(false)
+    if (!res.ok || !d.ok) { toast.error(d.error || 'Could not cancel the packet.'); return }
+    toast.success('Packet canceled — the camper\u2019s link no longer works. Edit and send again when ready.')
     await load()
   }
 
@@ -204,8 +235,10 @@ export default function SeasonalCamperPage() {
 
   const current = data?.currentContract
   const status = current?.status || 'none'
-  const g = data?.guest || {}
+  const g: SeasonalGuest = data?.guest || { id: '' }
   const hasAddress = !!(g.home_street && g.home_city && g.home_state && g.home_zip)
+  const roster: Occupant[] = Array.isArray(g.party) ? (g.party as Occupant[]) : []
+  const selectedSeason = seasons.find(s => s.id === seasonId) || null
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
@@ -214,20 +247,26 @@ export default function SeasonalCamperPage() {
         <div>
           <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
           <h2 className="text-2xl font-bold text-gray-900">{data?.guest?.name}</h2>
-          <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {year} season</p>
+          <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href={`/admin/seasonals/new?guestId=${guestId}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
+          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
           <label className="text-xs font-medium text-gray-500">Season</label>
-          <select value={year} onChange={e => setYear(parseInt(e.target.value))}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900">
-            {[cy - 1, cy, cy + 1].map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
+          <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
+            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900" />
           {status === 'signed'
             ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f0fdf4', color: '#15803d' }}>✓ Packet signed</span>
             : status === 'sent'
-              ? <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{working ? '…' : '↻ Resend email'}</button>
-              : <button onClick={openSendModal} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Send ${year} packet`}</button>}
+              ? <>
+                  <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{working ? '…' : '↻ Resend email'}</button>
+                  {/* Quiet outline, not a red fill: this is reversible by sending again, not a delete. */}
+                  <button onClick={cancelPacket} disabled={working}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
+                    style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
+                    {working ? '…' : 'Cancel packet'}
+                  </button>
+                </>
+              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
         </div>
       </div>
 
@@ -286,6 +325,35 @@ export default function SeasonalCamperPage() {
         )}
       </div>
 
+      {/* Party roster editor (writes to guests.party) — standing camper info, like rig/address.
+          Editing here changes who is on the NEXT packet; it does not alter one already sent. */}
+      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide">Party (saved to the camper record)</h3>
+          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{partyOpen ? 'Cancel' : 'Edit'}</button>
+        </div>
+        {!partyOpen && (
+          roster.length > 0
+            ? <ul className="text-sm text-gray-700 mt-2 space-y-1">
+                {roster.map((o, i) => (
+                  <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-gray-400 capitalize">{o.kind || ''}</span></li>
+                ))}
+              </ul>
+            : <p className="text-sm text-gray-400 mt-2">No one on the roster yet.</p>
+        )}
+        {partyOpen && (
+          <div className="mt-3">
+            <PartyEditor value={party} onChange={setParty} />
+            <p className="text-xs text-gray-400 mt-1">
+              This is the camper&rsquo;s standing party. It fills in the next packet you send — it does not change a packet that has already gone out.
+            </p>
+            <div className="mt-3">
+              <button onClick={saveParty} disabled={savingParty} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingParty ? 'Saving…' : 'Save party'}</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Add note (append-only) */}
       <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
         <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-2">Add a note</h3>
@@ -302,41 +370,6 @@ export default function SeasonalCamperPage() {
         </button>
       </div>
 
-      {/* Send-packet modal */}
-      {modal && draft && (
-        <>
-          <div className="fixed inset-0 bg-black/50 z-50" onClick={() => !working && setModal(false)} />
-          <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[460px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">Send {year} packet</h3>
-              <p className="text-sm text-gray-500 mt-0.5">{data?.guest?.name} · reviewed before sending</p>
-            </div>
-            <div className="px-6 py-4 space-y-4 max-h-[65vh] overflow-y-auto">
-              <PartyEditor value={occupants} onChange={setOccupants} />
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Season opens</label>
-                  <input type="date" value={opens || ''} onChange={e => setOpens(e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Season closes</label>
-                  <input type="date" value={closes || ''} onChange={e => setCloses(e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Total due (display only, $)</label>
-                <input type="number" step="0.01" value={totalDue} onChange={e => setTotalDue(e.target.value)} placeholder="0.00" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-              </div>
-              <p className="text-xs text-gray-400">Rig details are pulled from the camper record at send. Edit them above if needed before sending.</p>
-              {sendResult && !sendResult.emailed && <div className="text-sm text-amber-700">{sendResult.error}</div>}
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
-              <button onClick={() => setModal(false)} disabled={working} className="flex-1 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
-              <button onClick={saveAndSend} disabled={working} className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? 'Sending…' : 'Send packet →'}</button>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   )
 }

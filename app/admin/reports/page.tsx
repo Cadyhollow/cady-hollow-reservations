@@ -1,20 +1,67 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
-import { useRouter } from 'next/navigation'
-import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
-import { planAtLeast } from '@/lib/plan'
-import { notVoided, sumLineTotals } from '@/lib/ledger'
-import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
-import { folioPaymentRefundable } from '@/lib/refundable'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
 const supabase = createBrowserSupabase()
+import { useRouter } from 'next/navigation'
+import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
+import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+// ── REPORTS R1: THE NUMBERS HAVE TO RECONCILE ────────────────────────────────────────────────
+//
+// Everything below is IMPORTED, never reimplemented here. `notVoided` is the app's one
+// void-filter idiom; lib/ledger-lanes.ts is the classifier the folio, the receipt and the
+// electric bill already use. A report that decides for itself what a charge is FOR, or which
+// charges count, is a report that disagrees with the folio it was built from — which is the
+// fastest way to lose an owner. lib/ledger.ts, booking-quote.ts and pricing.ts are untouched.
+import { notVoided } from '@/lib/ledger'
+import { laneBalances, LANES, type Lane, type LaneBalances } from '@/lib/ledger-lanes'
+import { LANE_LABEL, LANE_COLOR, SEASONAL_CAMPER_LANES } from '@/lib/lane-display'
+import {
+  bucketGuestAccountCharges, rollUpLanes, segmentOf,
+  type Segment, type GuestAccountBuckets,
+} from '@/lib/report-buckets'
+// ── REPORTS R2: THE MONEY VIEW ───────────────────────────────────────────────────────────────
+//
+// Same rule as R1 — imported, never reimplemented. The source colours for `seasonal`, `electric`
+// and `store` are READ OUT OF R1's lane colours inside lib/report-sources.ts, so the dashboard
+// and a camper's folio cannot drift into speaking different colour languages.
+import {
+  sumBySource, rankSources, barWidthPct, sourceOfPayment,
+  SOURCE_LABEL, SOURCE_COLOR, SOURCE_BLURB,
+  SOURCE_DESTINATION, type RevenueSource, type SourceFolio, type SourcePayment,
+  type BookingPayment,
+} from '@/lib/report-sources'
+import {
+  pickComparison, computeDelta, headlineRead, isRecordPeriod, monthKey,
+  type MonthTotal, type Window,
+} from '@/lib/report-periods'
+// ── REPORTS R3: THE FORWARD LOOK ─────────────────────────────────────────────────────────────
+//
+// lib/occupancy.ts is an EXTRACTION, not a new idea: this page already counted occupancy two
+// different ways, and the heat calendar cannot disagree with the dashboard about how full
+// tonight is. Both now go through the same function.
+import {
+  occupiedOn, fillPercent, mondayOf, addDays, weekStartsFrom, sameWeekLastYear, toYmd,
+  type StayRow,
+} from '@/lib/occupancy'
+import {
+  buildForwardLook, heatColor, HEAT_LEGEND, PACE_BASIS_LABEL, type WeekPace, type PaceBasis,
+} from '@/lib/forward-look'
+// ── REPORTS R4: OCCUPANCY BY SITE TYPE ───────────────────────────────────────────────────────
+//
+// Builds on R3's single occupancy definition rather than adding a fourth: lib/occupancy-report.ts
+// imports `occupiesNight` and does not restate it.
+import {
+  buildOccupancyReport, buildOccupants, buildSeasonalProgram, siteTypeByNumber, typeLabel,
+  isRentable, isSeasonalSite, UNRESOLVED_TYPE, type RentableSite, type TypeMetrics,
+  type ContractRow, type SeasonRow, type CamperRow,
+} from '@/lib/occupancy-report'
 
 type Reservation = {
   id: string
@@ -51,6 +98,8 @@ type LineItemRow = {
   tax_amount: number
   charged_at: string
   voided?: boolean
+  product_id?: string | null
+  lane?: string | null
 }
 type SeasonalCamper = {
   id: string
@@ -58,8 +107,40 @@ type SeasonalCamper = {
   email: string
   site_number: string
   folioId: string
+  /** The WHOLE-ACCOUNT balance — identical to what this camper's folio prints. Negative = credit. */
   balance: number
+  /** The same money grouped by lane. Groups `balance`; never replaces or restates it. */
+  lanes: LaneBalances
 }
+/** One lane's money collected inside the selected period, across seasonal campers. */
+type LaneCollected = { byLane: Record<Lane, number>; untagged: number; total: number }
+// The rows the R1 queries read. Named rather than `any` because the lane classifier's answer
+// depends on exactly these columns being present — a select that quietly drops `voided`,
+// `product_id` or `lane` is the shape of every bug this PR is fixing, and a type catches it.
+type GaFolioRow = { id: string; guest_id: string | null }
+type GaItemRow = {
+  id: string; folio_id: string; line_total: number
+  voided?: boolean | null; product_id?: string | null; lane?: string | null
+}
+type GaPaymentRow = {
+  folio_id: string; amount: number; surcharge_amount?: number | null
+  lane?: string | null; paid_at?: string | null
+}
+type SeasonalGuestRow = { id: string; name: string; email: string; site_number: string }
+/** Named so the places that navigate BETWEEN tabs — the tab bar, the drill-downs R2 adds — can
+ *  do it without an `as any` that would hide a typo in a tab name until someone clicked it. */
+type TabKey = 'dashboard'|'forward'|'occupancy'|'reservations'|'seasonal'|'transactions'|'store'
+/** How many weeks the forward look covers. Eight is roughly the window a nudge can still fill. */
+const WEEKS_AHEAD = 8
+// ── R2 row shapes ────────────────────────────────────────────────────────────────────────────
+// Carried ALL-TIME rather than per-window, because the money view has to answer three questions
+// at once — this period, the comparison period, and "is this a record?" — and a park's payment
+// history is a few narrow columns. One fetch beats three round trips that could disagree.
+type SrcPaymentRow = SourcePayment & {
+  id: string; method?: string | null
+  folios?: { guest_name?: string | null } | null
+}
+type SrcBookingRow = BookingPayment & { id: string; guest_name?: string | null }
 
 const COLORS = ['#2E6B8A','#12c9e5','#C4873C','#2D6A4F','#9B59B6','#E74C3C']
 
@@ -68,14 +149,14 @@ export default function ReportsPage() {
 
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
-      if (!planAtLeast(data?.plan, 'ridgeline')) router.replace('/admin')
+      if (data?.plan && !['ridgeline','summit'].includes(data.plan)) router.replace('/admin')
       if (data?.pos_enabled) setPosEnabled(true)
       // Seasonal reporting is a Summit feature (governed by plan, not a separate flag)
-      if (planAtLeast(data?.plan, 'summit')) setSeasonalEnabled(true)
+      if (data?.plan === 'summit') setSeasonalEnabled(true)
     })
   }, [])
 
-  const [activeTab, setActiveTab] = useState<'dashboard'|'reservations'|'seasonal'|'transactions'|'store'>('dashboard')
+  const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
   const [posEnabled, setPosEnabled] = useState(false)
   const [seasonalEnabled, setSeasonalEnabled] = useState(false)
   const [reportBy, setReportBy] = useState<'payment_date'|'stay_date'>('payment_date')
@@ -98,9 +179,64 @@ export default function ReportsPage() {
   // Disjoint from folio_payments, so safe to add to payment-date revenue.
   const [bookingPaymentsTotal, setBookingPaymentsTotal] = useState(0)
   const [bookingSurchargeTotal, setBookingSurchargeTotal] = useState(0)
-  const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
-  const [monthlyRevenue, setMonthlyRevenue] = useState(0)
+  // Every guest-account charge in the period, partitioned into disjoint buckets — seasonal
+  // (split by lane), long-term/monthly, and everything else. Replaces the old `monthlyRevenue`
+  // number, which overlapped the seasonal figure and was in no total. See lib/report-buckets.ts.
+  const [gaBuckets, setGaBuckets] = useState<GuestAccountBuckets>({
+    bySegment: { seasonal: 0, long_term: 0, other: 0 },
+    seasonalByLane: { electric: 0, store: 0, seasonal: 0, other: 0 },
+    total: 0, unattributed: 0,
+  })
+  // ── R2 money-view data ─────────────────────────────────────────────────────
+  const [srcPayments, setSrcPayments] = useState<SrcPaymentRow[]>([])
+  const [srcBookings, setSrcBookings] = useState<SrcBookingRow[]>([])
+  const [srcFolios, setSrcFolios] = useState<Map<string, SourceFolio>>(new Map())
+  /** The park's very first dollar. Decides whether a last-year comparison is even possible. */
+  const [firstRevenueISO, setFirstRevenueISO] = useState<string|null>(null)
+  /** The selected window, kept in state so the comparison maths can reach it outside fetchAll. */
+  const [win, setWin] = useState<Window>({ startISO: '', endISO: '' })
+  // ── R3 forward-look data ───────────────────────────────────────────────────
+  /** Stays covering the next 8 weeks, and the equivalent 8 weeks a year earlier. */
+  const [fwdRows, setFwdRows] = useState<StayRow[]>([])
+  const [fwdPriorRows, setFwdPriorRows] = useState<StayRow[]>([])
+  const [todayYmd, setTodayYmd] = useState('')
+  /**
+   * The owner's fill target. ⚠ NULL IS THE DEFAULT AND MEANS NO GOAL LINE AND NO GOAL JUDGMENT.
+   * Some owners find a target motivating and others find it a stick, so it is theirs to opt into.
+   */
+  const [goalPct, setGoalPct] = useState<number|null>(null)
+  /** False on a tenant that has not run the R3 migration — the control then explains itself
+   *  rather than offering a save that would fail. Same guarded-select pattern as billing_mode. */
+  const [hasGoalColumn, setHasGoalColumn] = useState(false)
+  const [settingsId, setSettingsId] = useState<string|null>(null)
+  const [goalEditing, setGoalEditing] = useState(false)
+  const [goalDraft, setGoalDraft] = useState('')
+  const [goalSaving, setGoalSaving] = useState(false)
+
+  // ── R4 occupancy data ──────────────────────────────────────────────────────
+  const [occSites, setOccSites] = useState<RentableSite[]>([])
+  const [occRes, setOccRes] = useState<(StayRow & { id?: string|null; site_id?: string|null; total_price?: number|null })[]>([])
+  const [occContracts, setOccContracts] = useState<ContractRow[]>([])
+  const [occSeasons, setOccSeasons] = useState<(SeasonRow & { year?: number|null })[]>([])
+  const [occCampers, setOccCampers] = useState<CamperRow[]>([])
+  /** The Occupancy tab keeps its OWN window: occupancy is a seasonal-shape question, and the
+   *  page-wide picker cannot reach a season in a different year. */
+  const [occMode, setOccMode] = useState<'this_month'|'ytd'|'year'|'custom'>('this_month')
+  const [occYear, setOccYear] = useState<number>(new Date().getFullYear())
+  const [occStart, setOccStart] = useState('')
+  const [occEnd, setOccEnd] = useState('')
+  /** Null = the all-types table; a type = that type on its own. */
+  const [occType, setOccType] = useState<string|null>(null)
+
+  /** Which source row is expanded for drill-down. */
+  const [openSource, setOpenSource] = useState<RevenueSource|null>(null)
+  const [showBilledDetail, setShowBilledDetail] = useState(false)
+
+  // Payments taken from seasonal campers INSIDE the period, by the lane they were filed against.
+  const [laneCollected, setLaneCollected] = useState<LaneCollected>({
+    byLane: { electric: 0, store: 0, seasonal: 0, other: 0 }, untagged: 0, total: 0,
+  })
   const [totalSites, setTotalSites] = useState(84)
   const [totalCabins, setTotalCabins] = useState(3)
   const [tonightCount, setTonightCount] = useState(0)
@@ -188,12 +324,25 @@ export default function ReportsPage() {
     const { count: seasonalCount } = await supabase.from('guests').select('id', { count: 'exact', head: true }).eq('is_seasonal', true)
     setSeasonalCount(seasonalCount || 0)
 
-    // Tonight occupancy — split cabins vs sites
-    const { data: tonightRes } = await supabase.from('reservations').select('id, sites(site_type)').neq('status','cancelled').lte('arrival_date', today).gte('departure_date', today)
-    const tonightCabinCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type==='cabin').length
-    const tonightSiteCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type!=='cabin').length
-    setTonightCount(tonightSiteCount)
-    setTonightCabins(tonightCabinCount)
+    // Tonight occupancy — split cabins vs sites.
+    //
+    // ⚠ `gt('departure_date')`, NOT `gte`, AND THE COUNT NOW GOES THROUGH occupiedOn().
+    //
+    // This query used to match `departure_date >= today`, which counts a guest who checked out
+    // this morning as still occupying a site tonight. That site is empty and sellable. It also
+    // disagreed with this page's OWN monthly occupancy trend, which has always walked
+    // `arrival <= night < departure`.
+    //
+    // R3 draws a calendar of nights, and its cell for today has to equal the figure the dashboard
+    // prints — so there is now exactly one definition of "occupied on this night", in
+    // lib/occupancy.ts, and both callers use it. The dashboard's number can move by the number of
+    // guests departing today; that is the correction, not a regression.
+    const { data: tonightRes } = await supabase.from('reservations')
+      .select('id, arrival_date, departure_date, status, sites(site_type)')
+      .neq('status','cancelled').lte('arrival_date', today).gt('departure_date', today)
+    const tonight = occupiedOn((tonightRes||[]) as unknown as StayRow[], today)
+    setTonightCount(tonight.sites)
+    setTonightCabins(tonight.cabins)
 
     // Future bookings
     const { count: futureRes } = await supabase.from('reservations').select('id', { count: 'exact', head: true }).neq('status','cancelled').gt('arrival_date', today)
@@ -244,9 +393,11 @@ export default function ReportsPage() {
       .lte('arrival_date', stayEnd)
       .order('arrival_date')
 
-    // Exclude guest_account folios
-    const { data: allGaFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account')
-    const allGaFolioIds = (allGaFolios||[]).map((f:any)=>f.id)
+    // Every guest_account folio in the park. `guest_id` comes along now because the reporting
+    // buckets below need to know WHOSE account each folio is — see lib/report-buckets.ts.
+    const { data: allGaFolios } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account')
+    const allGaFolioRows = (allGaFolios||[]) as GaFolioRow[]
+    const allGaFolioIds = allGaFolioRows.map(f=>f.id)
 
     // Fetch ALL payments (including guest_account) for complete picture
     const { data: allPmtData } = await supabase
@@ -288,11 +439,19 @@ export default function ReportsPage() {
     const guestAccountFolioIdSet = new Set(allGaFolioIds)
     const { data: allLiData } = await supabase
       .from('folio_line_items')
-      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at')
+      // ⚠ `voided` IS NOW SELECTED. It was absent from this column list, so every row read as
+      // un-voided no matter what the database said, and a canceled sale still counted in Sales by
+      // Category and Top Products. `product_id` and `lane` come along so this ONE query can also
+      // feed the guest-account buckets below — the lane classifier needs both, and splitting the
+      // work into a second `.in(…every folio id…)` query would only risk an over-long URL.
+      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided, product_id, lane')
       .gte('charged_at', startISO)
       .lte('charged_at', endISO)
-    // Exclude electric billing and seasonal account charges — keep all real store/POS items
-    const storeItems = (allLiData || []).filter((li: any) => {
+    const allPeriodItems = (allLiData||[]) as (GaItemRow & LineItemRow)[]
+    // Exclude electric billing and seasonal account charges — keep all real store/POS items.
+    // `notVoided` is applied at the SUM step everywhere else in this app; here the rows exist
+    // only to be summed, so it is applied as they arrive.
+    const storeItems = allPeriodItems.filter(notVoided).filter(li => {
       if (guestAccountFolioIdSet.has(li.folio_id)) return false
       // Exclude electric billing line items
       if (li.description && li.description.toLowerCase().includes('electric')) return false
@@ -300,55 +459,236 @@ export default function ReportsPage() {
     })
     setLineItems(storeItems as any)
 
-    // Seasonal campers
-    const { data: seasonalGuests } = await supabase.from('guests').select('id, name, email, site_number').eq('is_seasonal', true)
-    const seasonalGuestIds = (seasonalGuests||[]).map((g:any)=>g.id)
-    let gaFolioIds: string[] = []
+    // ── SEASONAL CAMPERS: balances that reconcile to the folio, split into lanes ────────────
+    //
+    // Rewritten from a pair of queries PER CAMPER into three batched reads. Speed is a side
+    // effect; the reason is that the lane classifier needs `id`, `product_id`, `lane` AND the
+    // electric_readings link, and the old `select('line_total')` could not give it any of them.
+    const { data: seasonalGuestsRaw } = await supabase.from('guests').select('id, name, email, site_number').eq('is_seasonal', true)
+    const seasonalGuests = (seasonalGuestsRaw||[]) as SeasonalGuestRow[]
+    const seasonalGuestIds = seasonalGuests.map(g=>g.id)
+    // Hoisted: the same electric signal classifies the camper balances below AND the period
+    // charges further down, so both must be resolved against one set of readings.
+    let laneCtx = { electricLineItemIds: new Set<string>() as ReadonlySet<string> }
+    // Seasonal campers' payments, ALL TIME. The period figure is a filter over these rather than
+    // a second round trip for rows already in hand.
+    let seasonalPmtRows: GaPaymentRow[] = []
+
     if (seasonalGuestIds.length > 0) {
-      const { data: gaFolios } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account').in('guest_id', seasonalGuestIds)
-      gaFolioIds = (gaFolios||[]).map((f:any)=>f.id)
+      const { data: gaFoliosRaw } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account').in('guest_id', seasonalGuestIds)
+      const gaFolios = (gaFoliosRaw||[]) as GaFolioRow[]
+      const gaFolioIds = gaFolios.map(f=>f.id)
 
-      // Build seasonal camper balance list
-      const camperList: SeasonalCamper[] = []
-      for (const guest of (seasonalGuests||[])) {
-        const guestFolios = (gaFolios||[]).filter((f:any)=>f.guest_id===guest.id)
-        if (guestFolios.length === 0) { camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId: '', balance: 0 }); continue }
-        const folioId = guestFolios[0].id
-        const [{ data: items }, { data: pmts }] = await Promise.all([
-          supabase.from('folio_line_items').select('line_total, voided').eq('folio_id', folioId),
-          supabase.from('folio_payments').select('amount, surcharge_amount').eq('folio_id', folioId).eq('status','completed'),
-        ])
-        const itemsTotal = sumLineTotals(items)
-        const paymentsTotal = (pmts||[]).reduce((s:number,p:any)=>s+p.amount-(p.surcharge_amount||0),0)
-        const balance = Math.max(0, itemsTotal - paymentsTotal)
-        camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId, balance })
-      }
+      // ALL-TIME, deliberately not date-ranged: a balance is what a camper owes TODAY — the same
+      // figure their folio prints. The period-scoped figures are computed separately, below.
+      const [{ data: allItems }, { data: allPmts }] = gaFolioIds.length ? await Promise.all([
+        supabase.from('folio_line_items').select('id, folio_id, line_total, voided, product_id, lane').in('folio_id', gaFolioIds),
+        // REFUNDABLE_STATUSES, not 'completed' — the same widening app/admin/folio/guest/[id]
+        // and this page's own main payment query already made, and the reason this list can
+        // finally match the folio. Filtering to 'completed' dropped BOTH halves of a refund: the
+        // negative row AND the original, whose status flips to 'refunded'/'partially_refunded'.
+        // A refunded camper therefore read as having paid less than they had, and owing more.
+        // The arithmetic is signed, so including these rows SUBTRACTS them.
+        supabase.from('folio_payments').select('folio_id, amount, surcharge_amount, lane, paid_at, status').in('folio_id', gaFolioIds).in('status', REFUNDABLE_STATUSES),
+      ]) : [{ data: [] }, { data: [] }]
+      const allItemRows = (allItems||[]) as GaItemRow[]
+      seasonalPmtRows = (allPmts||[]) as GaPaymentRow[]
+
+      // The electric signal, exactly as the folio, the receipt and the electric bill resolve it:
+      // the readings that point at these charges. NOT the category — a store item filed under
+      // "Fees" is indistinguishable from an electric charge by category. See lib/ledger-lanes.ts.
+      //
+      // ⚠ KEYED ON guest_id, NOT on the line-item ids. The single-camper callers ask
+      // `.in('folio_line_item_id', …)` because they hold a handful of ids; asking that here would
+      // put EVERY seasonal charge the park has ever written into one URL, which is how a
+      // park-wide report turns into a 414. A reading names its camper, so the same set comes back
+      // keyed on the campers instead. Ids for charges outside this set are simply never looked
+      // up — membership is only ever tested for items we are already classifying.
+      const { data: readings } = await supabase.from('electric_readings')
+        .select('folio_line_item_id').in('guest_id', seasonalGuestIds)
+      laneCtx = { electricLineItemIds: new Set(((readings||[]) as { folio_line_item_id: string | null }[])
+        .map(r=>r.folio_line_item_id).filter(Boolean) as string[]) }
+
+      const itemsByFolio = new Map<string, GaItemRow[]>()
+      for (const i of allItemRows) { const a = itemsByFolio.get(i.folio_id); if (a) a.push(i); else itemsByFolio.set(i.folio_id, [i]) }
+      const pmtsByFolio = new Map<string, GaPaymentRow[]>()
+      for (const pm of seasonalPmtRows) { const a = pmtsByFolio.get(pm.folio_id); if (a) a.push(pm); else pmtsByFolio.set(pm.folio_id, [pm]) }
+
+      const camperList: SeasonalCamper[] = seasonalGuests.map(guest => {
+        const folioId = gaFolios.find(f=>f.guest_id===guest.id)?.id || ''
+        // laneBalances() applies `notVoided` itself, at the sum step — the same idiom the folio
+        // uses. That single call is the whole Part A fix for this list: a camper with a canceled
+        // packet used to read too high here and disagree with their own account.
+        const lanes = laneBalances(itemsByFolio.get(folioId) || [], pmtsByFolio.get(folioId) || [], laneCtx)
+        return {
+          id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId,
+          // ⚠ NO Math.max(0, …). The old clamp floored every balance at zero, so a camper holding
+          // a credit read as "✓ Current" and this page's own Credit figures were dead code that
+          // could never fire. A credit is real money the park is holding, and the folio shows it.
+          balance: lanes.accountBalance,
+          lanes,
+        }
+      })
       setSeasonalCampers(camperList)
+    } else {
+      // Previously omitted, so a park that unflagged its last seasonal kept the stale list.
+      setSeasonalCampers([])
     }
 
-    let gaPmtData: any[] = []
-    if (gaFolioIds.length > 0) {
-      const { data: gaPmts } = await supabase.from('folio_payments').select('id, paid_at, method, amount, surcharge_amount, status, folio_id').eq('status','completed').gte('paid_at', startISO).lte('paid_at', endISO).in('folio_id', gaFolioIds)
-      gaPmtData = gaPmts || []
-      const { data: gaLiData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided').in('folio_id', gaFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-      // Phase D: voided charges are not revenue — drop them at ingestion so every
-      // downstream sum (electric/other revenue, category map) excludes them.
-      setGuestAccountLineItems(((gaLiData as any) || []).filter(notVoided))
-    } else { setGuestAccountLineItems([]) }
+    // ── EVERY GUEST-ACCOUNT DOLLAR IN THE PERIOD, PARTITIONED ──────────────────────────────
+    //
+    // EXACTLY ONE bucket per folio, replacing the two overlapping questions this page used to ask
+    // ("what did seasonal campers spend?" and "what did monthly campers spend?"). Those two
+    // dropped or mis-bucketed real money three different ways; lib/report-buckets.ts documents
+    // each one. The buckets are summed independently of the total they must equal, which is what
+    // proves nothing is lost or counted twice.
+    //
+    // The tie-break — a guest flagged BOTH counts once, as seasonal — is `segmentOf`, so the
+    // rule this page reports by is the one lib/report-buckets.test.ts pins.
+    const { data: monthlyGuestsRaw } = await supabase.from('guests').select('id').eq('is_monthly', true)
+    const monthlyGuestIds = new Set(((monthlyGuestsRaw||[]) as { id: string }[]).map(g=>g.id))
+    const seasonalGuestIdSet = new Set(seasonalGuestIds)
+    const segmentByFolio = new Map<string, Segment>()
+    for (const f of allGaFolioRows) segmentByFolio.set(f.id, segmentOf({
+      is_seasonal: !!f.guest_id && seasonalGuestIdSet.has(f.guest_id),
+      is_monthly: !!f.guest_id && monthlyGuestIds.has(f.guest_id),
+    }))
 
-    // Monthly campers' guest-account charges (for the Monthly Revenue card)
-    const { data: monthlyGuests } = await supabase.from('guests').select('id').eq('is_monthly', true)
-    const monthlyGuestIds = (monthlyGuests||[]).map((g:any)=>g.id)
-    let monthlyCharges = 0
-    if (monthlyGuestIds.length > 0) {
-      const { data: mFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account').in('guest_id', monthlyGuestIds)
-      const mFolioIds = (mFolios||[]).map((f:any)=>f.id)
-      if (mFolioIds.length > 0) {
-        const { data: mItems } = await supabase.from('folio_line_items').select('line_total, voided').in('folio_id', mFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-        monthlyCharges = sumLineTotals(mItems)
+    // The guest-account half of the period's charges — the same rows `storeItems` above dropped,
+    // picked out of the one query rather than fetched again. Together the two are an exact
+    // partition of every line item charged in the window.
+    const gaItemRows = allPeriodItems.filter(li => guestAccountFolioIdSet.has(li.folio_id))
+    // bucketGuestAccountCharges applies `notVoided` — a canceled packet counts in no bucket.
+    setGaBuckets(bucketGuestAccountCharges(gaItemRows, segmentByFolio, laneCtx))
+
+    // Payments taken from seasonal campers inside the period, by the lane they were filed
+    // against. Untagged payments are reported as their own figure and never spread across the
+    // lanes — every payment predating Phase 4 is untagged, and inventing a lane for them would
+    // rewrite a park's financial history. Same rule as lib/ledger-lanes.ts.
+    const periodPmts = seasonalPmtRows.filter(pm => !!pm.paid_at && pm.paid_at >= startISO && pm.paid_at <= endISO)
+    // laneBalances() with NO items — it IS the module's own payment-by-lane arithmetic, so
+    // "collected per lane" here is netted of the card surcharge and normalises a lane tag by
+    // exactly the same rule the folio applies. Reusing it beats a second loop that could drift.
+    const collectedLanes = laneBalances([], periodPmts, laneCtx)
+    setLaneCollected({
+      byLane: Object.fromEntries(LANES.map(l=>[l, collectedLanes.byLane[l].payments])) as Record<Lane, number>,
+      untagged: collectedLanes.untaggedPayments,
+      total: collectedLanes.totalPayments,
+    })
+
+    // ── R4: EVERYTHING THE OCCUPANCY TAB NEEDS ─────────────────────────────────────────────
+    //
+    // Fetched whole rather than per window. Sites, seasons, contracts and campers are small by
+    // nature, and reservations are narrow here (six columns, no joins) — so the tab can switch
+    // between this month, a year to date and a season two years out without a round trip, and
+    // without three windowed queries that could disagree at a boundary.
+    const [{ data: siteRows }, { data: occResRows }, { data: contractRows }, { data: seasonRows }, { data: camperRows }] =
+      await Promise.all([
+        // select('*'), not a named list: on a tenant that has not run the R4b migration a named
+        // `is_seasonal_site` would make PostgREST error and this read return NOTHING — taking the
+        // whole Occupancy tab down for want of one column. The same reasoning the Sites screen
+        // already uses for the pet and prep columns.
+        supabase.from('sites').select('*'),
+        supabase.from('reservations').select('id, arrival_date, departure_date, status, site_id, total_price').neq('status','cancelled'),
+        supabase.from('seasonal_contracts').select('guest_id, site_number, total_due_cents, season_opens, season_closes, season_id, season_year, status'),
+        supabase.from('seasons').select('id, year, opens, closes'),
+        supabase.from('guests').select('id, name, site_number, is_seasonal, is_monthly, season_start, season_end')
+          .or('is_seasonal.eq.true,is_monthly.eq.true'),
+      ])
+    setOccSites((siteRows||[]) as RentableSite[])
+    setOccRes((occResRows||[]) as unknown as (StayRow & { id?: string|null; site_id?: string|null; total_price?: number|null })[])
+    setOccContracts((contractRows||[]) as ContractRow[])
+    setOccSeasons((seasonRows||[]) as (SeasonRow & { year?: number|null })[])
+    setOccCampers((camperRows||[]) as CamperRow[])
+
+    // ── R3: THE NEXT EIGHT WEEKS, AND THE SAME EIGHT WEEKS A YEAR AGO ──────────────────────
+    //
+    // Two narrow queries rather than one clever one. The window starts at the MONDAY OF THE
+    // CURRENT WEEK, not next Monday: it puts today on the calendar, which is what lets an owner
+    // (and a reviewer) check the view against the dashboard's occupancy at a glance.
+    setTodayYmd(today)
+    const fwdFirst = mondayOf(today)
+    const fwdLast = addDays(fwdFirst, WEEKS_AHEAD * 7 - 1)
+    // `gt('departure_date', fwdFirst)` is the night rule expressed in SQL — a stay that departs on
+    // the first night of the window occupies none of it. occupiedOn() re-applies it per night, so
+    // this is only a cheap server-side narrowing, never the definition.
+    const [{ data: fwdData }, { data: fwdPriorData }] = await Promise.all([
+      supabase.from('reservations').select('arrival_date, departure_date, status, created_at, sites(site_type)')
+        .neq('status','cancelled').lte('arrival_date', fwdLast).gt('departure_date', fwdFirst),
+      supabase.from('reservations').select('arrival_date, departure_date, status, created_at, sites(site_type)')
+        .neq('status','cancelled')
+        .lte('arrival_date', sameWeekLastYear(fwdLast)).gt('departure_date', sameWeekLastYear(fwdFirst)),
+    ])
+    setFwdRows((fwdData||[]) as unknown as StayRow[])
+    setFwdPriorRows((fwdPriorData||[]) as unknown as StayRow[])
+
+    // The goal, in its OWN guarded select. A tenant that has not run the R3 migration has no
+    // `occupancy_goal_percent` column, and widening the settings select above would make that
+    // whole query fail — taking every figure on this page down with it. Same shape as the
+    // billing_mode reads in app/admin/folio/guest/[id] and /api/electric-bill-email.
+    try {
+      const { data: goalRow, error: goalErr } = await supabase.from('settings')
+        .select('id, occupancy_goal_percent').limit(1).single()
+      if (!goalErr && goalRow) {
+        setHasGoalColumn(true)
+        setSettingsId(goalRow.id)
+        const raw = Number(goalRow.occupancy_goal_percent)
+        // 0 and NULL both read as "no goal": off by default has to mean off, and a stray 0 must
+        // not become a target every week clears.
+        setGoalPct(Number.isFinite(raw) && raw > 0 ? Math.min(100, Math.round(raw)) : null)
+      } else {
+        setHasGoalColumn(false)
       }
+    } catch { setHasGoalColumn(false) }
+
+    // ── R2: EVERYTHING THE MONEY VIEW NEEDS, ALL TIME ──────────────────────────────────────
+    //
+    // Deliberately NOT scoped to the selected window. The dashboard answers three questions at
+    // once — what came in this period, what came in over the comparison period, and whether this
+    // is the park's best month yet — and the last one is only answerable from the whole history.
+    // Three windowed queries could also disagree with each other at a boundary; one history that
+    // is sliced in memory cannot.
+    //
+    // The columns are narrow on purpose (no line items, no notes), so this stays a small read
+    // even for a park with years of payments behind it.
+    setWin({ startISO, endISO })
+    const [{ data: allFolioRows }, { data: allPayRows }, { data: allBookingRows }] = await Promise.all([
+      supabase.from('folios').select('id, folio_type, reservation_id, guest_id'),
+      // Same status set as every R1 balance: a refund is a negative row plus a flipped status,
+      // and counting only 'completed' would drop both halves.
+      supabase.from('folio_payments')
+        .select('id, folio_id, amount, surcharge_amount, lane, paid_at, method, folios(guest_name)')
+        .in('status', REFUNDABLE_STATUSES).order('paid_at', { ascending: false }),
+      // Booking payments live on the reservation, not on any folio, so they are disjoint from the
+      // rows above and are ADDED rather than de-duplicated. Cancelled bookings stay in: a refund
+      // nets itself out, so what remains is what the business kept.
+      supabase.from('reservations').select('id, guest_name, amount_paid, surcharge_amount, created_at').gt('amount_paid', 0),
+    ])
+
+    // `segmentByFolio` above already knows which guest-account belongs to a seasonal camper and
+    // which to a long-term one. Reused rather than re-derived, so the dashboard's idea of "whose
+    // account is this" is the same one the buckets and the Seasonal tab use.
+    const folioSourceMap = new Map<string, SourceFolio>()
+    for (const f of ((allFolioRows||[]) as { id: string; folio_type: string|null; reservation_id: string|null }[])) {
+      folioSourceMap.set(f.id, {
+        folio_type: f.folio_type, reservation_id: f.reservation_id,
+        segment: segmentByFolio.get(f.id) ?? null,
+      })
     }
-    setMonthlyRevenue(monthlyCharges)
+    const payRows = (allPayRows||[]) as unknown as SrcPaymentRow[]
+    const bookRows = (allBookingRows||[]) as unknown as SrcBookingRow[]
+    setSrcFolios(folioSourceMap)
+    setSrcPayments(payRows)
+    setSrcBookings(bookRows)
+
+    // The park's first dollar, from either tender. This is the whole basis of the last-year vs
+    // last-month decision — see pickComparison(): the question is whether last-year data COULD
+    // exist, not whether it happens to be zero.
+    const stamps = [
+      ...payRows.map(r => r.paid_at || ''),
+      ...bookRows.map(r => r.created_at || ''),
+    ].filter(Boolean).sort()
+    setFirstRevenueISO(stamps[0] || null)
 
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelledData?.length || 0)
@@ -369,6 +709,9 @@ export default function ReportsPage() {
     setTxFolioLoading(true)
     setRefundTarget(null)
     const [{ data: items }, { data: pmts }] = await Promise.all([
+      // `voided` added. The drawer below already reads `i.voided` to decide what to show — but
+      // the column was never in this select, so it was always `undefined` and the filter passed
+      // every row. The drill-down LOOKED like it excluded voided charges and did not.
       supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at, voided').eq('folio_id', tx.folio_id).order('charged_at'),
       supabase.from('folio_payments').select('*').eq('folio_id', tx.folio_id).order('paid_at'),
     ])
@@ -416,14 +759,30 @@ export default function ReportsPage() {
   // Revenue sums every row so refunds reduce it, but a refund is not a SALE: counting the
   // negative row would inflate the transaction count and drag the average ticket down.
   const posSales = posPayments.filter(p=>(p.amount||0)>0)
-  // Seasonal = guest_account folios
-  const electricLineItems = guestAccountLineItems.filter(li=>li.description.toLowerCase().includes('electric'))
-  const otherGuestLineItems = guestAccountLineItems.filter(li=>!li.description.toLowerCase().includes('electric'))
-  const electricRevenue = electricLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
-  const otherGuestRevenue = otherGuestLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
+  // ── GUEST-ACCOUNT MONEY, IN DISJOINT BUCKETS ───────────────────────────────
+  //
+  // Charges in the selected period, each landing in exactly one bucket. The seasonal slice is
+  // split by LANE using the same classifier the folio uses, so "Electric Revenue" here and the
+  // Electric section of a camper's folio are the same number. Previously these two figures were
+  // split on `description.includes('electric')` — a substring match on free text, which
+  // lib/ledger-lanes.ts documents as the wrong signal: an electric charge is written with
+  // category 'Fees' and no keyword guarantee, while a store item can be described anything.
+  // Charges land in exactly one bucket; the per-lane slice of the seasonal bucket is what the
+  // Seasonal tab reports against, and it comes from the classifier rather than from a keyword.
+  const seasonalRevenue = gaBuckets.bySegment.seasonal/100
+  const longTermRevenue = gaBuckets.bySegment.long_term/100
+  const otherAccountRevenue = gaBuckets.bySegment.other/100
   const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0),0)/100
-  // Total = res + pos + seasonal (no double counting)
-  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
+  // Total = reservations + store + EVERY guest-account bucket.
+  //
+  // ⚠ THE LONG-TERM AND HOUSE-TAB BUCKETS ARE NEW TO THIS SUM. A monthly camper's charges used
+  // to appear only on a "Monthly Revenue" card that was never added to anything, and a plain
+  // guest's house tab appeared nowhere at all — guest_account folios are excluded from store
+  // revenue, and neither the seasonal nor the monthly query matched them. Both were real money
+  // on a real folio that no total on this page contained. By construction this now equals
+  //     resRevenue + posRevenue + gaBuckets.total/100
+  // with no charge counted twice, which is the property lib/report-buckets.test.ts pins.
+  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + seasonalRevenue + longTermRevenue + otherAccountRevenue
   // All payments for method breakdown
   const allPayments = [...transactions]
   const methods = allPaymentMethods(customMethods)
@@ -437,10 +796,228 @@ export default function ReportsPage() {
   // surcharge_amount negative, so a refunded surcharge cancels its original here rather than
   // still reading as collected.
   const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
+  // What campers OWE and what they hold in CREDIT, kept apart so neither hides the other. Both
+  // now actually fire: the per-camper balance used to be clamped at zero, which made every
+  // credit figure on this page unreachable.
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
   const overdueCampers = seasonalCampers.filter(c=>c.balance>0)
   const creditCampers = seasonalCampers.filter(c=>c.balance<0)
+
+  // ── THE LANE ROLL-UP — Part B ──────────────────────────────────────────────
+  //
+  // Every camper's own lane split, added up. It GROUPS the balances above; it never restates
+  // them. The invariant lib/report-buckets.test.ts pins is what makes the view safe to publish:
+  //     sum of lane balances − payments applied to the whole account = netBalance
+  // and `netBalance` is, by construction, the sum of the campers' folio balances. So the split
+  // can never imply more or less money than the folios it came from.
+  const laneRollup = rollUpLanes(seasonalCampers.map(c=>c.lanes))
+  const netSeasonalBalance = laneRollup.netBalance/100
+  // The three lanes a seasonal camper is billed for, plus `other` ONLY when it has money in it.
+  // `other` is the classifier's catch-all — a heading over an empty catch-all reads as a lane a
+  // park is supposed to manage, and a hidden non-empty one loses money from the reconciliation.
+  const laneRollupHasOther = laneRollup.byLane.other.charges!==0||laneRollup.byLane.other.payments!==0
+  const shownLanes: Lane[] = [...SEASONAL_CAMPER_LANES, ...(laneRollupHasOther?['other' as Lane]:[])]
+
+  // ── R2: THE MONEY VIEW ─────────────────────────────────────────────────────
+  //
+  // ⚠ ONE BASIS, ALL THE WAY DOWN: MONEY RECEIVED. Every source below is payments in the window,
+  // gross of the card surcharge — the convention every revenue figure on this page has always
+  // used, and the reason "Transaction fees collected" describes itself as a breakout rather than
+  // an addition. Because the sources and the headline come from the SAME call, the breakdown
+  // sums to the headline exactly; a dashboard whose parts do not add up to its own total is the
+  // failure R1 existed to fix.
+  //
+  // This is NOT the same figure as `totalCombined` below, and deliberately so — that one mixes
+  // payments (reservations, store) with charges (guest accounts). It is kept, unchanged, as
+  // "billed this period" in the secondary stats, so nothing was silently redefined.
+  const comparison = pickComparison(win, firstRevenueISO)
+  const currentSources = sumBySource(srcPayments, srcFolios, srcBookings, win)
+  const priorSources = sumBySource(srcPayments, srcFolios, srcBookings, comparison.window)
+  const rankedSources = rankSources(currentSources, priorSources)
+  const moneyIn = currentSources.total
+  const moneyDelta = computeDelta(currentSources.total, priorSources.total)
+
+  // Revenue per calendar month, ALL TIME — the record check's evidence, and the reason it can be
+  // trusted: "best month yet" is measured against every month the park has, not the chart window.
+  const monthTotals: MonthTotal[] = (() => {
+    const byKey = new Map<string, number>()
+    // monthKey(), not a string slice: the window boundaries are LOCAL days, so a payment taken at
+    // 10pm on 31 August must be filed under August and not under the September it already is in
+    // UTC — otherwise the record check compares two different months and never finds a record.
+    const add = (iso: string|null|undefined, cents: number) => {
+      const key = iso ? monthKey(iso) : ''
+      if (!key) return
+      byKey.set(key, (byKey.get(key) || 0) + cents)
+    }
+    for (const p of srcPayments) add(p.paid_at, p.amount || 0)
+    for (const b of srcBookings) add(b.created_at, (b.amount_paid || 0) + (b.surcharge_amount || 0))
+    return [...byKey.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([key, cents]) => ({
+      key, cents,
+      label: new Date(Number(key.slice(0,4)), Number(key.slice(5,7))-1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+    }))
+  })()
+  const isRecord = isRecordPeriod(win, monthTotals)
+  const headline = headlineRead(moneyDelta, comparison.label, isRecord)
+
+  // The payments behind ONE source, newest first — what a drilled-open row shows. Recomputed on
+  // expand rather than precomputed for all seven, because only one is ever open.
+  const paymentsForSource = (src: RevenueSource) => srcPayments
+    .filter(p => p.paid_at && p.paid_at >= win.startISO && p.paid_at <= win.endISO)
+    .filter(p => sourceOfPayment(srcFolios.get(p.folio_id || ''), p) === src)
+    .map(p => ({ id: p.id, who: p.folios?.guest_name || 'Walk-up', when: p.paid_at || '', cents: p.amount || 0, method: p.method || '' }))
+    .concat(src !== 'nightly' ? [] : srcBookings
+      .filter(b => b.created_at && b.created_at >= win.startISO && b.created_at <= win.endISO)
+      .map(b => ({ id: 'b-'+b.id, who: b.guest_name || 'Booking', when: b.created_at || '',
+                   cents: (b.amount_paid||0)+(b.surcharge_amount||0), method: 'booking' })))
+    .sort((a,b) => b.when.localeCompare(a.when))
+
+  // ── R3: THE FORWARD LOOK ───────────────────────────────────────────────────
+  //
+  // The comparison honours the owner's priority order, and lib/forward-look.ts decides it once
+  // for the whole board: a GOAL wins because they chose it; failing that, the same weeks LAST
+  // YEAR at the same lead time; failing that, NO JUDGMENT AT ALL. A park in its first season is
+  // shown its fill levels and left alone.
+  //
+  // `priorAsOfDate` is today minus 364. A week L days out is compared against last year's
+  // equivalent week as it stood L days before ITS start — and because both the week and the
+  // observation slide back by the same 364 days, that date is the same for every week on the
+  // board. Comparing an in-progress week against last year's FINISHED week would mark almost
+  // everything behind, which is the fastest way to make this view ignorable.
+  const forwardLook = buildForwardLook(
+    todayYmd ? weekStartsFrom(todayYmd, WEEKS_AHEAD) : [],
+    fwdRows, fwdPriorRows,
+    {
+      seasonalSites: seasonalCount,
+      totalSites,
+      today: todayYmd,
+      goalPct,
+      priorAsOfDate: todayYmd ? sameWeekLastYear(todayYmd) : null,
+    },
+  )
+
+  // ── R4: OCCUPANCY BY SITE TYPE ─────────────────────────────────────────────
+  //
+  // ⚠ THE DENOMINATOR IS THE `sites` TABLE, NOT settings.total_sites/total_cabins.
+  //
+  // Those two integers are hand-maintained and describe only two kinds of inventory, so a park
+  // that added yurts has to remember to edit a number — and a park that forgot leaves them at 0,
+  // which is exactly what the sandbox did. Counting the rentable rows instead is always accurate
+  // and categorises itself, which is what lets a park with treehouses see treehouses without
+  // configuring anything.
+  const occWindow = (() => {
+    const now = new Date()
+    if (occMode === 'this_month') {
+      return { start: toYmd(new Date(now.getFullYear(), now.getMonth(), 1)),
+               end: toYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0)) }
+    }
+    if (occMode === 'ytd') return { start: `${now.getFullYear()}-01-01`, end: toYmd(now) }
+    if (occMode === 'year') return { start: `${occYear}-01-01`, end: `${occYear}-12-31` }
+    return { start: occStart || toYmd(now), end: occEnd || toYmd(now) }
+  })()
+
+  const occSiteTypeById = new Map<string, string>()
+  for (const s of occSites) if (s.id) occSiteTypeById.set(s.id, (s.site_type || '').trim().toLowerCase() || UNRESOLVED_TYPE)
+  const occByNumber = siteTypeByNumber(occSites)
+  const occSeasonsById = new Map<string, SeasonRow>(occSeasons.filter(x=>x.id).map(x=>[x.id as string, x]))
+  const { occupants: occOccupants, undated: occUndated } =
+    buildOccupants(occContracts, occSeasonsById, occCampers, occByNumber)
+
+  // ── R4b: ONE ENGINE, RUN TWICE ─────────────────────────────────────────────
+  //
+  // `occReport` is the COMBINED whole-park figure over every rentable site — R4's number,
+  // unchanged, and deliberately kept: the split adds detail beneath it rather than replacing it.
+  // An owner still needs one "how full is the park" answer at a glance.
+  //
+  // `occTransient` is the same engine restricted to transient sites, which is the only place a
+  // nightly occupancy average means anything. Nothing is restated; the difference is entirely in
+  // what is handed in.
+  const occReport = buildOccupancyReport(occSites, occRes, occSiteTypeById, occOccupants, occWindow, occUndated)
+
+  /** Whether this tenant has the R4b column at all. Undefined on every row = un-migrated. */
+  const hasSeasonalSiteColumn = occSites.length > 0 && 'is_seasonal_site' in (occSites[0] as object)
+  const seasonalFlaggedNumbers = new Set(
+    occSites.filter(isSeasonalSite).map(s => (s.site_number || '').trim().toLowerCase()).filter(Boolean))
+  const seasonalFlaggedIds = new Set(occSites.filter(isSeasonalSite).map(s => s.id).filter(Boolean) as string[])
+
+  const occProgram = buildSeasonalProgram(occSites, occOccupants, occWindow)
+
+  const transientSites = occSites.filter(s => !isSeasonalSite(s))
+  const occTransient = buildOccupancyReport(
+    transientSites,
+    // A nightly booking sitting on a seasonal-flagged site is counted in the combined figure
+    // above but not here, because that site is not in this denominator. It is surfaced below
+    // rather than quietly inflating the transient average.
+    occRes.filter(r => !r.site_id || !seasonalFlaggedIds.has(r.site_id)),
+    occSiteTypeById,
+    occOccupants.filter(o => !o.siteNumber || !seasonalFlaggedNumbers.has(o.siteNumber)),
+    occWindow,
+    occUndated,
+  )
+  const nightlyOnSeasonalSites = occRes.filter(r =>
+    r.site_id && seasonalFlaggedIds.has(r.site_id) &&
+    r.arrival_date && r.departure_date &&
+    r.arrival_date <= occWindow.end && r.departure_date > occWindow.start).length
+
+  /** Tonight on the SAME machinery — the figure the reconciliation panel ties to the dashboard. */
+  const occTonight = todayYmd
+    ? buildOccupancyReport(occSites, occRes, occSiteTypeById, occOccupants, { start: todayYmd, end: todayYmd })
+    : null
+
+  /** Years worth offering in the picker: whatever the park's own data actually spans. */
+  const occYears = (() => {
+    const ys = new Set<number>([new Date().getFullYear()])
+    for (const c of occContracts) if (c.season_year) ys.add(c.season_year)
+    for (const s of occSeasons) if (s.year) ys.add(s.year)
+    for (const r of occRes) if (r.arrival_date) ys.add(Number(r.arrival_date.slice(0, 4)))
+    return [...ys].filter(y => y > 1990 && y < 2200).sort((a, b) => b - a)
+  })()
+
+  const occRangeLabel =
+    occMode === 'this_month' ? new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : occMode === 'ytd' ? `${new Date().getFullYear()} so far`
+    : occMode === 'year' ? String(occYear)
+    : `${occWindow.start} → ${occWindow.end}`
+
+  const pctText = (n: number) => `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)}%`
+  /** A shared, muted ramp for an occupancy figure. Never red — an empty week is not an emergency. */
+  const occTone = (n: number) => n >= 75 ? 'text-emerald-700' : n >= 40 ? 'text-gray-900' : 'text-gray-500'
+
+  /**
+   * The ONE write in this PR, and it moves no money — it records a preference.
+   *
+   * Client-side against `settings`, guarded by RLS, exactly like the Settings page's own save.
+   * Clearing the field removes the goal entirely rather than storing 0, so "off" stays off.
+   */
+  async function saveGoal(next: number|null) {
+    if (!settingsId) return
+    setGoalSaving(true)
+    const { error } = await supabase.from('settings').update({ occupancy_goal_percent: next }).eq('id', settingsId)
+    if (!error) { setGoalPct(next); setGoalEditing(false) }
+    setGoalSaving(false)
+  }
+
+  /**
+   * ⚠ NEVER RED. Same rule as R2: a soft week is amber and matter-of-fact, because an owner
+   * trained to see alarm red for ordinary seasonality stops seeing red at all. Red on this page
+   * belongs to overdue money and nothing else.
+   *
+   * `unknown` — a first-season park with no goal — still CELEBRATES a full week and stays neutral
+   * on an open one, rather than painting the whole board the same flat grey. Being unable to
+   * judge pace is not a reason to be joyless about a week that is nearly sold out.
+   */
+  function paceColor(w: WeekPace): string {
+    if (w.verdict === 'ahead') return '#059669'
+    if (w.verdict === 'behind') return '#D97706'
+    if (w.verdict === 'level') return '#9CA3AF'
+    return w.fill >= 70 ? '#059669' : '#94A3B8'
+  }
+
+  /** 'Sep 7' — how a week is named everywhere in this view. */
+  const weekLabel = (ymdStr: string) => {
+    const [y,m,d] = ymdStr.split('-').map(Number)
+    return new Date(y, m-1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
 
   // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
   // reservations count, bucketed by LOCAL day (not the UTC calendar day). Gross of the card
@@ -517,12 +1094,17 @@ export default function ReportsPage() {
   const productMap: { [key: string]: { name: string; revenue: number; qty: number } } = {}
   lineItems.forEach(li => { const name=li.description||'Unknown'; if (!productMap[name]) productMap[name]={name,revenue:0,qty:0}; productMap[name].revenue+=(li.line_total||0)/100; productMap[name].qty+=li.quantity||0 })
   const topProducts = Object.values(productMap).sort((a,b)=>b.revenue-a.revenue).slice(0,8)
-  const guestCategoryMap: { [key: string]: number } = {}
-  guestAccountLineItems.forEach(li => { const cat=li.description.toLowerCase().includes('electric')?'Electric':(li.category||'Other'); guestCategoryMap[cat]=(guestCategoryMap[cat]||0)+(li.line_total||0)/100 })
-  const guestCategoryData = Object.entries(guestCategoryMap).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value)
+  // Seasonal campers' CHARGES in the period, by lane — the same classification their folio uses,
+  // in place of the old `description.includes('electric')` guess. Every lane is drawn in the
+  // shared lane colour and labelled, so the same three words and three colours mean the same
+  // three things on every screen. `other` appears only when it has money in it: it is the
+  // classifier's catch-all, not a lane a park manages.
+  const seasonalLaneChargeData = LANES
+    .map(l => ({ name: LANE_LABEL[l], value: gaBuckets.seasonalByLane[l]/100, color: LANE_COLOR[l] }))
+    .filter(d => d.value !== 0)
 
   // ── Chart Components ───────────────────────────────────────────────────────
-  function BarChart({ data }: { data: { label: string; value: number }[] }) {
+  function BarChart({ data, color = '#2E6B8A' }: { data: { label: string; value: number }[]; color?: string }) {
     if (data.length===0) return <p className="text-gray-400 text-center py-8">No data for selected period</p>
     const max = Math.max(...data.map(d=>d.value),1)
     const chartH=180, barW=32, gap=8, leftPad=48
@@ -539,14 +1121,17 @@ export default function ReportsPage() {
             const barH=Math.max(3,(d.value/max)*chartH)
             const x=leftPad+i*(barW+gap)
             const y=8+chartH-barH
-            return <g key={i}><rect x={x} y={y} width={barW} height={barH} fill="#2E6B8A" rx={4}/><text x={x+barW/2} y={chartH+22} textAnchor="middle" fontSize={10} fill="#6B7280">{d.label}</text><text x={x+barW/2} y={y-4} textAnchor="middle" fontSize={9} fill="#374151">${d.value>=1000?(d.value/1000).toFixed(1)+'k':d.value.toFixed(0)}</text></g>
+            return <g key={i}><rect x={x} y={y} width={barW} height={barH} fill={color} rx={4}/><text x={x+barW/2} y={chartH+22} textAnchor="middle" fontSize={10} fill="#6B7280">{d.label}</text><text x={x+barW/2} y={y-4} textAnchor="middle" fontSize={9} fill="#374151">${d.value>=1000?(d.value/1000).toFixed(1)+'k':d.value.toFixed(0)}</text></g>
           })}
         </svg>
       </div>
     )
   }
 
-  function DonutChart({ data }: { data: { name: string; value: number }[] }) {
+  // `color` is optional: a slice that knows what it represents (a money lane) brings the shared
+  // lane colour with it, so the same lane is the same colour on every screen. Anything else
+  // falls back to the house palette exactly as before.
+  function DonutChart({ data }: { data: { name: string; value: number; color?: string }[] }) {
     if (data.length===0) return <p className="text-gray-400 text-center py-8">No data</p>
     const total=data.reduce((s,d)=>s+d.value,0)
     const cx=80,cy=80,r=65,inner=38
@@ -559,7 +1144,7 @@ export default function ReportsPage() {
       const ix1=cx+inner*Math.cos(angle-sweep),iy1=cy+inner*Math.sin(angle-sweep)
       const ix2=cx+inner*Math.cos(angle),iy2=cy+inner*Math.sin(angle)
       const large=sweep>Math.PI?1:0
-      return { path:`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`, color:COLORS[i%COLORS.length], ...d }
+      return { path:`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`, ...d, color:d.color||COLORS[i%COLORS.length] }
     })
     return (
       <div className="flex flex-col sm:flex-row items-center gap-6">
@@ -593,6 +1178,95 @@ export default function ReportsPage() {
       </div>
     )
   }
+
+  // ── R2 PRESENTATION ────────────────────────────────────────────────────────
+  //
+  // Money is printed with thousands separators here, not with .toFixed(2) alone: the headline
+  // figure is the single most-read number on the page, and "$1099099" vs "$10,990.99" is the
+  // difference between an answer and a puzzle.
+  const usd = (cents: number) =>
+    (cents < 0 ? '−$' : '$') + (Math.abs(cents)/100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  /**
+   * ⚠ THE TONE PALETTE — a requirement, not styling. See lib/report-periods.ts.
+   *
+   * `win` celebrates. `watch` is AMBER and matter-of-fact, never alarm red: a slow month is
+   * information, and an owner trained to see red for ordinary seasonality stops seeing red at
+   * all. RED APPEARS EXACTLY ONCE ON THIS DASHBOARD — on money that should be there and is not,
+   * in "Still to collect" — and that is the whole point of withholding it here.
+   */
+  const TONE: Record<'win'|'flat'|'watch', { fg: string; bg: string; ring: string; arrow: string }> = {
+    win:   { fg: 'text-emerald-700', bg: 'bg-emerald-50', ring: 'ring-emerald-200', arrow: '▲' },
+    flat:  { fg: 'text-gray-600',    bg: 'bg-gray-50',    ring: 'ring-gray-200',    arrow: '•' },
+    watch: { fg: 'text-amber-700',   bg: 'bg-amber-50',   ring: 'ring-amber-200',   arrow: '▼' },
+  }
+
+  /**
+   * PART C: the tabs speak the dashboard's colour language.
+   *
+   * A small labelled chip, not a bare coloured rule — the point is that an owner who clicks
+   * "Nightly reservations" on the dashboard lands somewhere that visibly IS that source. Colour
+   * alone would not say so, hence the label, and the wording repeats SOURCE_LABEL verbatim so
+   * the two can never drift.
+   */
+  const SourceChip = ({ source, note }: { source: RevenueSource; note: string }) => (
+    <div className="flex items-center gap-2 mb-1">
+      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{backgroundColor:SOURCE_COLOR[source]}} aria-hidden="true"/>
+      <span className="text-xs font-semibold uppercase tracking-wide" style={{color:SOURCE_COLOR[source]}}>{SOURCE_LABEL[source]}</span>
+      <span className="text-xs text-gray-400">· {note}</span>
+    </div>
+  )
+
+  /** A source row, a KPI or a bar can send you to the page that produced the number. */
+  function drillTo(dest: string) {
+    if (dest.startsWith('tab:')) setActiveTab(dest.slice(4) as TabKey)
+    else router.push(dest)
+  }
+
+  const rangeLabel = (() => {
+    if (!win.startISO) return ''
+    const f = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return f(win.startISO) === f(win.endISO) ? f(win.startISO) : `${f(win.startISO)} – ${f(win.endISO)}`
+  })()
+
+  /** The comparison chip: arrow, absolute change, and either a percentage or a multiple. */
+  function DeltaChip({ delta, label, size = 'lg' }: { delta: ReturnType<typeof computeDelta>; label: string; size?: 'lg'|'sm' }) {
+    const t = TONE[delta.tone]
+    const pct = delta.multiple
+      ? `${delta.multiple.toFixed(delta.multiple >= 10 ? 0 : 1)}×`
+      : delta.changeFraction !== null
+        ? `${delta.changeFraction >= 0 ? '+' : ''}${Math.round(delta.changeFraction*100)}%`
+        : null
+    return (
+      <span className={`inline-flex items-center gap-1.5 rounded-full ring-1 ${t.bg} ${t.ring} ${t.fg} ${size==='lg'?'px-3 py-1.5 text-sm':'px-2 py-0.5 text-xs'} font-semibold`}>
+        <span aria-hidden="true">{t.arrow}</span>
+        <span>
+          {delta.changeCents === 0 ? 'level with' : `${usd(Math.abs(delta.changeCents))} ${delta.changeCents>0?'more than':'less than'}`} {label}
+        </span>
+        {pct && <span className="font-bold opacity-80">· {pct}</span>}
+      </span>
+    )
+  }
+
+  // ── LANE PRESENTATION — Part B ─────────────────────────────────────────────
+  //
+  // ⚠ COLOUR IS NEVER THE ONLY SIGNAL. Every swatch is drawn beside LANE_LABEL, so the split
+  // reads correctly with no colour perception at all; the colours are the Okabe–Ito
+  // colourblind-safe set and live in lib/lane-display.ts so the R2 dashboard reuses them and the
+  // language a park learns here holds on every other screen.
+  const LaneSwatch = ({ lane }: { lane: Lane }) => (
+    <span className="inline-flex items-center gap-2 min-w-0">
+      <span className="w-3 h-3 rounded-sm shrink-0" style={{backgroundColor:LANE_COLOR[lane]}} aria-hidden="true"/>
+      <span className="truncate">{LANE_LABEL[lane]}</span>
+    </span>
+  )
+  // ONE rendering of an amount, so a lane line and the account line it rolls up to cannot
+  // disagree about what a credit looks like. Mirrors `money()` on the camper page. `money` keeps
+  // the sign — a refund row can make a "charged" or "paid" column negative, and a figure that
+  // silently dropped its minus would make the column stop adding up.
+  const money = (cents: number) => (cents<0?'−':'')+'$'+(Math.abs(cents)/100).toFixed(2)
+  const balanceText = (cents: number) => cents<0 ? 'Credit '+money(cents) : money(cents)
+  const balanceClass = (cents: number) => cents>0 ? 'text-red-600' : cents<0 ? 'text-blue-600' : 'text-emerald-600'
 
   const dateControls = (
     <div className="flex flex-wrap gap-2 items-center">
@@ -659,12 +1333,14 @@ export default function ReportsPage() {
       <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
         {([
           {key:'dashboard',label:'📊 Dashboard'},
+          {key:'forward',label:'📅 Weeks Ahead'},
+          {key:'occupancy',label:'🛏️ Occupancy'},
           {key:'reservations',label:'🏕️ Reservations'},
           ...(seasonalEnabled ? [{key:'seasonal',label:'⛺ Seasonal'}] : []),
           {key:'transactions',label:'💳 Transactions'},
           ...(posEnabled?[{key:'store',label:'🛒 Store'}]:[]),
-        ] as {key:string,label:string}[]).map(tab=>(
-          <button key={tab.key} onClick={()=>setActiveTab(tab.key as any)}
+        ] as {key:TabKey,label:string}[]).map(tab=>(
+          <button key={tab.key} onClick={()=>setActiveTab(tab.key)}
             className="px-4 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors rounded-t-lg"
             style={activeTab===tab.key?{backgroundColor:'#2E6B8A',color:'#fff',borderBottom:'2px solid #2E6B8A'}:{color:'#6B7280'}}>
             {tab.label}
@@ -675,45 +1351,173 @@ export default function ReportsPage() {
       {loading?<div className="p-12 text-center text-gray-400 text-lg">Loading reports...</div>:(
         <>
 
-        {/* ── DASHBOARD TAB ── */}
+        {/* ── DASHBOARD TAB — the money view (R2) ── */}
         {activeTab==='dashboard'&&(
           <div className="space-y-6">
-            {/* Hero KPIs */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600"/>
-              <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'reservations + charges'}/>
-              <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'} onClick={()=>setShowOccupancyDetail(true)}/>
-              <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
+
+            {/* ─────────────── THE ANSWER, FIRST ───────────────
+                No grid of cards above this. An owner opening Reports is asking one question —
+                "how is my park doing?" — and it is answered in one number, one comparison and
+                one sentence before anything else competes for the eye. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-6 md:p-8">
+              {isRecord && (
+                <div className="inline-flex items-center gap-2 mb-3 rounded-full bg-emerald-600 text-white px-3 py-1 text-xs font-bold tracking-wide">
+                  <span aria-hidden="true">🏆</span> BEST MONTH YET
+                </div>
+              )}
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Money received{rangeLabel && <span className="text-gray-400 font-medium normal-case tracking-normal"> · {rangeLabel}</span>}
+              </p>
+              <p className="text-4xl md:text-6xl font-bold text-gray-900 mt-1 tracking-tight">{usd(moneyIn)}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <DeltaChip delta={moneyDelta} label={comparison.label}/>
+                <span className="text-xs text-gray-400">
+                  compared with {usd(priorSources.total)} over {comparison.label}
+                </span>
+              </div>
+              <p className="text-sm md:text-base text-gray-600 mt-3">{headline}</p>
+              <p className="text-xs text-gray-400 mt-3">
+                Every payment taken in this period, gross of card fees. Canceled charges and refunds
+                are already netted out, so this agrees with the folios it came from.
+              </p>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reservations.length+' bookings'}/>
-              {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
-              <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
-              <KPICard label="Monthly Revenue" value={'$'+(monthlyRevenue/100).toFixed(2)} sub="monthly camper charges"/>
-              <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
-              {/* Revenue above is gross, so this is a BREAKOUT of money already counted in it —
-                  not an extra amount to add on. Worded that way so the figure can be reconciled
-                  against the Square processing fees without reading as double-counting. */}
-              <KPICard label="Transaction Fees Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above"/>
-              <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
+            {/* ─────────────── WHERE THE MONEY CAME FROM ───────────────
+                Ranked, full-width rows rather than a pie. Seasonal fees can be ~85% of a park's
+                revenue, which makes every other slice unreadable in a circle — and the small
+                sources are exactly the ones an owner is trying to grow. See rankSources(). */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                <h2 className="text-lg font-semibold text-gray-900">Where the money came from</h2>
+                <span className="text-xs text-gray-400">Click any source to see the payments behind it</span>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">Each source compared with {comparison.label}.</p>
+
+              {rankedSources.length===0?(
+                <p className="text-gray-400 text-sm py-8 text-center">No money came in during this period.</p>
+              ):(
+                <div className="divide-y divide-gray-50">
+                  {rankedSources.map(r=>{
+                    const open = openSource===r.source
+                    const d = r.priorAmount===null?null:computeDelta(r.amount, r.priorAmount)
+                    const dest = SOURCE_DESTINATION[r.source]
+                    return (
+                      <div key={r.source} className="py-3">
+                        <button onClick={()=>setOpenSource(open?null:r.source)}
+                          className="w-full text-left group" aria-expanded={open}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {/* ⚠ Colour is never the only signal — the label is always printed. */}
+                              <span className="w-3 h-3 rounded-sm shrink-0" style={{backgroundColor:SOURCE_COLOR[r.source]}} aria-hidden="true"/>
+                              <span className="font-semibold text-gray-900 text-sm md:text-base truncate group-hover:underline">{SOURCE_LABEL[r.source]}</span>
+                              <span className="text-gray-300 text-xs shrink-0" aria-hidden="true">{open?'▾':'▸'}</span>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                              {d && <DeltaChip delta={d} label={comparison.label} size="sm"/>}
+                              <span className="font-bold text-gray-900 text-sm md:text-base tabular-nums">{usd(r.amount)}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1.5">
+                            {/* The share bar. Floored so a $47.99 store month against an $11k
+                                seasonal month is still visibly there — the printed percentage
+                                beside it stays truthful. */}
+                            <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden flex-1">
+                              <div className="h-full rounded-full" style={{width:barWidthPct(r.share)+'%',backgroundColor:SOURCE_COLOR[r.source]}}/>
+                            </div>
+                            <span className="text-xs text-gray-500 tabular-nums w-12 text-right shrink-0">
+                              {r.share>0&&r.share<0.005?'<1':Math.round(r.share*100)}%
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">{SOURCE_BLURB[r.source]}</p>
+                        </button>
+
+                        {open && (
+                          <div className="mt-3 ml-5 border-l-2 pl-4 space-y-1" style={{borderColor:SOURCE_COLOR[r.source]}}>
+                            {paymentsForSource(r.source).length===0?(
+                              <p className="text-xs text-gray-400 py-2">No individual payments to show.</p>
+                            ):paymentsForSource(r.source).slice(0,8).map(pm=>(
+                              <div key={pm.id} className="flex items-center justify-between gap-3 text-xs py-1">
+                                <span className="text-gray-600 truncate">{pm.who}</span>
+                                <span className="text-gray-400 shrink-0">
+                                  {pm.when?new Date(pm.when).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''} · {pm.method}
+                                </span>
+                                <span className="font-semibold text-gray-900 tabular-nums shrink-0">{usd(pm.cents)}</span>
+                              </div>
+                            ))}
+                            {paymentsForSource(r.source).length>8&&(
+                              <p className="text-xs text-gray-400 pt-1">+{paymentsForSource(r.source).length-8} more</p>
+                            )}
+                            <button onClick={()=>drillTo(dest)}
+                              className="text-xs font-semibold pt-2 hover:underline" style={{color:SOURCE_COLOR[r.source]}}>
+                              {r.source==='electric'?'Open electric billing →'
+                                :r.source==='long_term'?'Open guests →'
+                                :r.source==='nightly'?'See all reservations →'
+                                :r.source==='seasonal'?'See the seasonal lane view →'
+                                :r.source==='store'?'See store sales →'
+                                :'See all transactions →'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  <div className="pt-3 flex items-center justify-between">
+                    <span className="font-bold text-gray-900">Total received</span>
+                    <span className="font-bold text-gray-900 text-lg tabular-nums">{usd(currentSources.total)}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Revenue trend */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">{reportBy==='payment_date'?'Revenue by Payment Date':'Revenue by Stay Date'}</h2>
-                  <p className="text-xs text-gray-400">{reportBy==='payment_date'?'When payments were received':'Attributed to arrival month'}</p>
+            {/* ─────────────── HOW FULL YOU ARE ─────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                <h2 className="text-lg font-semibold text-gray-900">How full you are</h2>
+                <div className="flex items-center gap-4">
+                  <button onClick={()=>setActiveTab('forward')} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Weeks ahead →
+                  </button>
+                  <button onClick={()=>setShowOccupancyDetail(true)} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Month by month →
+                  </button>
                 </div>
               </div>
-              <BarChart data={monthlyData}/>
-            </div>
+              <p className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
+                {occupancyPct}%
+                <span className="text-base md:text-lg font-semibold text-gray-500 ml-3">
+                  {tonightCount+seasonalCount} of {totalSites} sites tonight
+                </span>
+              </p>
+              <p className="text-sm text-gray-600 mt-1">
+                <span className="font-semibold">{seasonalCount} seasonal</span> + <span className="font-semibold">{tonightCount} nightly</span>
+                {totalCabins>0&&<> · cabins {tonightCabins} of {totalCabins}</>}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {seasonalCount>0&&tonightCount+seasonalCount>0
+                  ? `Seasonal campers hold ${Math.round((seasonalCount/(tonightCount+seasonalCount))*100)}% of the sites you have filled — steady income that does not turn over.`
+                  : 'Every occupied site tonight is a nightly booking.'}
+              </p>
 
-            {/* Occupancy trend */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5">
-              <h2 className="text-lg font-semibold text-gray-900 mb-1">Occupancy Trend</h2>
-              <p className="text-xs text-gray-400 mb-4">Monthly average occupancy % · Sites vs Cabins</p>
+              {/* R3's headline, carried onto the dashboard so the forward look is one click away
+                  rather than buried behind a tab nobody thinks to open. */}
+              {forwardLook.weeks.length>0 && (
+                <button onClick={()=>setActiveTab('forward')}
+                  className="mt-4 w-full text-left rounded-xl px-4 py-3 ring-1 hover:brightness-[0.98] transition"
+                  style={ forwardLook.behind.length>0
+                    ? {background:'#FFFBEB',boxShadow:'inset 0 0 0 1px #FDE68A'}
+                    : {background:'#ECFDF5',boxShadow:'inset 0 0 0 1px #A7F3D0'} }>
+                  <span className={`text-sm font-semibold ${forwardLook.behind.length>0?'text-amber-800':'text-emerald-800'}`}>
+                    {forwardLook.behind.length>0
+                      ? `👀 ${forwardLook.behind.length} of the next ${WEEKS_AHEAD} weeks ${forwardLook.behind.length!==1?'are':'is'} pacing behind`
+                      : forwardLook.best && forwardLook.best.fill>0
+                        ? `🎉 Your fullest week ahead is ${weekLabel(forwardLook.best.weekStart)} at ${forwardLook.best.fill}%`
+                        : `📅 The next ${WEEKS_AHEAD} weeks, night by night`}
+                  </span>
+                  <span className="block text-xs text-gray-500 mt-0.5">Open Weeks Ahead to see which nights are open →</span>
+                </button>
+              )}
+
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-2">Occupancy trend</h3>
               <div style={{width:'100%',overflowX:'auto'}}>
                 <svg width={Math.max(600, monthlyOccupancy.length*60+60)} height={200} style={{display:'block'}}>
                   {[0,50,100].map((pct,i)=>{
@@ -725,77 +1529,709 @@ export default function ReportsPage() {
                     const siteH=Math.max(2,(m.sites/100)*150)
                     const cabinH=Math.max(2,(m.cabins/100)*150)
                     return <g key={i}>
-                      <rect x={x-14} y={10+(1-m.sites/100)*150} width={12} height={siteH} fill="#2E6B8A" rx={3}/>
-                      <rect x={x+2} y={10+(1-m.cabins/100)*150} width={12} height={cabinH} fill="#C4873C" rx={3}/>
+                      <rect x={x-14} y={10+(1-m.sites/100)*150} width={12} height={siteH} fill={SOURCE_COLOR.seasonal} rx={3}/>
+                      <rect x={x+2} y={10+(1-m.cabins/100)*150} width={12} height={cabinH} fill={SOURCE_COLOR.nightly} rx={3}/>
                       <text x={x} y={175} textAnchor="middle" fontSize={10} fill="#6B7280">{m.label}</text>
                     </g>
                   })}
                 </svg>
                 <div className="flex items-center gap-6 mt-2 justify-center">
-                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#2E6B8A'}}/><span className="text-xs text-gray-500">Sites ({totalSites})</span></div>
-                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#C4873C'}}/><span className="text-xs text-gray-500">Cabins ({totalCabins})</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:SOURCE_COLOR.seasonal}}/><span className="text-xs text-gray-500">Sites ({totalSites})</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:SOURCE_COLOR.nightly}}/><span className="text-xs text-gray-500">Cabins ({totalCabins})</span></div>
                 </div>
               </div>
             </div>
 
-            {/* Payment methods + seasonal snapshot */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Methods</h2>
-                <div className="space-y-3">
-                  {methodTotals.map(mt=>{
-                    const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
-                    const total=methodTotals.reduce((s,x)=>s+x.value,0)
-                    const pct=total>0?Math.round((m.value/total)*100):0
-                    return (
-                      <div key={m.label}>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="font-medium text-gray-700">{m.label}</span>
-                          <span className="font-semibold text-gray-900">${m.value.toFixed(2)} <span className="text-gray-400 font-normal">({pct}%)</span></span>
-                        </div>
-                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all" style={{width:pct+'%',backgroundColor:m.color}}/>
-                        </div>
-                      </div>
-                    )
-                  })}
+            {/* ─────────────── STILL TO COLLECT ───────────────
+                ⚠ THE ONE PLACE RED IS ALLOWED. This is money that should be here and is not,
+                which is the only thing on this dashboard that warrants alarm. A credit is shown
+                in blue beside it rather than netted away, because post-R1 a camper who is paid
+                ahead is real and must not be hidden inside an "outstanding" figure. */}
+            {seasonalEnabled && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+                  <h2 className="text-lg font-semibold text-gray-900">Still to collect</h2>
+                  <button onClick={()=>setActiveTab('seasonal')} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Full lane breakdown →
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2">
+                  <div>
+                    <p className={`text-3xl font-bold ${outstandingBalance>0?'text-red-600':'text-emerald-600'}`}>${outstandingBalance.toFixed(2)}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      owed by {overdueCampers.length} camper{overdueCampers.length!==1?'s':''}
+                    </p>
+                  </div>
+                  {creditBalance>0&&(
+                    <div>
+                      <p className="text-3xl font-bold text-blue-600">${creditBalance.toFixed(2)}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        held in credit for {creditCampers.length} camper{creditCampers.length!==1?'s':''}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {seasonalCampers.length===0?(
+                  <p className="text-gray-400 text-sm mt-4">No seasonal campers found.</p>
+                ):(
+                  <div className="mt-4 divide-y divide-gray-50">
+                    {[...seasonalCampers].filter(c=>c.balance!==0).sort((a,b)=>b.balance-a.balance).map(c=>(
+                      <button key={c.id} onClick={()=>c.folioId&&router.push(`/admin/folio/guest/${c.id}`)}
+                        className="w-full flex items-center justify-between gap-3 py-2 text-left hover:bg-gray-50 rounded px-1 -mx-1">
+                        <span className="min-w-0">
+                          <span className="text-sm font-medium text-gray-900 truncate">{c.name}</span>
+                          {c.site_number&&<span className="text-xs text-gray-400 ml-2">Site {c.site_number}</span>}
+                        </span>
+                        <span className={`text-sm font-bold shrink-0 ${c.balance>0?'text-red-600':'text-blue-600'}`}>
+                          {c.balance<0?'Credit '+usd(-c.balance):usd(c.balance)}
+                        </span>
+                      </button>
+                    ))}
+                    {seasonalCampers.every(c=>c.balance===0)&&(
+                      <p className="text-sm text-emerald-600 font-medium py-2">✓ Every seasonal camper is settled up.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ─────────────── THE SMALLER NUMBERS, KEPT ───────────────
+                Everything that does not headline but that an owner still relies on. Reorganised
+                out of the old card grid, never removed: this section is the tidy secondary home
+                the redesign owes them. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">The smaller numbers</h2>
+              <p className="text-xs text-gray-400 mb-4">Still here, just not shouting. Click any of them to see what is behind it.</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600" onClick={()=>setActiveTab('transactions')}/>
+                <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
+                <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance" onClick={()=>setActiveTab('reservations')}/>
+                <KPICard label="Avg Stay" value={avgStay.toFixed(1)+' nights'} sub="per booking" onClick={()=>setActiveTab('reservations')}/>
+                {/* Gross revenue, so this is a BREAKOUT of money already counted above — not an
+                    extra amount to add on. */}
+                <KPICard label="Transaction Fees Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above" onClick={()=>setActiveTab('transactions')}/>
+                {/* ⚠ NOT the headline figure, and deliberately labelled so. `totalCombined` mixes
+                    payments (reservations, store) with CHARGES (guest accounts) — the definition
+                    this card has always had. It is kept exactly as it was rather than quietly
+                    restated onto the money-received basis, and it follows the Payment/Stay date
+                    toggle as it always has. */}
+                <div onClick={()=>setShowBilledDetail(v=>!v)}
+                  className="bg-white rounded-2xl border border-gray-200 p-4 md:p-5 cursor-pointer hover:shadow-md hover:border-blue-200 transition-all">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Total Revenue (billed)</p>
+                  <p className="text-2xl md:text-3xl font-bold text-gray-900">${totalCombined.toFixed(2)}</p>
+                  <p className="text-xs text-gray-400 mt-1">{reportBy==='payment_date'?'bookings paid + charges raised':'stay dates + charges raised'}</p>
+                  <p className="text-xs text-blue-500 mt-2 font-medium">{showBilledDetail?'Hide breakdown ▾':'Click to view →'}</p>
                 </div>
               </div>
 
-              {seasonalEnabled && <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-900">Seasonal Snapshot</h2>
-                  <button onClick={()=>setActiveTab('seasonal')} className="text-xs text-blue-500 font-semibold hover:underline">View all →</button>
+              {showBilledDetail && (
+                <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-4">
+                  <p className="text-xs text-gray-500 mb-3">
+                    What was <span className="font-semibold">billed</span> this period, rather than what was received.
+                    Reservations and store count their payments; guest accounts count their charges — which is why
+                    this figure differs from the headline above.
+                  </p>
+                  {[
+                    { label: 'Reservation revenue', value: resRevenue, tab: 'reservations' as TabKey, color: SOURCE_COLOR.nightly, sub: reservations.length+' bookings' },
+                    ...(posEnabled?[{ label: 'Store revenue', value: posRevenue, tab: 'store' as TabKey, color: SOURCE_COLOR.store, sub: posSales.length+' transactions' }]:[]),
+                    { label: 'Seasonal charges', value: seasonalRevenue, tab: 'seasonal' as TabKey, color: SOURCE_COLOR.seasonal, sub: 'all lanes' },
+                    { label: 'Long-term / monthly', value: longTermRevenue, tab: 'seasonal' as TabKey, color: SOURCE_COLOR.long_term, sub: 'weekly & monthly stays' },
+                    ...(otherAccountRevenue!==0?[{ label: 'Other guest accounts', value: otherAccountRevenue, tab: 'transactions' as TabKey, color: SOURCE_COLOR.other, sub: 'house tabs' }]:[]),
+                  ].map(row=>(
+                    <button key={row.label} onClick={()=>setActiveTab(row.tab)}
+                      className="w-full flex items-center justify-between gap-3 py-1.5 text-left hover:underline">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{backgroundColor:row.color}} aria-hidden="true"/>
+                        <span className="text-sm text-gray-700 truncate">{row.label}</span>
+                        <span className="text-xs text-gray-400 shrink-0 hidden sm:inline">{row.sub}</span>
+                      </span>
+                      <span className="text-sm font-semibold text-gray-900 tabular-nums shrink-0">${row.value.toFixed(2)}</span>
+                    </button>
+                  ))}
                 </div>
-                {seasonalCampers.length===0?(
-                  <p className="text-gray-400 text-sm text-center py-6">No seasonal campers found</p>
-                ):(
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-xs text-gray-500 font-semibold uppercase tracking-wide pb-1 border-b border-gray-100">
-                      <span>Camper</span><span>Balance</span>
-                    </div>
-                    {seasonalCampers.slice(0,5).map(c=>(
-                      <div key={c.id} onClick={()=>c.folioId&&router.push('/admin/guests')} className="flex items-center justify-between py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
-                        <div>
-                          <span className="text-sm font-medium text-gray-900">{c.name}</span>
-                          <span className="text-xs text-gray-400 ml-2">Site {c.site_number}</span>
-                        </div>
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
-                        </span>
+              )}
+
+              {/* Payment methods — kept, and now click-through: picking one drops you into the
+                  Transactions log already filtered to it. */}
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-3">Payment methods</h3>
+              <div className="space-y-3">
+                {methodTotals.map(mt=>{
+                  const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
+                  const total=methodTotals.reduce((s,x)=>s+x.value,0)
+                  const pct=total>0?Math.round((m.value/total)*100):0
+                  return (
+                    <button key={m.label} onClick={()=>{setTxMethodFilter(mt.method);setActiveTab('transactions')}} className="w-full text-left group">
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium text-gray-700 group-hover:underline">{m.label}</span>
+                        <span className="font-semibold text-gray-900">${m.value.toFixed(2)} <span className="text-gray-400 font-normal">({pct}%)</span></span>
                       </div>
-                    ))}
-                    {seasonalCampers.length>5&&<p className="text-xs text-gray-400 text-center pt-1">+{seasonalCampers.length-5} more</p>}
-                  </div>
-                )}
-              </div>}
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{width:pct+'%',backgroundColor:m.color}}/>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Revenue trend — kept, and still driven by the Payment/Stay date toggle. */}
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-1">
+                {reportBy==='payment_date'?'Revenue by payment date':'Revenue by stay date'}
+              </h3>
+              <p className="text-xs text-gray-400 mb-3">{reportBy==='payment_date'?'When payments were received':'Attributed to arrival month'}</p>
+              <BarChart data={monthlyData}/>
             </div>
           </div>
         )}
 
+        {/* ── WEEKS AHEAD TAB — the forward look (R3) ── */}
+        {activeTab==='forward'&&(
+          <div className="space-y-6">
+
+            {/* ─────────────── THE SIGNAL STRIP ───────────────
+                Wins first, deliberately. This view exists to direct attention, and an owner who
+                only ever sees what is wrong stops opening it. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-gray-900">The next {WEEKS_AHEAD} weeks</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {forwardLook.basis==='none'
+                      ? 'Showing how full each week is. No comparison yet.'
+                      : <>Pace measured against <span className="font-semibold text-gray-500">{forwardLook.basisLabel}</span>.</>}
+                  </p>
+                </div>
+
+                {/* ── ADD A GOAL — opt-in, and off by default ── */}
+                <div className="shrink-0">
+                  {!hasGoalColumn ? (
+                    <span className="text-xs text-gray-400">Goals need the R3 database update.</span>
+                  ) : goalEditing ? (
+                    <div className="flex items-center gap-2">
+                      <input type="number" min={1} max={100} autoFocus value={goalDraft}
+                        onChange={e=>setGoalDraft(e.target.value)}
+                        placeholder="70"
+                        className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"/>
+                      <span className="text-sm text-gray-500">% full</span>
+                      <button disabled={goalSaving}
+                        onClick={()=>{const n=Math.round(Number(goalDraft)); saveGoal(Number.isFinite(n)&&n>0?Math.min(100,n):null)}}
+                        className="px-3 py-1.5 rounded-lg text-white text-xs font-bold" style={{background:'#059669'}}>
+                        {goalSaving?'Saving…':'Save'}
+                      </button>
+                      {goalPct!==null&&(
+                        <button disabled={goalSaving} onClick={()=>saveGoal(null)}
+                          className="text-xs text-gray-500 hover:underline">Remove</button>
+                      )}
+                      <button onClick={()=>setGoalEditing(false)} className="text-xs text-gray-400 hover:underline">Cancel</button>
+                    </div>
+                  ) : goalPct===null ? (
+                    <button onClick={()=>{setGoalDraft('');setGoalEditing(true)}}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+                      + Add a goal
+                    </button>
+                  ) : (
+                    <button onClick={()=>{setGoalDraft(String(goalPct));setGoalEditing(true)}}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                      Goal: {goalPct}% full · Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {forwardLook.best && forwardLook.best.fill > 0 && (
+                  <p className="text-sm md:text-base rounded-xl bg-emerald-50 ring-1 ring-emerald-200 text-emerald-800 px-4 py-2.5">
+                    🎉 <span className="font-semibold">The week of {weekLabel(forwardLook.best.weekStart)} is {forwardLook.best.fill}% full</span>
+                    {forwardLook.best.verdict==='ahead'?' — nicely ahead.'
+                      : forwardLook.best.fill>=70?' — your strongest week on the board.'
+                      : ' — your fullest week ahead.'}
+                  </p>
+                )}
+                {forwardLook.ahead.length>0 && (
+                  <p className="text-sm rounded-xl bg-emerald-50 ring-1 ring-emerald-200 text-emerald-800 px-4 py-2.5">
+                    ✅ <span className="font-semibold">{forwardLook.ahead.length} week{forwardLook.ahead.length!==1?'s are':' is'} ahead of {forwardLook.basisLabel}</span> — whatever you did there, do it again.
+                  </p>
+                )}
+                {/* ⚠ AMBER, AND WORDED AS AN OPPORTUNITY. These are the weeks a nudge can still
+                    fill, which is the whole point of looking eight weeks out. */}
+                {forwardLook.behind.length>0 && (
+                  <p className="text-sm rounded-xl bg-amber-50 ring-1 ring-amber-200 text-amber-800 px-4 py-2.5">
+                    👀 <span className="font-semibold">{forwardLook.behind.length} week{forwardLook.behind.length!==1?'s are':' is'} pacing behind</span> — a nudge now fills {forwardLook.behind.length!==1?'them':'it'}:{' '}
+                    {forwardLook.behind.map(w=>weekLabel(w.weekStart)).join(' · ')}
+                  </p>
+                )}
+                {/* The first-season state: useful, and pointedly not nagging. */}
+                {forwardLook.basis==='none' && (
+                  <p className="text-sm rounded-xl bg-gray-50 ring-1 ring-gray-200 text-gray-600 px-4 py-2.5">
+                    We&rsquo;ll compare to last year once you have one — or add a goal anytime.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* ─────────────── PACE BARS ─────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">How each week is pacing</h2>
+              <p className="text-xs text-gray-400 mb-4">
+                How full each week is. {forwardLook.basis==='goal'
+                  ? 'The dashed line is your goal.'
+                  : forwardLook.basis==='none'
+                    ? 'No comparison line yet — this is simply where each week stands.'
+                    : 'The grey tick on each bar is where ' + forwardLook.basisLabel + ' stood.'}
+              </p>
+              <div style={{width:'100%',overflowX:'auto'}}>
+                {(() => {
+                  const W = forwardLook.weeks, chartH = 170, barW = 44, gap = 22, left = 34
+                  const totalW = left + W.length*(barW+gap) + 16
+                  const y = (pct: number) => 10 + (1 - pct/100)*chartH
+                  return (
+                    <svg width={Math.max(totalW, 320)} height={chartH+58} style={{display:'block'}}>
+                      {[0,50,100].map(pct=>(
+                        <g key={pct}>
+                          <line x1={left-6} y1={y(pct)} x2={totalW-8} y2={y(pct)} stroke="#e5e7eb" strokeWidth={1}/>
+                          <text x={left-9} y={y(pct)+4} textAnchor="end" fontSize={10} fill="#9CA3AF">{pct}%</text>
+                        </g>
+                      ))}
+                      {/* The goal line — drawn ONLY when the owner opted in. */}
+                      {forwardLook.basis==='goal' && goalPct!==null && (
+                        <g>
+                          <line x1={left-6} y1={y(goalPct)} x2={totalW-8} y2={y(goalPct)}
+                            stroke="#059669" strokeWidth={2} strokeDasharray="6 4"/>
+                          <text x={totalW-10} y={y(goalPct)-5} textAnchor="end" fontSize={10} fill="#059669" fontWeight="bold">
+                            goal {goalPct}%
+                          </text>
+                        </g>
+                      )}
+                      {W.map((w,i)=>{
+                        const x = left + i*(barW+gap)
+                        const h = Math.max(2, (w.fill/100)*chartH)
+                        const c = paceColor(w)
+                        return (
+                          <g key={w.weekStart}>
+                            <rect x={x} y={10+chartH-h} width={barW} height={h} fill={c} rx={5}/>
+                            <text x={x+barW/2} y={10+chartH-h-6} textAnchor="middle" fontSize={11} fill="#374151" fontWeight="bold">{w.fill}%</text>
+                            {/* Last year's mark, where there is one. A tick rather than a second
+                                bar: it is a reference point, not a competing quantity. */}
+                            {forwardLook.basis!=='goal' && w.priorFill!==null && (
+                              <g>
+                                <line x1={x-3} y1={y(w.priorFill)} x2={x+barW+3} y2={y(w.priorFill)}
+                                  stroke="#6B7280" strokeWidth={2}/>
+                                <title>{forwardLook.basisLabel}: {w.priorFill}%</title>
+                              </g>
+                            )}
+                            <text x={x+barW/2} y={chartH+30} textAnchor="middle" fontSize={10} fill="#6B7280">{weekLabel(w.weekStart)}</text>
+                            {w.days.some(d=>d.isToday)&&(
+                              <text x={x+barW/2} y={chartH+44} textAnchor="middle" fontSize={9} fill="#9CA3AF">this week</text>
+                            )}
+                          </g>
+                        )
+                      })}
+                    </svg>
+                  )
+                })()}
+              </div>
+              {/* Colour is never the only signal — the verdict is spelled out. */}
+              <div className="flex flex-wrap items-center gap-4 mt-3">
+                {[
+                  { c:'#059669', t: forwardLook.basis==='none' ? 'Filling nicely' : 'Ahead' },
+                  ...(forwardLook.basis==='none' ? [] : [{ c:'#9CA3AF', t:'About level' }]),
+                  ...(forwardLook.basis==='none' ? [{ c:'#94A3B8', t:'Room to fill' }] : [{ c:'#D97706', t:'Worth a nudge' }]),
+                ].map(l=>(
+                  <span key={l.t} className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-sm" style={{background:l.c}} aria-hidden="true"/>
+                    <span className="text-xs text-gray-500">{l.t}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* ─────────────── HEAT CALENDAR ───────────────
+                ⚠ ALWAYS VISIBLE, never behind a click. The bars say WHICH week needs attention;
+                only the calendar says WHICH NIGHTS are open, and that is the thing an owner acts
+                on when they write the post or send the email. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                <h2 className="text-lg font-semibold text-gray-900">Which nights are open</h2>
+                <button onClick={()=>setActiveTab('reservations')} className="text-xs font-semibold text-blue-600 hover:underline">
+                  See the bookings →
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">
+                Every night of the next {WEEKS_AHEAD} weeks. Darker means fuller. Seasonal campers are included, the same way
+                tonight&rsquo;s occupancy counts them.
+              </p>
+
+              <div style={{width:'100%',overflowX:'auto'}}>
+                <div style={{minWidth:'520px'}}>
+                  <div className="grid gap-1 mb-1" style={{gridTemplateColumns:'72px repeat(7, minmax(0,1fr))'}}>
+                    <div/>
+                    {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>(
+                      <div key={d} className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wide">{d}</div>
+                    ))}
+                  </div>
+                  {forwardLook.weeks.map(w=>(
+                    <div key={w.weekStart} className="grid gap-1 mb-1 items-stretch" style={{gridTemplateColumns:'72px repeat(7, minmax(0,1fr))'}}>
+                      <div className="flex flex-col justify-center pr-2">
+                        <span className="text-xs font-semibold text-gray-700">{weekLabel(w.weekStart)}</span>
+                        <span className="text-xs" style={{color:paceColor(w)}}>{w.fill}%</span>
+                      </div>
+                      {w.days.map(d=>{
+                        const { bg, fg } = heatColor(d.fill)
+                        return (
+                          <div key={d.date}
+                            title={`${d.date} · ${d.fill}% full · ${d.sites} site${d.sites!==1?'s':''}${d.cabins?` · ${d.cabins} cabin${d.cabins!==1?'s':''}`:''}`}
+                            className={`rounded-md py-2 text-center ${d.isToday?'ring-2 ring-offset-1 ring-blue-500':''}`}
+                            style={{background:bg}}>
+                            <div className="text-[10px] leading-none opacity-80" style={{color:fg}}>{Number(d.date.slice(8,10))}</div>
+                            {/* The percentage is PRINTED in every cell: the shade is the pattern,
+                                the number is the answer. */}
+                            <div className="text-xs font-bold leading-tight mt-0.5" style={{color:fg}}>{d.fill}%</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 mt-4 flex-wrap">
+                <span className="text-xs text-gray-500">Empty</span>
+                {HEAT_LEGEND.map(l=>(
+                  <span key={l.bg} className="w-7 h-4 rounded-sm border border-gray-100" style={{background:l.bg}} aria-hidden="true"/>
+                ))}
+                <span className="text-xs text-gray-500">Full</span>
+                <span className="text-xs text-gray-400 ml-2">· today is outlined in blue</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── OCCUPANCY TAB — per site type, over any window (R4) ── */}
+        {activeTab==='occupancy'&&(() => {
+          const selected = occType ? (occType==='all' ? occReport.total : occTransient.byType.find(t=>t.type===occType)) : null
+          const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+          const barRow = (label: string, value: number, emphasis = false) => (
+            <div key={label} className="flex items-center gap-3">
+              <span className={`text-xs w-10 shrink-0 ${emphasis?'font-bold text-gray-900':'text-gray-500'}`}>{label}</span>
+              <div className="h-4 bg-gray-100 rounded-full overflow-hidden flex-1">
+                <div className="h-full rounded-full" style={{
+                  width: Math.max(value>0?2:0, value)+'%',
+                  background: emphasis ? SOURCE_COLOR.nightly : '#94A3B8',
+                }}/>
+              </div>
+              <span className={`text-xs tabular-nums w-14 text-right shrink-0 ${emphasis?'font-bold text-gray-900':'text-gray-600'}`}>{pctText(value)}</span>
+            </div>
+          )
+          return (
+          <div className="space-y-6">
+
+            {/* ─────────────── WINDOW PICKER ───────────────
+                Its own, not the page-wide one: a season is the natural window for occupancy, and
+                the header picker cannot reach a season in another year at all. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm font-semibold text-gray-700">Window</span>
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                  {([['this_month','This month'],['ytd','Year to date'],['year','Full year'],['custom','Custom']] as const).map(([k,l])=>(
+                    <button key={k} onClick={()=>setOccMode(k)} className="px-3 py-1.5 text-xs font-medium transition-colors"
+                      style={occMode===k?{background:'#2E6B8A',color:'#fff'}:{background:'#fff',color:'#6b7280'}}>{l}</button>
+                  ))}
+                </div>
+                {occMode==='year'&&(
+                  <select value={occYear} onChange={e=>setOccYear(Number(e.target.value))}
+                    className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white">
+                    {occYears.map(y=><option key={y} value={y}>{y}</option>)}
+                  </select>
+                )}
+                {occMode==='custom'&&(<>
+                  <input type="date" value={occStart} onChange={e=>setOccStart(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm"/>
+                  <span className="text-gray-400">to</span>
+                  <input type="date" value={occEnd} onChange={e=>setOccEnd(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm"/>
+                </>)}
+                <span className="text-xs text-gray-400 ml-auto">Showing <span className="font-semibold text-gray-600">{occRangeLabel}</span></span>
+              </div>
+            </div>
+
+            {selected ? (
+              /* ─────────────── ONE TYPE, ON ITS OWN ─────────────── */
+              <>
+                <button onClick={()=>setOccType(null)} className="text-sm font-semibold text-blue-600 hover:underline">← All site types</button>
+
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <h2 className="text-lg font-semibold text-gray-900">{selected.label}</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {selected.units} rentable unit{selected.units!==1?'s':''} · {occRangeLabel}
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
+                    {[
+                      { label:'Avg occupancy', value: selected.units===0?'—':pctText(selected.occupancyPct), sub:`${selected.occupiedNights} of ${selected.availableNights} site-nights` },
+                      { label:'Weekend (Fri/Sat)', value: selected.units===0?'—':pctText(selected.weekendPct), sub:'the nights that price highest' },
+                      { label:'Midweek (Mon–Thu)', value: selected.units===0?'—':pctText(selected.midweekPct), sub:'the nights to fill' },
+                      { label:'Revenue', value: usd(selected.revenueCents), sub:'per-night share of this window' },
+                      { label:'Avg nightly', value: selected.avgNightlyCents===null?'—':usd(selected.avgNightlyCents), sub:'revenue ÷ nights occupied' },
+                    ].map(t=>(
+                      <div key={t.label} className="bg-white rounded-2xl border border-gray-200 p-4">
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">{t.label}</p>
+                        <p className="text-2xl font-bold text-gray-900">{t.value}</p>
+                        <p className="text-xs text-gray-400 mt-1">{t.sub}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {selected.nightsWithoutRevenue>0&&(
+                    <p className="text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-lg px-3 py-2 mt-4">
+                      {selected.nightsWithoutRevenue} of these nights have no amount recorded anywhere (a camper with no
+                      contract figure), so the average nightly above is a floor rather than the whole picture.
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* The literal "occupancy on Fridays and Saturdays alone" ask. */}
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Occupancy by night of the week</h3>
+                    <p className="text-xs text-gray-400 mb-4">Friday and Saturday are highlighted — they are the ones that pay.</p>
+                    <div className="space-y-2">
+                      {selected.byDow.map((v,i)=>barRow(DOW[i], v, i===4||i===5))}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Occupancy by month</h3>
+                    <p className="text-xs text-gray-400 mb-4">The shape of the season for {selected.label.toLowerCase()}.</p>
+                    {selected.byMonth.length===0?(
+                      <p className="text-sm text-gray-400 py-6 text-center">No months in this window.</p>
+                    ):(
+                      <div className="space-y-2">
+                        {selected.byMonth.map(m=>barRow(m.label, m.pct))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* ─────────────── ALL TYPES ─────────────── */
+              <>
+                {/* ─────────────── THE WHOLE PARK, ONE NUMBER ───────────────
+                    ⚠ KEPT DELIBERATELY. The seasonal/transient split adds detail BENEATH this;
+                    it does not replace it. An owner still needs one "how full is the park"
+                    figure, over every rentable site of every kind. */}
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Whole park · {occRangeLabel}</p>
+                  <p className="text-4xl md:text-5xl font-bold text-gray-900 mt-1 tracking-tight">
+                    {pctText(occReport.total.occupancyPct)}
+                    <span className="text-base md:text-lg font-semibold text-gray-500 ml-3">
+                      average occupancy
+                    </span>
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {occReport.total.occupiedNights.toLocaleString()} of {occReport.total.availableNights.toLocaleString()} site-nights
+                    across all {occReport.total.units} rentable site{occReport.total.units!==1?'s':''}, seasonal and transient together
+                    {' · '}weekend {pctText(occReport.total.weekendPct)}
+                  </p>
+                  <button onClick={()=>setOccType('all')} className="text-xs font-semibold text-blue-600 hover:underline mt-2">
+                    Open the whole-park view →
+                  </button>
+                </div>
+
+                {/* ─────────────── THE SEASONAL PROGRAM ───────────────
+                    ⚠ NOT A NIGHT-BY-NIGHT NUMBER. A seasonal camper holds their site all season,
+                    so the question is how much of the program is SOLD — and the sites that are
+                    not are the actionable part. */}
+                {hasSeasonalSiteColumn ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                    <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                      <h2 className="text-lg font-semibold text-gray-900">Seasonal program</h2>
+                      <a href="/admin/sites" className="text-xs font-semibold text-blue-600 hover:underline">Designate sites →</a>
+                    </div>
+                    {occProgram.totalSites===0?(
+                      <p className="text-sm text-gray-500 py-4">
+                        No sites are marked seasonal yet. Mark them on the Sites screen and this fills in —
+                        the numbers come straight from the flags.
+                      </p>
+                    ):(<>
+                      <p className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
+                        {occProgram.filled} of {occProgram.totalSites} filled
+                        <span className="ml-3 text-emerald-700">{occProgram.fillPct}%</span>
+                      </p>
+                      <p className="text-sm mt-1">
+                        {occProgram.open===0
+                          ? <span className="text-emerald-700 font-semibold">Every seasonal site is sold.</span>
+                          : <span className="text-amber-700 font-semibold">{occProgram.open} site{occProgram.open!==1?'s':''} open</span>}
+                        {occProgram.open>0&&(
+                          <span className="text-gray-500"> — {occProgram.openSites.map(o=>o.siteNumber).join(', ')}</span>
+                        )}
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
+                        {[
+                          { label:'Season fees contracted', value: usd(occProgram.contractedCents), sub:'the roster’s value, whatever the window' },
+                          { label:'Effective nightly', value: occProgram.effectiveNightlyCents===null?'—':usd(occProgram.effectiveNightlyCents), sub:'fees ÷ season nights, blended across fee levels' },
+                          { label:'Share of this window', value: usd(occProgram.windowRevenueCents), sub:`the part of those fees falling in ${occRangeLabel.toLowerCase()}` },
+                        ].map(t=>(
+                          <div key={t.label} className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{t.label}</p>
+                            <p className="text-xl font-bold text-gray-900">{t.value}</p>
+                            <p className="text-xs text-gray-400 mt-1">{t.sub}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {occProgram.byType.length>1&&(
+                        <div className="mt-4 space-y-1">
+                          {occProgram.byType.map(l=>(
+                            <p key={l.type} className="text-xs text-gray-500">
+                              <span className="font-semibold text-gray-700">{l.label}:</span> {l.filled} of {l.total} filled
+                              {l.open>0&&` · ${l.open} open`}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {occProgram.campersWithoutFee.length>0&&(
+                        <p className="text-xs text-gray-400 mt-3">
+                          {occProgram.campersWithoutFee.length} seasonal camper{occProgram.campersWithoutFee.length!==1?'s have':' has'} no fee
+                          on record, so {occProgram.campersWithoutFee.length!==1?'they are':'it is'} left out of the blend rather than counted as free.
+                        </p>
+                      )}
+                    </>)}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border border-amber-200 p-5">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-1">Seasonal program</h2>
+                    <p className="text-sm text-gray-600">
+                      This park&rsquo;s database doesn&rsquo;t have the seasonal-site designation yet, so every site is being
+                      treated as transient — exactly as it was before. Once the R4b migration is applied here, this
+                      fills in and the table below splits in two.
+                    </p>
+                  </div>
+                )}
+
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {hasSeasonalSiteColumn?'Transient sites — how full each kind runs':'How full each kind of site runs'}
+                    </h2>
+                    <span className="text-xs text-gray-400">Click a row to open that type on its own</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-4">
+                    {hasSeasonalSiteColumn
+                      ? <>Booked site-nights ÷ available site-nights over {occRangeLabel}, for the sites sold BY THE NIGHT. Seasonal sites are not in this table — a nightly average over a site nobody sells by the night is not a number.</>
+                      : <>Every rentable site, of every type, over {occRangeLabel}. Types are read from your own sites — nothing to configure.</>}
+                  </p>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm" style={{minWidth:'640px'}}>
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          {['Site type','Units','Avg occupancy','Weekend (Fri/Sat)','Revenue','Avg nightly'].map((h,i)=>(
+                            <th key={h} className={`py-2 text-gray-500 font-semibold text-xs uppercase tracking-wide ${i===0?'text-left':'text-right'}`}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {occTransient.byType.map(t=>(
+                          <tr key={t.type} onClick={()=>setOccType(t.type)}
+                            className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                            <td className="py-3 font-medium text-gray-900">
+                              {t.label}
+                              {t.type===UNRESOLVED_TYPE&&<span className="ml-2 text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">needs a site</span>}
+                            </td>
+                            <td className="py-3 text-right text-gray-600 tabular-nums">{t.units||'—'}</td>
+                            {/* ⚠ A percentage needs a denominator. The unassigned bucket has real
+                                occupied nights but NO sites — the park does not list the site
+                                these campers name — so a rate there would be a division by
+                                nothing dressed up as 0%. The nights and money still show. */}
+                            <td className={`py-3 text-right font-semibold tabular-nums ${occTone(t.occupancyPct)}`}>{t.units===0?'—':pctText(t.occupancyPct)}</td>
+                            <td className={`py-3 text-right font-bold tabular-nums ${occTone(t.weekendPct)}`}>{t.units===0?'—':pctText(t.weekendPct)}</td>
+                            <td className="py-3 text-right text-gray-700 tabular-nums">{usd(t.revenueCents)}</td>
+                            <td className="py-3 text-right text-gray-700 tabular-nums">{t.avgNightlyCents===null?'—':usd(t.avgNightlyCents)}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gray-200">
+                          <td className="py-3 font-bold text-gray-900">{hasSeasonalSiteColumn?'All transient sites':'All sites'}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occTransient.total.units}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occTransient.total.occupancyPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occTransient.total.weekendPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{usd(occTransient.total.revenueCents)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occTransient.total.avgNightlyCents===null?'—':usd(occTransient.total.avgNightlyCents)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ⚠ THE LENS, STATED WHERE IT IS READ. This revenue is NOT the dashboard's. */}
+                  <p className="text-xs text-gray-400 mt-4">
+                    <span className="font-semibold text-gray-500">About this revenue:</span> it is a <em>per-night</em> view —
+                    every booking and every season fee is spread evenly across the nights it bought, and only this
+                    window&rsquo;s share is counted. A season fee paid in one cheque shows here as a nightly rate across the
+                    whole season. The dashboard&rsquo;s <em>Money received</em> answers a different question — cash, on the day it
+                    arrived — so the two will not match, and that is correct rather than an error.
+                  </p>
+                </div>
+
+                {/* ─────────────── RECONCILING WITH THE DASHBOARD ─────────────── */}
+                {occTonight&&(
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Does this agree with the dashboard?</h3>
+                    <p className="text-sm text-gray-600">
+                      Tonight, <span className="font-semibold">{occTonight.total.occupiedNights} of {occTonight.total.units} rentable
+                      units</span> are occupied — {pctText(occTonight.total.occupancyPct)} across every type.
+                      The dashboard shows <span className="font-semibold">{tonightCount+seasonalCount} of {totalSites} sites</span> ({occupancyPct}%).
+                    </p>
+                    <ul className="text-xs text-gray-500 mt-2 space-y-1 list-disc pl-5">
+                      <li>Same nights, same rule — a guest who checks out this morning occupies neither figure.</li>
+                      <li>The dashboard counts <strong>sites only</strong> against the configured total and reports cabins beside it; this tab counts <strong>every rentable type</strong> against the actual site rows, which is why the two percentages differ.</li>
+                      <li>The dashboard counts every seasonal camper on every night; this tab counts them only on the nights inside their season, which is what makes a nightly rate possible.</li>
+                    </ul>
+                  </div>
+                )}
+
+                {(occReport.unresolvedOccupants.length>0||occReport.undatedOccupants.length>0
+                  ||occProgram.onTransientSites.length>0||nightlyOnSeasonalSites>0)&&(
+                  <div className="bg-white rounded-2xl border border-amber-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Campers this couldn&rsquo;t place</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Counted, never dropped — but worth tidying, because until they are they sit outside their real site type.
+                    </p>
+                    {/* ⚠ R4b: a designation the park has not made yet, and the fix is one toggle.
+                        Reclassifying them silently would make the seasonal fill ratio a fiction. */}
+                    {occProgram.onTransientSites.length>0&&(
+                      <p className="text-sm text-gray-700 mb-1">
+                        <span className="font-semibold">{occProgram.onTransientSites.length} seasonal camper{occProgram.onTransientSites.length!==1?'s are':' is'} on a site marked transient:</span>{' '}
+                        {occProgram.onTransientSites.join(' · ')}
+                        {' — '}<a href="/admin/sites" className="text-blue-600 hover:underline">mark those sites seasonal</a> and they join the program.
+                      </p>
+                    )}
+                    {nightlyOnSeasonalSites>0&&(
+                      <p className="text-sm text-gray-700 mb-1">
+                        <span className="font-semibold">{nightlyOnSeasonalSites} nightly booking{nightlyOnSeasonalSites!==1?'s sit':' sits'} on a seasonal site.</span>{' '}
+                        Counted in the whole-park figure above, but left out of the transient table — that site is not
+                        sold by the night.
+                      </p>
+                    )}
+                    {occReport.unresolvedOccupants.length>0&&(
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">{occReport.unresolvedOccupants.length} on a site number that doesn&rsquo;t exist:</span>{' '}
+                        {occReport.unresolvedOccupants.join(' · ')}
+                      </p>
+                    )}
+                    {occReport.undatedOccupants.length>0&&(
+                      <p className="text-sm text-gray-700 mt-1">
+                        <span className="font-semibold">{occReport.undatedOccupants.length} with no season dates</span> (so no
+                        particular nights can be attributed): {occReport.undatedOccupants.join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          )
+        })()}
+
         {/* ── RESERVATIONS TAB ── */}
         {activeTab==='reservations'&&(
           <div className="space-y-6">
+            <SourceChip source="nightly" note="the detail behind the dashboard's nightly line"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'based on stay dates'}/>
               <KPICard label="Total Bookings" value={reservations.length.toString()} sub="active reservations"/>
@@ -905,17 +2341,132 @@ export default function ReportsPage() {
         {/* ── SEASONAL TAB ── */}
         {activeTab==='seasonal'&&(
           <div className="space-y-6">
+            <SourceChip source="seasonal" note="seasonal campers, split into their money lanes"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Active Seasonals" value={seasonalCampers.length.toString()} sub="registered this season"/>
-              <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' with balance due'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0}/>
-              <KPICard label="Electric Revenue" value={'$'+electricRevenue.toFixed(2)} sub="this period"/>
-              <KPICard label="Other Charges" value={'$'+otherGuestRevenue.toFixed(2)} sub="store + misc"/>
+              <KPICard label="Campers Owe" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' with a balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0}/>
+              {/* Newly reachable. The per-camper balance used to be clamped at zero, so a camper
+                  holding a credit read as "current" and this figure was permanently $0.00. */}
+              <KPICard label="Credit on Account" value={'$'+creditBalance.toFixed(2)} sub={creditCampers.length+' paid ahead'} color={creditBalance>0?'text-blue-600':undefined}/>
+              <KPICard label="Charges This Period" value={'$'+seasonalRevenue.toFixed(2)} sub="all lanes"/>
             </div>
 
-            {guestCategoryData.length>0&&(
+            {/* ── WHERE THE MONEY SITS — the lane view, answer first ──────────────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              <h2 className="text-lg font-semibold text-gray-900">Where seasonal campers&rsquo; money sits</h2>
+              <p className="text-2xl md:text-3xl font-bold mt-2 text-gray-900">
+                {outstandingBalance>0
+                  ? <>Campers owe <span className="text-red-600">${outstandingBalance.toFixed(2)}</span>.</>
+                  : <span className="text-emerald-600">Every seasonal camper is paid up.</span>}
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
+                {overdueCampers.length} of {seasonalCampers.length} account{seasonalCampers.length!==1?'s':''} {overdueCampers.length===1?'has':'have'} a balance
+                {creditBalance>0&&<> · {creditCampers.length} {creditCampers.length===1?'is':'are'} paid ahead by <span className="text-blue-600 font-semibold">${creditBalance.toFixed(2)}</span></>}
+              </p>
+
+              {seasonalCampers.length===0?(
+                <p className="text-gray-400 text-sm py-6">No seasonal campers found</p>
+              ):(<>
+                <p className="text-sm text-gray-500 mt-5 mb-2">Broken down by what the money is <span className="font-semibold text-gray-700">for</span> — the same three lanes a camper sees on their own account:</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm" style={{minWidth:'480px'}}>
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="py-2 text-left text-gray-500 font-semibold text-xs uppercase tracking-wide">Lane</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Charged</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Paid to this lane</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Still owed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shownLanes.map(lane=>{
+                        const t = laneRollup.byLane[lane]
+                        return (
+                          <tr key={lane} className="border-b border-gray-50">
+                            <td className="py-2.5 font-medium text-gray-900"><LaneSwatch lane={lane}/></td>
+                            <td className="py-2.5 text-right text-gray-700">{money(t.charges)}</td>
+                            <td className="py-2.5 text-right text-gray-700">{money(t.payments)}</td>
+                            <td className={`py-2.5 text-right font-semibold ${balanceClass(t.balance)}`}>{balanceText(t.balance)}</td>
+                          </tr>
+                        )
+                      })}
+                      {/* ⚠ THE HONEST LINE, AND THE REASON THE TABLE ADDS UP. A payment taken
+                          before lanes existed names no lane, and this app never guesses one for
+                          it — doing so would rewrite a park's financial history. It pays down
+                          the ACCOUNT, so it is subtracted once, here, rather than spread across
+                          lanes that did not receive it. */}
+                      {laneRollup.untaggedPayments!==0&&(
+                        <tr className="border-b border-gray-50">
+                          <td className="py-2.5 text-gray-500">
+                            <span className="inline-flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-sm shrink-0 border border-gray-300" aria-hidden="true"/>
+                              Paid against the account, not one lane
+                            </span>
+                          </td>
+                          <td className="py-2.5 text-right text-gray-400">—</td>
+                          <td className="py-2.5 text-right text-gray-700">{money(laneRollup.untaggedPayments)}</td>
+                          <td className={`py-2.5 text-right font-semibold ${balanceClass(-laneRollup.untaggedPayments)}`}>{balanceText(-laneRollup.untaggedPayments)}</td>
+                        </tr>
+                      )}
+                      <tr className="border-t-2 border-gray-200">
+                        <td className="py-2.5 font-bold text-gray-900">Net across all seasonal accounts</td>
+                        <td className="py-2.5 text-right font-bold text-gray-900">{money(laneRollup.totalCharges)}</td>
+                        <td className="py-2.5 text-right font-bold text-gray-900">{money(laneRollup.totalPayments)}</td>
+                        <td className={`py-2.5 text-right font-bold ${balanceClass(laneRollup.netBalance)}`}>{balanceText(laneRollup.netBalance)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-gray-400 mt-3">
+                  The net figure is the sum of every seasonal camper&rsquo;s folio balance, to the cent — canceled charges
+                  excluded, exactly as their folio excludes them. It is <span className="font-semibold text-gray-500">${netSeasonalBalance.toFixed(2)}</span>, which is
+                  what is owed (${outstandingBalance.toFixed(2)}) less what is held in credit (${creditBalance.toFixed(2)}).
+                </p>
+              </>)}
+            </div>
+
+            {/* ── COLLECTED IN THE PERIOD, BY LANE ────────────────────────────────────────── */}
+            {laneCollected.total!==0&&(
               <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Guest Account Revenue Breakdown</h2>
-                <DonutChart data={guestCategoryData}/>
+                <h2 className="text-lg font-semibold text-gray-900">Collected from seasonal campers this period</h2>
+                <p className="text-2xl md:text-3xl font-bold mt-2 text-emerald-600">${(laneCollected.total/100).toFixed(2)}</p>
+                <p className="text-sm text-gray-500 mt-1">Net of the card surcharge, the same way a folio counts a payment.</p>
+                <div className="space-y-3 mt-4">
+                  {LANES.filter(l=>laneCollected.byLane[l]!==0).map(l=>{
+                    const pct = laneCollected.total>0?Math.round((laneCollected.byLane[l]/laneCollected.total)*100):0
+                    return (
+                      <div key={l}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-medium text-gray-700"><LaneSwatch lane={l}/></span>
+                          <span className="font-semibold text-gray-900">{money(laneCollected.byLane[l])} <span className="text-gray-400 font-normal">({pct}%)</span></span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{width:pct+'%',backgroundColor:LANE_COLOR[l]}}/>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {laneCollected.untagged!==0&&(
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium text-gray-500">Not filed against a lane</span>
+                        <span className="font-semibold text-gray-900">{money(laneCollected.untagged)} <span className="text-gray-400 font-normal">({laneCollected.total>0?Math.round((laneCollected.untagged/laneCollected.total)*100):0}%)</span></span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-gray-300" style={{width:(laneCollected.total>0?Math.round((laneCollected.untagged/laneCollected.total)*100):0)+'%'}}/>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">These paid down the whole account. A payment can be filed to a lane from the camper&rsquo;s folio.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {seasonalLaneChargeData.length>0&&(
+              <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                <h2 className="text-lg font-semibold text-gray-900 mb-1">Charges this period, by lane</h2>
+                <p className="text-xs text-gray-400 mb-4">What was billed to seasonal campers between {getDateBounds(dateRange,customStart,customEnd).start} and {getDateBounds(dateRange,customStart,customEnd).end}</p>
+                <DonutChart data={seasonalLaneChargeData}/>
               </div>
             )}
 
@@ -937,12 +2488,32 @@ export default function ReportsPage() {
                   {[...seasonalCampers].sort((a,b)=>b.balance-a.balance).map(c=>(
                     <div key={c.id} onClick={()=>c.folioId&&router.push(`/admin/folio/${c.folioId}`)}
                       className={`grid grid-cols-12 gap-2 px-5 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer items-center ${c.balance>0?'bg-red-50/30':''}`}>
-                      <div className="col-span-5 font-medium text-gray-900 text-sm">{c.name}</div>
+                      <div className="col-span-5 min-w-0">
+                        <div className="font-medium text-gray-900 text-sm truncate">{c.name}</div>
+                        {/* This camper's own three-lane split. Same classifier, same colours and
+                            same words as the roll-up above and as their folio — so an owner can
+                            read one row and open the folio without re-learning anything. Lanes
+                            with no activity are left out rather than printed as $0.00. */}
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+                          {SEASONAL_CAMPER_LANES.filter(l=>c.lanes.byLane[l].charges!==0||c.lanes.byLane[l].payments!==0).map(l=>(
+                            <span key={l} className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+                              <span className="w-2 h-2 rounded-sm shrink-0" style={{backgroundColor:LANE_COLOR[l]}} aria-hidden="true"/>
+                              {LANE_LABEL[l]} <span className={`font-semibold ${balanceClass(c.lanes.byLane[l].balance)}`}>{balanceText(c.lanes.byLane[l].balance)}</span>
+                            </span>
+                          ))}
+                          {c.lanes.untaggedPayments!==0&&(
+                            <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                              <span className="w-2 h-2 rounded-sm shrink-0 border border-gray-300" aria-hidden="true"/>
+                              On account <span className={`font-semibold ${balanceClass(-c.lanes.untaggedPayments)}`}>{balanceText(-c.lanes.untaggedPayments)}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
                       <div className="col-span-2 text-gray-600 text-sm">{c.site_number}</div>
                       <div className="col-span-3 text-gray-400 text-xs truncate">{c.email}</div>
                       <div className="col-span-2 text-right">
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
+                        <span className={`text-sm font-bold ${balanceClass(c.balance)}`}>
+                          {c.balance===0?'✓ Current':balanceText(c.balance)}
                         </span>
                       </div>
                     </div>
@@ -1039,6 +2610,7 @@ export default function ReportsPage() {
         {/* ── STORE TAB ── */}
         {activeTab==='store'&&posEnabled&&(
           <div className="space-y-6">
+            <SourceChip source="store" note="walk-up sales; campers' store tabs sit on their folios"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'}/>
               <KPICard label="Avg Ticket" value={posSales.length>0?'$'+(posRevenue/posSales.length).toFixed(2):'—'} sub="per transaction"/>
@@ -1311,8 +2883,14 @@ export default function ReportsPage() {
 
                   {/* Balance summary */}
                   {(() => {
-                    const chargesTotal = sumLineTotals(txFolioItems)
-                    const paymentsTotal = txFolioPayments.filter((p:any)=>p.status==='completed').reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
+                    // `notVoided`, matching the charge list and subtotal directly above it and
+                    // the folio this drawer is a window onto. Without it the drawer showed a
+                    // list of charges and, underneath, a balance that included a charge the list
+                    // had just excluded.
+                    const chargesTotal = txFolioItems.filter(notVoided).reduce((s,i)=>s+i.line_total,0)
+                    // REFUNDABLE_STATUSES, matching the folio: 'completed' alone dropped both
+                    // halves of a refund and overstated what was still due.
+                    const paymentsTotal = txFolioPayments.filter((p:any)=>REFUNDABLE_STATUSES.includes(p.status)).reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
                     const balance = chargesTotal - paymentsTotal
                     return (
                       <div className={`rounded-xl p-4 flex items-center justify-between ${balance>0?'bg-red-50 border border-red-200':'bg-emerald-50 border border-emerald-200'}`}>

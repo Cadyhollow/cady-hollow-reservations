@@ -4,6 +4,7 @@
 // mode='camper' (not built yet) would hide/redirect them. This component performs
 // NO writes — all editing (rig, notes, Send Packet) lives on the admin page.
 import Link from 'next/link'
+import type { SeasonalGuestData, SeasonalOccupant } from '@/lib/seasonal-types'
 
 type Mode = 'admin' | 'camper'
 
@@ -34,7 +35,25 @@ const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <div className="flex justify-between text-sm py-1"><span className="text-gray-500">{label}</span><span className="font-medium text-gray-900 text-right">{value}</span></div>
 )
 
-export default function SeasonalSections({ data, mode }: { data: any; mode: Mode }) {
+/** The lanes shown on the camper page, in the order an owner reads them. `other` is deliberately
+ *  absent: it is the classifier's catch-all, not a bill a camper is sent, and giving it a line
+ *  here would put a heading on money nobody meant to categorise. It still counts in the account
+ *  balance below, which is the figure that must never change meaning. */
+const LANE_ROWS = [
+  { lane: 'electric' as const, label: 'Electric' },
+  { lane: 'store' as const, label: 'Store' },
+  { lane: 'seasonal' as const, label: 'Seasonal fee' },
+]
+
+export default function SeasonalSections({ data, mode }: { data: SeasonalGuestData; mode: Mode }) {
+  const lanes = data.lanes || null
+  // One rendering of an amount, so a lane line and the account line cannot disagree about what a
+  // credit looks like.
+  const money = (cents: number) => (
+    <span style={{ color: cents > 0 ? '#d97706' : '#15803d' }}>
+      {cents < 0 ? 'Credit ' + fmtMoney(-cents) : fmtMoney(cents)}
+    </span>
+  )
   const g = data.guest || {}
   // Single-line home address, gap-safe (no stray commas): "Street, City, ST ZIP".
   const homeAddressLine = [
@@ -43,10 +62,16 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
   ].filter(Boolean).join(', ')
   const admin = mode === 'admin'
   const current = data.currentContract
-  const prior = (data.contracts || []).filter((c: any) => c !== current)
-  // Party comes from the most recent SIGNED contract.
-  const signed = (data.contracts || []).find((c: any) => c.status === 'signed')
-  const occupants: any[] = (signed?.occupants || current?.occupants || [])
+  const prior = (data.contracts || []).filter(c => c !== current)
+  // Party comes from the most recent SIGNED contract, then this year's contract, and only if
+  // there is no contract at all from the guest's STANDING ROSTER (guests.party). A signed
+  // contract's party is what was actually agreed, so it keeps winning; the roster is here so a
+  // camper who has been entered but never sent a packet does not show an empty Party section.
+  const signed = (data.contracts || []).find(c => c.status === 'signed')
+  const roster: SeasonalOccupant[] = Array.isArray(g.party) ? g.party : []
+  const fromContract: SeasonalOccupant[] | null = signed?.occupants || current?.occupants || null
+  const occupants: SeasonalOccupant[] = fromContract ?? roster
+  const partyIsRoster = fromContract == null && roster.length > 0
   const rig = current || g // prefer the frozen contract's rig if present, else live guest
 
   return (
@@ -79,7 +104,7 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
         {prior.length > 0 && (
           <div className="mt-3 pt-3 border-t border-gray-100">
             <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Prior years</p>
-            {prior.map((c: any) => (
+            {prior.map(c => (
               <div key={c.id} className="flex items-center justify-between text-sm py-1">
                 <span className="text-gray-600">{c.season_year}</span>
                 <span className="flex items-center gap-2">
@@ -93,10 +118,52 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
       </Section>
 
       <Section title="Money">
-        <Row label="Account balance" value={<span style={{ color: data.balance_cents > 0 ? '#d97706' : '#15803d' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
+        {/* ── PHASE 4 PR 2 ─────────────────────────────────────────────────────────────────
+            THE MODE CHANGES THE PRESENTATION, NOT WHAT IS TRACKED. The seasonal fee is posted to
+            the folio in BOTH modes, so:
+              separated → `data.lanes` is present; show the lanes, with the whole-account total.
+              combined  → `data.lanes` is NULL; render the single blended balance exactly as
+                          before, which now simply INCLUDES the seasonal charge along with
+                          everything else. No special-casing: it is just another line item in the
+                          one folio, which is what "everything together" should mean.
+            The lane breakdown is purely additive and only a separated park ever sees it. */}
+        {lanes ? (
+          <>
+            {LANE_ROWS.map(({ lane, label }) => (
+              <Row key={lane} label={label} value={money(lanes.byLane[lane].balance)} />
+            ))}
+            {/* Shown HONESTLY rather than folded into a lane. Until the checkout screen lands,
+                every payment is recorded against the whole account rather than against one lane,
+                so a camper will normally have some sitting here. Silently spreading it across
+                the lanes would make each lane's figure a guess. */}
+            {lanes.untaggedPayments !== 0 && (
+              <Row
+                label="Payments not yet assigned"
+                value={<span style={{ color: '#15803d' }}>−{fmtMoney(lanes.untaggedPayments)}</span>}
+              />
+            )}
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <Row label="Account balance" value={money(data.balance_cents)} />
+            </div>
+          </>
+        ) : (
+          <Row label="Account balance" value={<span style={{ color: data.balance_cents > 0 ? '#d97706' : '#15803d' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
+        )}
         <Row label="Last payment" value={data.lastPayment ? `${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}` : '—'} />
         {admin && data.folioId && (
-          <div className="mt-2"><Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link></div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {/* Phase 4 PR 3. Shown only when the park is SEPARATED — `lanes` is present exactly
+                then — because the lane checkout has nothing to select otherwise. A combined park
+                keeps taking payments on the folio, unchanged. */}
+            {lanes && (
+              <Link href={`/admin/checkout?guestId=${g.id}`}
+                className="px-3 py-2 rounded-lg text-xs font-bold text-white"
+                style={{ background: '#15803d' }}>
+                Take a payment
+              </Link>
+            )}
+            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link>
+          </div>
         )}
       </Section>
 
@@ -110,11 +177,12 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
       <Section title="Party">
         {occupants.length > 0 ? (
           <ul className="text-sm text-gray-800 space-y-1">
-            {occupants.map((o: any, i: number) => (
+            {occupants.map((o, i) => (
               <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-gray-400 capitalize">{o.kind || ''}</span></li>
             ))}
           </ul>
-        ) : <p className="text-sm text-gray-500">No party recorded yet (from the most recent signed contract).</p>}
+        ) : <p className="text-sm text-gray-500">No party recorded yet.</p>}
+        {partyIsRoster && <p className="text-xs text-gray-400 mt-2">From the camper&rsquo;s standing party — no packet has been sent yet.</p>}
       </Section>
 
       <Section title="Electric" right={admin ? <Link href="/admin/electric-billing" className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Electric billing →</Link> : undefined}>
@@ -122,10 +190,10 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
           // Phase C2 — voided readings: admin sees them MARKED (audit trail); the
           // camper view hides them entirely (Decision 2d). Component is shared
           // (Mode admin|camper), so branch on `admin` rather than assume the surface.
-          const electricRows = (data.electric || []).filter((r: any) => admin || r.voided !== true)
+          const electricRows = (data.electric || []).filter(r => admin || r.voided !== true)
           return electricRows.length > 0 ? (
           <div className="text-sm">
-            {electricRows.slice(0, 4).map((r: any) => {
+            {electricRows.slice(0, 4).map(r => {
               const isVoided = r.voided === true
               return (
               <div key={r.id} className="flex justify-between py-1 border-b border-gray-50 last:border-0" style={{ opacity: isVoided ? 0.6 : 1 }}>
@@ -145,7 +213,7 @@ export default function SeasonalSections({ data, mode }: { data: any; mode: Mode
       <Section title="Notes">
         {(data.notes || []).length > 0 ? (
           <div className="space-y-2">
-            {(data.notes || []).map((n: any) => (
+            {(data.notes || []).map(n => (
               <div key={n.id} className="text-sm border-l-2 border-gray-100 pl-3">
                 <div className="text-gray-800">{n.body}</div>
                 <div className="text-xs text-gray-400">{n.author} · {fmtDate(n.created_at)}</div>

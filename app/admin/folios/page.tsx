@@ -1,16 +1,13 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { sumLineTotals } from '@/lib/ledger'
 import { useRouter } from 'next/navigation'
-import { planAtLeast } from '@/lib/plan'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
-// PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
-// `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
-// these queries as `authenticated` and the role policies in
-// db/migrations/2026-08-11-pr5b1-authenticated-role-policies.sql apply. Safe at module
-// scope: createBrowserClient returns a singleton in the browser and a no-op cookie store
-// during prerender.
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
 const supabase = createBrowserSupabase()
 
 type FolioRow = {
@@ -21,7 +18,7 @@ type FolioRow = {
   status: string
   opened_at: string
   reservation_id: string | null
-  folio_line_items: { line_total: number; voided?: boolean | null }[]
+  folio_line_items: { line_total: number }[]
   folio_payments: { amount: number; surcharge_amount: number; status: string; method: string; paid_at: string }[]
   reservations: { site_number: string; arrival_date: string; departure_date: string; total_price: number; amount_paid: number } | null
 }
@@ -41,7 +38,7 @@ export default function FoliosPage() {
   // ── Plan/feature gate — redirect if not authorized ──────────────────────
   useEffect(() => {
     supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
-      if (!planAtLeast(data?.plan, 'summit')) router.replace('/admin')
+      if (data?.plan !== 'summit') router.replace('/admin')
     })
   }, [])
 
@@ -60,7 +57,7 @@ export default function FoliosPage() {
       .from('folios')
       .select(`
         id, guest_name, guest_email, folio_type, status, opened_at, reservation_id,
-        folio_line_items ( line_total, voided ),
+        folio_line_items ( line_total ),
         folio_payments ( amount, surcharge_amount, status, method, paid_at )
       `)
       .order('opened_at', { ascending: false })
@@ -85,7 +82,7 @@ export default function FoliosPage() {
 
     const summaries: FolioSummary[] = (data as any[]).map(f => {
       const reservation = f.reservation_id ? resMap[f.reservation_id] || null : null
-      const itemsTotal = sumLineTotals(f.folio_line_items)
+      const itemsTotal = (f.folio_line_items || []).reduce((s: number, i: any) => s + i.line_total, 0)
       // Includes refund rows: a booking refund is now a negative folio row and
       // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
       // having paid money that was handed back.
