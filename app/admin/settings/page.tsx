@@ -8,6 +8,9 @@ import { parseMonthDay, resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/
 import { fetchTaxes, fetchAppliedTaxIds, syncItemTaxes, type TaxRow } from '@/lib/tax-applications'
 import TaxCheckboxList from '@/components/TaxCheckboxList'
 import toast, { Toaster } from 'react-hot-toast'
+// ONE token catalog, read by every box that offers merge fields — see lib/contract-tokens.ts.
+import { CONTRACT_TOKENS, tokenText, insertAtCursor, stripTagsForDisplay } from '@/lib/contract-tokens'
+import { defaultPacketIntro } from '@/lib/contract-emails'
 import Image from 'next/image'
 import imageCompression from 'browser-image-compression'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
@@ -102,6 +105,7 @@ const defaultSettings = {
   waiver_enabled: true,
   waiver_text: '',
   contract_text: '',
+  packet_email_intro: '',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
@@ -125,8 +129,50 @@ export default function SettingsPage() {
   // itself, stays out of the save payload, AND can't run an upload that would write to a
   // column that isn't there yet (which would fail the write and orphan the uploaded file).
   const [hasHeroColumn, setHasHeroColumn] = useState(false)
+  // Same story again for `packet_email_intro` — the packet invitation message.
+  const [hasPacketIntroColumn, setHasPacketIntroColumn] = useState(false)
+  // Refs so a merge-field chip inserts at the CURSOR rather than appending at the end.
+  const contractTextRef = useRef<HTMLTextAreaElement | null>(null)
+  const packetIntroRef = useRef<HTMLTextAreaElement | null>(null)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
+  /**
+   * Put a merge field into a box at the cursor.
+   *
+   * ⚠ CLICKING, NOT TYPING, IS THE POINT. renderTemplate() replaces an unknown token with '' and
+   * never with the literal text, so a hand-typed {{deposti_due}} produces a BLANK space in a
+   * camper's document or email, with no error anywhere. A button cannot misspell.
+   */
+  function insertToken(
+    ref: React.RefObject<HTMLTextAreaElement | null>,
+    current: string,
+    apply: (next: string) => void,
+    key: string,
+  ) {
+    const el = ref.current
+    const at = el ? el.selectionStart ?? current.length : current.length
+    const to = el ? el.selectionEnd ?? at : at
+    const { value, cursor } = insertAtCursor(current, at, to, tokenText(key))
+    apply(value)
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  /** The clickable merge fields. Same catalog, same component, every box. */
+  const MergeFieldChips = ({ onPick }: { onPick: (key: string) => void }) => (
+    <div className="flex flex-wrap gap-1.5 mb-2">
+      {CONTRACT_TOKENS.map(t => (
+        <button key={t.key} type="button" onClick={() => onPick(t.key)} title={tokenText(t.key)}
+          className="text-xs px-2 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-green-400 hover:bg-green-50 hover:text-green-800 transition-colors">
+          + {t.label}
+        </button>
+      ))}
+    </div>
+  )
+
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingHero, setUploadingHero] = useState(false)
   const [heroDragging, setHeroDragging] = useState(false)
@@ -162,6 +208,7 @@ export default function SettingsPage() {
       setSettingsId(data.id)
       setHasThemeColumn('theme' in data)
       setHasHeroColumn('hero_image_url' in data)
+      setHasPacketIntroColumn('packet_email_intro' in data)
       setPlan(normalizePlan(data.plan))
       setForm({
         park_name: data.park_name || '',
@@ -216,6 +263,7 @@ export default function SettingsPage() {
         waiver_enabled: data.waiver_enabled !== false,
         waiver_text: data.waiver_text || '',
         contract_text: data.contract_text || '',
+        packet_email_intro: data.packet_email_intro || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         deposit_type: data.deposit_type || 'first_night',
@@ -521,6 +569,13 @@ export default function SettingsPage() {
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
       contract_text: form.contract_text,
+      // Guarded like the other optional columns: spreads to nothing on a tenant without it, so
+      // the single-payload save behaves exactly as it did before this field existed.
+      // ⚠ BLANK SAVES AS NULL — blank means "use the built-in default", which is how the send
+      // path already reads it (renderPacketIntro trims and returns '' for either).
+      ...(hasPacketIntroColumn
+        ? { packet_email_intro: form.packet_email_intro.trim() || null }
+        : {}),
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
@@ -994,34 +1049,71 @@ export default function SettingsPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-1">Seasonal Contract</h3>
             <p className="text-sm text-gray-500 mb-4">The body of the seasonal admission agreement sent to seasonal campers. Insert the merge fields below where each camper&rsquo;s details should appear — they&rsquo;re filled in when the packet is generated.</p>
-            {/* Merge fields — exactly the tokens buildContractVars() in lib/contracts.ts produces.
-                Keep this list in sync with that function; any other {{token}} renders blank. */}
+            {/* ⚠ RENDERED FROM lib/contract-tokens.ts, not written out here. This list was
+                hand-maintained and had gone STALE: it showed 9 of the 14 tokens
+                buildContractVars() actually produces, so {{season_name}}, {{deposit_due}},
+                {{total_due_by}}, {{deposit_due_by}} and {{charge_note}} were unreachable — an
+                owner had no way to discover they existed. One catalog, and a test that fails if
+                it ever drifts from buildContractVars again. */}
             <div className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Available merge fields</p>
               <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-gray-600">
-                {[
-                  ['{{name}}', 'camper name'],
-                  ['{{site_number}}', 'site'],
-                  ['{{year}}', 'season year'],
-                  ['{{opens}}', 'season opens (date)'],
-                  ['{{closes}}', 'season closes (date)'],
-                  ['{{party_names}}', 'occupants, comma-separated'],
-                  ['{{camper_make_year}}', 'year make model'],
-                  ['{{total_due}}', 'amount due'],
-                  ['{{home_address}}', 'home mailing address'],
-                ].map(([tok, desc]) => (
-                  <span key={tok} className="whitespace-nowrap">
-                    <code className="text-[11px] bg-white border border-gray-200 rounded px-1 py-0.5 text-gray-800">{tok}</code>
-                    <span className="text-gray-400 ml-1">{desc}</span>
+                {CONTRACT_TOKENS.map(t => (
+                  <span key={t.key} className="whitespace-nowrap">
+                    <code className="text-[11px] bg-white border border-gray-200 rounded px-1 py-0.5 text-gray-800">{tokenText(t.key)}</code>
+                    <span className="text-gray-400 ml-1">{t.label.toLowerCase()}</span>
                   </span>
                 ))}
               </div>
-              <p className="text-[11px] text-gray-400 mt-2">Any other <code className="bg-white border border-gray-200 rounded px-1">{'{{token}}'}</code> renders as blank.</p>
+              <p className="text-[11px] text-gray-400 mt-2">
+                Click a field to drop it in where your cursor is — no need to type the braces. Any other{' '}
+                <code className="bg-white border border-gray-200 rounded px-1">{'{{token}}'}</code> renders as blank,
+                which is why clicking beats typing: a misspelled field disappears silently.
+              </p>
             </div>
-            <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={16}
+            <MergeFieldChips onPick={k => insertToken(contractTextRef, form.contract_text, v => setForm({ ...form, contract_text: v }), k)} />
+            <textarea ref={contractTextRef} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={16}
               placeholder="Enter the seasonal admission agreement text. Use the merge fields above where each camper's details should appear..."
               value={form.contract_text} onChange={e => setForm({ ...form, contract_text: e.target.value })} />
             <p className="text-xs text-gray-400 mt-2">💡 Tip: Consult with a legal professional to ensure this agreement is appropriate for your property and jurisdiction.</p>
+
+            {/* ── PACKET INVITATION EMAIL ─────────────────────────────────────────────────
+                The message in the email that carries the packet. The send path already reads
+                settings.packet_email_intro and falls back to a built-in default when blank;
+                until now there was nowhere to set it. Column-guarded exactly like theme and
+                hero_image_url above. */}
+            <div className="mt-6 pt-6 border-t border-gray-100">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Packet Invitation Email</label>
+              <p className="text-xs text-gray-400 mb-2">
+                The message in the email that asks a camper to sign. Plain text and line breaks are fine — your winter
+                payment instructions, for example. <strong>Leave it blank and the standard message below is used.</strong>{' '}
+                The greeting and the &ldquo;Review &amp; Sign Packet&rdquo; button are always included, so the link can
+                never be lost.
+              </p>
+              {hasPacketIntroColumn && (
+                <MergeFieldChips onPick={k => insertToken(packetIntroRef, form.packet_email_intro, v => setForm({ ...form, packet_email_intro: v }), k)} />
+              )}
+              <textarea
+                ref={packetIntroRef}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed"
+                rows={6}
+                disabled={!hasPacketIntroColumn}
+                /* ⚠ THE REAL DEFAULT, not an invented example — an owner should see exactly what
+                   they are replacing. Its <strong> tags are stripped FOR DISPLAY ONLY: the
+                   default is trusted code that goes straight into the email body, while a park's
+                   own text is HTML-ESCAPED, so showing markup would teach the one thing that
+                   cannot work. Neither the default nor the escaping changes. */
+                placeholder={stripTagsForDisplay(defaultPacketIntro(new Date().getFullYear()))}
+                value={form.packet_email_intro} onChange={e => setForm({ ...form, packet_email_intro: e.target.value })} />
+              <p className="text-xs text-gray-400 mt-1">
+                Write plain words — no HTML needed, and any you type is shown as text rather than formatting.
+              </p>
+              {!hasPacketIntroColumn && (
+                <p className="text-xs text-amber-700 mt-1">
+                  This park&rsquo;s database does not have this field yet — it arrives with the next update.
+                </p>
+              )}
+            </div>
           </div>
         )}
 
