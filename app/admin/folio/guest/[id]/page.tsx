@@ -6,7 +6,7 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
-import { classifyLineItem, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
 import { notVoided } from '@/lib/ledger'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
@@ -124,6 +124,18 @@ export default function GuestAccountPage() {
   const [waiveFee, setWaiveFee] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  /**
+   * What this payment is FOR — written to folio_payments.lane.
+   *
+   * '' means "the whole account", which is exactly today's behaviour: no tag, applies to the
+   * balance as a whole. Anything else is the owner SAYING what the money is for, which is the
+   * only thing that makes a lane-scoped receipt possible.
+   *
+   * ⚠ THIS IS A TAG, NOT A CALCULATION. It changes no amount, no surcharge, and no balance —
+   * combined mode still totals the account exactly as it does now. It only lets the seasonal fee
+   * be told apart from the store tab and the electric bill afterwards.
+   */
+  const [paymentLane, setPaymentLane] = useState<Lane | ''>('')
   const [terminalStatus, setTerminalStatus] = useState('idle')
   const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [paymentNote, setPaymentNote] = useState('')
@@ -327,6 +339,21 @@ export default function GuestAccountPage() {
           folioId: folio.id,
           note: paymentNote || 'Guest account payment',
           surchargeAmount,
+          // A ONE-LANE SPLIT when the owner named a lane. recordCardPayment writes one row per
+          // lane, so a single entry is the same single row it would have written anyway — same
+          // amount, same surcharge — plus the tag. Omitted entirely for "whole account", which
+          // takes the untagged path unchanged.
+          // ⚠ CADY DIVERGENCE — `lanes` IS DELIBERATELY NOT SENT.
+          //
+          // The template's terminal route splits a card charge by lane (PR #66). THIS park's
+          // /api/terminal/charge predates that and has no lane handling at all, so sending the
+          // split would be silently discarded: the payment would land UNTAGGED while the operator
+          // had just chosen "Seasonal fee" and every screen would tell them otherwise. A tag that
+          // quietly does not happen on a money path is worse than no tag, so the terminal path
+          // says so in the UI instead (see the note by the lane picker) and the operator files
+          // the payment to its lane afterwards in one tap.
+          //
+          // Restore the split here when the terminal route is brought up to the template's.
         }),
       })
       const data = await res.json()
@@ -388,6 +415,10 @@ export default function GuestAccountPage() {
       // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
       // into the note printed it twice. Amounts unchanged; only this note's text is shorter.
       note: paymentNote,
+      // ⚠ THE ONLY NEW THING WRITTEN, AND IT IS METADATA. Spreads to nothing when the owner left
+      // it on "whole account", so that payment is byte-identical to one recorded before this
+      // existed. `amount` and `surcharge_amount` above are untouched either way.
+      ...(paymentLane ? { lane: paymentLane } : {}),
     })
     setSavingPayment(false)
     setShowPayment(false)
@@ -396,6 +427,7 @@ export default function GuestAccountPage() {
     setPaymentNote('')
     setPaymentMethod('cash')
     setWaiveFee(false)
+    setPaymentLane('')
     await loadFolioData(folio.id)
   }
 
@@ -754,7 +786,22 @@ export default function GuestAccountPage() {
               {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
             </button>
           ) : (
-          <button onClick={() => { setPaymentAmount(totalDue > 0 ? (totalDue/100).toFixed(2) : ''); setCashTendered(''); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+          <button onClick={() => {
+              // ⚠ THE DEFAULT IS EARNED, NOT ASSUMED. Seasonal is pre-selected only for a
+              // seasonal camper who actually has a fee outstanding — that is when "they are
+              // paying their fee" is what is almost certainly happening. With the fee settled it
+              // falls back to the whole account, so a store payment on a paid-up camper is never
+              // quietly filed as seasonal. The amount follows the same rule: the lane's own
+              // balance when there is one, otherwise today's whole-account prefill.
+              const seasonalDue = guest?.is_seasonal
+                ? (laneGroups.find(g => g.key === 'seasonal')?.subtotal ?? 0)
+                : 0
+              const lane = seasonalDue > 0 ? 'seasonal' as const : '' as const
+              setPaymentLane(lane)
+              const prefill = lane ? seasonalDue : totalDue
+              setPaymentAmount(prefill > 0 ? (prefill/100).toFixed(2) : '')
+              setCashTendered(''); setShowPayment(true)
+            }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
             {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
           </button>
           )}
@@ -766,7 +813,20 @@ export default function GuestAccountPage() {
           )}
 
           {(lineItems.length > 0 || payments.length > 0) && (
-            <ReceiptButtons folioId={folio?.id || ''} guestEmail={folio?.guest_email || guest?.email || ''} receiptType='account' />
+            <ReceiptButtons
+              folioId={folio?.id || ''}
+              guestEmail={folio?.guest_email || guest?.email || ''}
+              receiptType='account'
+              // Straight off the lane groups this page already computes, so the button, the
+              // warning and the receipt cannot disagree about what the seasonal lane holds.
+              seasonal={guest?.is_seasonal ? {
+                charges: laneGroups.find(g => g.key === 'seasonal')?.charges || 0,
+                paid: laneGroups.find(g => g.key === 'seasonal')?.paid || 0,
+                untagged: payments
+                  .filter(p => REFUNDABLE_STATUSES.includes(p.status || '') && !LANES.includes(String(p.lane) as never))
+                  .reduce((s, p) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0),
+              } : null}
+            />
           )}
         </div>
 
@@ -821,6 +881,62 @@ export default function GuestAccountPage() {
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
               <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
+            {/* ── WHAT IS THIS PAYMENT FOR? ───────────────────────────────────────────────
+                Shown only for a SEASONAL camper — nobody else has lanes to tell apart, and a
+                selector on every folio would be a question most operators cannot answer.
+
+                ⚠ IT SETS A TAG, NOT A TOTAL. The amount, the surcharge and the whole-account
+                balance are identical whichever is chosen; combined mode still totals the account
+                exactly as it does today. What changes is that afterwards the seasonal fee can be
+                told apart from the store tab and the electric bill — which is the whole reason
+                the seasonal receipt can show "fee · paid · $0" without dragging in the rest.
+
+                The default is Seasonal ONLY when there is a seasonal fee outstanding, because
+                that is when "this camper is paying their fee" is overwhelmingly what is
+                happening. Once the fee is settled it defaults back to the whole account, so a
+                store payment on a paid-up camper is never silently filed as seasonal. */}
+            {guest?.is_seasonal && (
+              <>
+                <label style={ml}>What is this payment for?</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))', gap: 8, marginBottom: 16 }}>
+                  {([
+                    { v: 'seasonal' as const, label: 'Seasonal fee' },
+                    { v: 'electric' as const, label: 'Electric' },
+                    { v: 'store' as const, label: 'Store' },
+                    { v: '' as const, label: 'Whole account' },
+                  ]).map(o => {
+                    const on = paymentLane === o.v
+                    const due = o.v ? (laneGroups.find(g => g.key === o.v)?.subtotal ?? 0) : 0
+                    return (
+                      <button key={o.label}
+                        onClick={() => {
+                          setPaymentLane(o.v)
+                          // Prefill the amount owed on that lane — but ONLY into an empty box, so
+                          // a figure the operator has already typed is never overwritten.
+                          if (o.v && due > 0 && !paymentAmount) setPaymentAmount((due / 100).toFixed(2))
+                        }}
+                        style={{ padding: '10px 8px', border: '2px solid ' + (on ? '#0072B2' : '#e5e7eb'), borderRadius: 8, background: on ? '#eaf3f9' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: on ? '#0072B2' : '#374151', lineHeight: 1.3 }}>
+                        {o.label}
+                        {o.v && due > 0 && (
+                          <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: on ? '#0072B2' : '#9ca3af' }}>
+                            ${(due / 100).toFixed(2)} due
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* ⚠ The one tender that cannot carry the tag on this park — say so where the
+                    choice is made, not after the money has moved. */}
+                {paymentLane && paymentMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId && (
+                  <p style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 10px', marginTop: -8, marginBottom: 16 }}>
+                    A <strong>terminal</strong> card payment is recorded against the whole account on this park — it
+                    will not be filed to {paymentLane === 'seasonal' ? 'the seasonal fee' : paymentLane} automatically.
+                    Take it by another tender, or file it to a lane on the payment row afterwards.
+                  </p>
+                )}
+              </>
+            )}
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginBottom: 16 }}>
               {allPaymentMethods(customMethods).map(m => (
@@ -1075,9 +1191,21 @@ function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any,
   )
 }
 
-function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string, guestEmail: string, receiptType: string }) {
+function ReceiptButtons({ folioId, guestEmail, receiptType, seasonal }: {
+  folioId: string, guestEmail: string, receiptType: string,
+  /**
+   * Present only for a SEASONAL camper, and only then is the seasonal-fee receipt offered.
+   *  · charges / paid — the seasonal LANE's own figures, straight off the same lane maths the
+   *    folio prints, so the button can say what the receipt will say before it is sent.
+   *  · untagged — money paid against the ACCOUNT rather than a lane. See the warning below; this
+   *    is the difference between a useful receipt and a confusing one.
+   */
+  seasonal?: { charges: number; paid: number; untagged: number } | null,
+}) {
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
+  const [sendingSeasonal, setSendingSeasonal] = useState(false)
+  const [sentSeasonal, setSentSeasonal] = useState(false)
   const [error, setError] = useState('')
 
   async function sendReceipt() {
@@ -1092,6 +1220,27 @@ function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string,
     const data = await res.json()
     setSending(false)
     if (data.success) { setSent(true); setTimeout(() => setSent(false), 3000) }
+    else setError(data.error || 'Failed to send receipt')
+  }
+
+  /**
+   * The seasonal-fee receipt: the same route, asked for ONE lane.
+   *
+   * Nothing about the send, the money formatting or the card-fee row differs — that is the point
+   * of passing `lane` rather than writing a second receipt.
+   */
+  async function sendSeasonalReceipt() {
+    if (!guestEmail) { setError('No email on file for this guest'); return }
+    setSendingSeasonal(true)
+    setError('')
+    const res = await fetch('/api/receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folioId, receiptType, lane: 'seasonal' }),
+    })
+    const data = await res.json()
+    setSendingSeasonal(false)
+    if (data.success) { setSentSeasonal(true); setTimeout(() => setSentSeasonal(false), 3000) }
     else setError(data.error || 'Failed to send receipt')
   }
 
@@ -1112,6 +1261,42 @@ function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string,
           🖨 Print
         </button>
       </div>
+      {/* ── THE SEASONAL-FEE RECEIPT ────────────────────────────────────────────────────────
+          Offered only for a seasonal camper who actually has a seasonal charge — a receipt for a
+          fee that does not exist is not worth a button. */}
+      {seasonal && seasonal.charges > 0 && (
+        <>
+          <button
+            onClick={sendSeasonalReceipt}
+            disabled={sendingSeasonal}
+            style={{ background: sentSeasonal ? '#15803d' : '#fff', color: sentSeasonal ? '#fff' : '#0072B2', border: '1px solid #0072B2', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            {sendingSeasonal ? 'Sending...' : sentSeasonal ? '✓ Seasonal receipt sent!' : '⛺ Send seasonal fee receipt'}
+          </button>
+          <p style={{ fontSize: 11, color: '#9ca3af', margin: 0, textAlign: 'center' }}>
+            Seasonal fee only — electric and store are not on it.
+          </p>
+
+          {/* ⚠ THE WARNING THAT STOPS A CONFUSING RECEIPT.
+              The seasonal receipt lists only payments FILED TO THE SEASONAL LANE, and computes
+              its balance from exactly those — so it is always internally honest. But a payment
+              taken against the whole account carries no lane, and on a combined park that is
+              every payment: the folio's payment box does not ask which lane it is for. So a
+              camper who has genuinely paid can receive a receipt saying the fee is outstanding.
+              Rather than guess a lane (which would rewrite what the money was for), say so, and
+              point at the fix — each payment row above can be filed to a lane in one tap. */}
+          {seasonal.untagged > 0 && (
+            <p style={{ fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px', margin: 0 }}>
+              <strong>${(seasonal.untagged / 100).toFixed(2)} is paid against the account, not filed to a lane</strong> — it will
+              NOT appear on the seasonal receipt, which would show{' '}
+              {seasonal.charges - seasonal.paid > 0
+                ? `$${((seasonal.charges - seasonal.paid) / 100).toFixed(2)} still owing`
+                : 'the fee as settled'}.
+              File it to <em>Seasonal</em> on the payment row above first.
+            </p>
+          )}
+        </>
+      )}
       {!guestEmail && <p style={{ fontSize: 12, color: '#9ca3af', margin: 0, textAlign: 'center' }}>No email on file — print only</p>}
       {error && <p style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>{error}</p>}
     </div>
