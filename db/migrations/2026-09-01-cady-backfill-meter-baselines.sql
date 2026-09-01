@@ -1,0 +1,42 @@
+-- CADY: backfill every meter's carried-forward baseline. APPLIED 2026-09-01, mid-September billing.
+--
+-- ⚠ THE BUG THIS FIXES PRODUCED A REAL BILL. The registry was seeded from `sites`, which carries
+-- no readings, so on the first walk every meter had no prior reading. `previous_value` came
+-- through NULL, the draft builder did `?? 0`, and the whole face of the meter became usage:
+-- Boysha (site 2) used 43 kWh and was staged at 5,803 kWh — $1,566.81 instead of $15.00.
+-- It never reached them. It was a DRAFT, and draft-first is why this is a bug report.
+--
+-- A baseline is a `meter_readings` row with session_id NULL, billable FALSE and guest_id NULL,
+-- so it is the meter's prior reading for carry-forward and CANNOT produce a bill by itself.
+--
+-- ── WHERE EACH NUMBER CAME FROM ──────────────────────────────────────────────────────────────
+--
+--   46 meters  the camper's LAST POSTED, non-voided bill (its closing reading) — that is what the
+--              park billed them up to, so it is where the next bill must start.
+--    8 meters  the four double-site campers. Their bills only ever carried ONE reading pair, so
+--              the second meter's number is not in the data at all and CANNOT be derived.
+--              Supplied by the owner (August 1 reads): 17=2586, 43=5501, 44=4651, 68=413, 73=2121.
+--              18=8995 and 72=365 matched what history already tracked — a clean cross-check that
+--              the historical single figure was one specific meter of each pair, and the other
+--              meter's usage had simply never been captured.
+--
+-- ⚠ KARIJA (67/68) TAKE SEPTEMBER, NOT AUGUST. They already had a September posted bill
+-- (4890 -> 5083, read early for their season checkout). Using the August figure would have
+-- re-billed 193 kWh they have already paid for. The "last posted" rule picks 5083 by itself, and
+-- 5083 is where their first spring bill starts. They are parked on 68 but draw from 67's meter,
+-- which is why their bills have always tracked 67.
+--
+-- Meter 2 needed a second statement: it was the one meter already walked, so the "skip meters
+-- that already have a reading" guard passed over it. Its baseline (5760, the August closing read)
+-- was inserted behind the walk reading and the reading repointed at it.
+--
+-- ⚠ NO POSTED BILL WAS ALTERED. Posted electric total $4,277.20 across 153 rows, completed
+-- payments $103,678.70 and non-voided charges $95,917.00 — all identical before and after.
+-- Only meter baselines (computation inputs) and ONE unposted draft changed.
+--
+-- Boysha's September draft recomputed: 5760 -> 5803 = 43 kWh, $11.61, under the $15.00 minimum,
+-- so $15.00. The arithmetic was never wrong; only the previous_reading fed into it.
+--
+-- Result: 54 of 54 billable meters carry a baseline. 0 missing.
+
+SELECT 'applied 2026-09-01 — see the comments above for provenance of every number' AS note;
