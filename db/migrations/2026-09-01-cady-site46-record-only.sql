@@ -1,0 +1,51 @@
+-- Site 46: keep the September reading of 452 as RECORD-ONLY, bill nobody. APPLIED 2026-09-01.
+--
+-- Trystan Welsh & Marissa (monthly, site 46) moved out. The owner waived their September 2026
+-- electric. No money moved: the September row was an UNPOSTED draft with folio_line_item_id NULL.
+--
+-- ⚠ WHAT THE DATA SHOWED, AND IT MATTERS MORE THAN THE WAIVER
+--
+-- Their folio already carried a manual charge "Electric Bill" $41.85 dated 2026-08-22 — the exact
+-- amount the September draft computed (155 kWh x $0.27) — settled the same day by a $51.85 cash
+-- payment ($41.85 electric + $10.00 visitor pass). Their balance is zero.
+--
+-- So the September draft was not merely unwanted, it was a DUPLICATE of money already collected
+-- at move-out. Posting it would have charged a departed camper a second time for the same
+-- kilowatt-hours. The waiver and this correction reach the same end state; the duplicate is why
+-- the end state is not just preferable but required.
+--
+-- ⚠ WHY THE READING SURVIVES THE DRAFT BEING REMOVED
+--
+-- 452 is meter 46's standing value because of a row in `meter_readings`. The draft in
+-- `electric_readings` was only a proposed BILL derived from it. loadMeterContext() reads
+-- meter_readings for `previousValue` with NO filter on `billable`, so 452 is handed forward
+-- whether or not anyone was billed for it. There is no record-only state in electric_readings to
+-- convert the draft into — a record-only reading produces no electric_readings row at all, which
+-- is exactly what restageDraftsForSession() does on its own once a reading stops being billable.
+--
+-- ── WHAT WAS DONE ────────────────────────────────────────────────────────────────────────────
+--   1. meter_readings: the 452 row -> billable=false, guest_id=NULL, with a note.
+--      ⚠ reading_value untouched — 452 to the digit.
+--   2. electric_readings: the draft deleted. Triple-guarded (that id, status='draft',
+--      folio_line_item_id IS NULL) so nothing posted could be reached.
+--   3. guests: site_number cleared and season_end set to 2026-08-22.
+--      `season_end` is the app's own vocabulary — the Guests screen labels it "Stay end" for a
+--      monthly camper. Clearing site_number is what actually frees the site: the meter walk
+--      matches campers BY SITE NUMBER, so leaving it set would have re-proposed this same bill
+--      every month. The site number is preserved in their notes, since nothing else records it.
+--
+-- ── VERIFIED, BEFORE AND AFTER IDENTICAL ─────────────────────────────────────────────────────
+--   posted electric    $5,561.68 across 199 rows
+--   completed payments $103,704.62
+--   non-voided charges $97,201.48
+--   Trystan: 0 drafts, 1 posted (their August bill, $15.66, intact)
+--   meter 46: carries forward 452, 0 campers matched -> vacant, record-only
+--   drafts outstanding 48 -> 47
+--
+-- ⚠ A NOTE ON THE "SKIP" BUTTON. The owner had pressed Skip on this camper on the Electric
+-- Billing page to avoid sending the bill. Skip is CLIENT-SIDE STATE ONLY — it is initialised to
+-- false on every page load and is never written to the database. It hides the Bill Electric
+-- button and excludes the row from Send All for that browser session, and nothing more. The draft
+-- remained fully postable on the next load. That is why this needed fixing in the data.
+
+SELECT 'applied 2026-09-01 — see the comments above' AS note;
