@@ -1,0 +1,53 @@
+-- September 2026: clear the orphaned electric drafts, close out site 33. APPLIED 2026-09-01.
+--
+-- The September run posted 49 correct bills and left 47 DRAFT rows behind for the same month.
+-- None carried money — every one had folio_line_item_id NULL — but all 47 were still POSTABLE.
+-- Reopening the month and pressing Send All would have billed those campers a second time, and
+-- six of the drafts held readings the owner had already corrected when she posted.
+--
+-- ⚠ ROOT CAUSE, AND IT WAS A SILENT WRITE. The post path DID try to remove each draft:
+--
+--     await supabase.from('electric_readings').delete().eq('id', row.draftId)…
+--
+-- `authenticated` holds no DELETE privilege on electric_readings, and nothing inspected the
+-- result. PostgREST returned success having deleted nothing, 46 times in a row, through an entire
+-- billing run. The code fix is separate (see the same commit): posting now retires its draft by
+-- VOIDING it — an UPDATE, which this role can actually perform — and checks that it landed.
+--
+-- This file runs as the service role, which is why its deletes take effect.
+--
+-- ── PART A — 46 stale duplicates ────────────────────────────────────────────────────────────
+-- Each was a leftover copy of a bill that WAS posted for the same camper and month. Four guards,
+-- and `folio_line_item_id IS NULL` is the money one: a draft somehow attached to a folio line
+-- item would have been skipped, because that is not an orphan, it is a charge.
+--
+-- ── PART B — site 33 / Charles Hamrick ──────────────────────────────────────────────────────
+-- The one draft with no posted sibling. He moved out 2026-06-30 (last bills May and June; none in
+-- July or August), but his record still read monthly, electric-billing-on, site 33 — so every
+-- walk drafted a bill for a camper who was not there. Folio settled: $613.23 charged, $613.23
+-- paid. Handled exactly like site 46 before it:
+--   · meter 33's reading of 2236 -> record-only (billable=false, guest_id=NULL). reading_value
+--     UNTOUCHED, because it is the carry-forward baseline for the next camper on that site —
+--     without it they would measure from Hamrick's old 2182 and be billed for 54 kWh he used.
+--   · the phantom draft deleted (triple-guarded).
+--   · site_number cleared (preserved in his notes) and season_end set to 2026-06-30. Clearing
+--     site_number is what frees the site: the walk matches campers BY SITE NUMBER.
+-- Kobie Beirlair and Ted Mead also carry site 33 but are transient with electric billing off, so
+-- they never meter-bill and were not touched.
+--
+-- ── VERIFIED, IDENTICAL BEFORE AND AFTER ────────────────────────────────────────────────────
+--   posted electric    $5,561.68 across 199 rows   (September: 49 bills, $1,372.65)
+--   completed payments $103,704.62
+--   non-voided charges $97,201.48
+--   drafts outstanding 47 -> 0
+--   meter 33 carries 2236, meter 46 carries 452, neither matched to a camper
+--   Hamrick: 0 drafts, 2 posted bills intact, folio untouched
+--
+-- ⚠ ONE THING LEFT DELIBERATELY ALONE. Meters 24 and 41 hold readings that appear transposed —
+-- meter 24 holds 3482 and meter 41 holds 2811, while the posted bills (correctly) used 2811 for
+-- site 24 and 3482 for site 41. A meter cannot run backwards, so the bills are right and the
+-- meter records kept a mis-entry. The owner chose to re-read both meters rather than have the
+-- baselines edited. Until then meter 41's baseline is low by ~671 kWh; the reading-anomaly guard
+-- flags usage over ten times a meter's recent months, so a bill of that size cannot post quietly.
+
+SELECT 'applied 2026-09-01 — see the comments above' AS note;

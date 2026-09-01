@@ -13,6 +13,7 @@ import { createBrowserSupabase } from '@/lib/supabase-browser'
 import {
   computeElectricCharge, rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
   type ElectricRate,
+  planElectricPost, postSkipLabel,
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
 
@@ -678,7 +679,24 @@ export default function ElectricBillingPage() {
     if (row.skip || row.sent) return
     if (!row.guest.email) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'No email on file' }; return u }); return }
     const finalAmountCents = Math.round(parseFloat(row.finalAmount) * 100) || row.calculatedAmount
-    if (!finalAmountCents) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'Enter meter readings first' }; return u }); return }
+
+    // ⚠ THE DOUBLE-BILL GUARD, ASKED OF THE DATABASE. `row.sent` is React state: false after a
+    // reload, false on another machine, and false for a camper whose bill posted while an
+    // orphaned draft was left behind. September 2026 left 47 such drafts on this park, every one
+    // still postable. This asks the table instead of the screen.
+    const { data: alreadyPosted } = await supabase.from('electric_readings')
+      .select('id').eq('guest_id', row.guest.id).eq('billing_month', billingMonth)
+      .eq('status', 'posted').eq('voided', false).limit(1)
+    const plan = planElectricPost({
+      alreadyPostedThisMonth: (alreadyPosted?.length || 0) > 0,
+      skipped: row.skip,
+      draftId: row.draftId,
+      finalAmountCents,
+    })
+    if (plan.action === 'skip') {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: postSkipLabel(plan.reason) }; return u })
+      return
+    }
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: true, error: '' }; return u })
 
     let folioId = row.folioId
@@ -757,8 +775,32 @@ export default function ElectricBillingPage() {
     // briefly coexists with its posted bill — and applyMonthReadings() prefers the posted row, so
     // even that reads correctly. Scoped to this camper, this month, status 'draft': a posted bill
     // cannot be touched by this statement.
-    if (row.draftId) {
-      await supabase.from('electric_readings').delete().eq('id', row.draftId).eq('status', 'draft')
+    // ⚠ THE DRAFT IS VOIDED, NOT DELETED — AND THE RESULT IS CHECKED. THIS LINE HAD BOTH BUGS.
+    //
+    // It used to be `.delete()`, with no check on what came back. `authenticated` holds no DELETE
+    // privilege on electric_readings, so PostgREST returned success having deleted NOTHING — 46
+    // times during one September run, leaving 46 postable duplicates behind. A write whose result
+    // nobody reads is not a write.
+    //
+    // Voiding is the fix that fits this park: UPDATE is granted, voiding is already how Cady
+    // retires an electric bill, and a voided row is filtered out everywhere the page reads
+    // readings — so it can never be posted, pre-fill anything, or be counted. No new grant on a
+    // money table, and no schema change.
+    //
+    // ⚠ Cady posts through the atomic create_electric_bill() RPC, which writes the line item and
+    // the reading together. That atomicity is worth more than promoting the draft in place, so
+    // the draft is retired AFTER the real bill exists rather than being converted into it.
+    if (plan.consumesDraftId) {
+      const { data: retired, error: voidErr } = await supabase.from('electric_readings')
+        .update({ voided: true, notes: 'Superseded by the posted ' + billingMonth + ' bill. Retired automatically when that bill was created, so it can never be posted a second time.' })
+        .eq('id', plan.consumesDraftId).eq('status', 'draft').select('id')
+      if (voidErr || !retired || retired.length === 0) {
+        // The bill IS posted at this point — the RPC already ran — so this cannot fail the whole
+        // operation. It is surfaced instead, because a draft that outlived its bill is exactly
+        // the thing that becomes a duplicate charge later.
+        console.warn('Posted the bill but could not retire its draft', plan.consumesDraftId, voidErr)
+        setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'Billed — but the leftover draft could not be cleared. Tell Charissa so it is not billed twice.' }; return u })
+      }
     }
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
