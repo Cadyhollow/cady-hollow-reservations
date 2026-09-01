@@ -232,3 +232,65 @@ export function postSkipLabel(reason: 'already-posted' | 'no-amount' | 'skipped-
     case 'skipped-by-owner': return 'Skipped.'
   }
 }
+
+/**
+ * What a camper has actually been billed for electric, all time.
+ *
+ * ⚠ THIS EXISTS AS A FUNCTION BECAUSE THE INLINE VERSION WAS SILENTLY DELETED ONCE. It sat in
+ * the billing-history table as a bare expression, and a redesign of that page dropped the row
+ * without anyone noticing — there was nothing to fail. A named function with a test around it
+ * cannot go the same way.
+ *
+ * ⚠ VOIDED BILLS DO NOT COUNT. A voided bill has been taken off the camper's balance, so
+ * including it would tell the owner a camper has been charged money they no longer owe. This is
+ * the one line the caller must not get wrong, which is the other reason it lives here.
+ */
+export function allTimeBilled(
+  readings: { final_amount: number; voided?: boolean | null }[] | null | undefined,
+): number {
+  return (readings || [])
+    .filter(r => r.voided !== true)
+    .reduce((sum, r) => sum + (r.final_amount || 0), 0)
+}
+
+/** The void facts a billing-history row needs to explain itself. */
+export type VoidNote = { tag: string; detail: string }
+
+/**
+ * How a voided bill describes itself in the billing history — or null when the bill is live.
+ *
+ * ⚠ THIS IS WHY THE ROWS ADD UP TO THE TOTAL. allTimeBilled() leaves voided bills out. A voided
+ * row that looks identical to a live one therefore puts an unexplained gap on screen: the rows
+ * visibly do not sum to the figure beneath them, and nothing says why. Marking the row IS the
+ * explanation, so the two belong to each other and are tested together.
+ *
+ * Returning null for a live bill keeps the decision here rather than in the markup, where "is
+ * this voided" would otherwise be re-derived by eye.
+ */
+export function describeVoid(reading: {
+  voided?: boolean | null
+  voided_by?: string | null
+  voided_at?: string | null
+  reason?: string | null
+}): VoidNote | null {
+  if (reading.voided !== true) return null
+
+  const bits: string[] = []
+  if (reading.voided_at) {
+    const d = new Date(reading.voided_at)
+    // An unparseable date is dropped rather than printed as "Invalid Date" on a camper's record.
+    if (!Number.isNaN(d.getTime())) {
+      bits.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }))
+    }
+  }
+  if (reading.voided_by) bits.push(`by ${reading.voided_by}`)
+  // The reason is the owner's own words and goes last, after the facts.
+  if (reading.reason) bits.push(`· ${reading.reason}`)
+
+  return {
+    tag: 'Voided',
+    // "Voided" alone when nothing else was recorded — an older row, or a void taken before these
+    // columns existed. Never a bare "Voided by" with the name missing.
+    detail: bits.length > 0 ? `Voided ${bits.join(' ')}` : 'Voided',
+  }
+}

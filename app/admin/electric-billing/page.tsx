@@ -2,7 +2,7 @@
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { planAtLeast } from '@/lib/plan'
 // ⚠ CADY-ONLY, AND IT MUST SURVIVE THE REDESIGN. The period guard warns when a billing month
 // overlaps a stretch already billed; the void helpers back the Void button in the history panel.
@@ -17,7 +17,7 @@ import { createBrowserSupabase } from '@/lib/supabase-browser'
 import {
   computeElectricCharge, rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
   type ElectricRate,
-  planElectricPost, postSkipLabel,
+  planElectricPost, postSkipLabel, allTimeBilled, describeVoid,
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
 import {
@@ -1450,29 +1450,36 @@ export default function ElectricBillingPage() {
                               </thead>
                               <tbody>
                                 {row.readings.map(r => {
-                                  // ⚠ CADY-ONLY: a voided bill stays visible, struck through, with
-                                  // who voided it and why on hover. Hiding it would make the folio
-                                  // and this table disagree.
-                                  const isVoided = r.voided === true
+                                  // ⚠ A VOIDED BILL MUST NEVER LOOK LIVE. It is left out of the
+                                  // total below, so an unmarked voided row makes the rows visibly
+                                  // fail to add up with nothing on screen explaining the gap.
+                                  // Who voided it, when and why used to be a hover tooltip here;
+                                  // it is a readable line now, matching the template.
+                                  const v = describeVoid(r)
                                   return (
-                                  <tr key={r.id} className={isVoided ? 'voided' : undefined}>
-                                    <td>{r.billing_month}{isVoided && <span className="eb-tag void">Voided</span>}</td>
-                                    <td className="tnum">{fmtNum(r.previous_reading)}</td>
-                                    <td className="tnum">{fmtNum(r.current_reading)}</td>
-                                    <td className="tnum">{fmtNum(r.kwh_used)}</td>
-                                    <td className="tnum">${Number(r.rate_per_kwh).toFixed(3)}</td>
-                                    <td className="tnum">{fmtUsd(r.final_amount)}</td>
-                                    <td className="eb-muted">{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
-                                    <td className="eb-voidcell">
-                                      {isVoided ? (
-                                        <span className="eb-muted" title={`Voided${r.voided_by ? ' by ' + r.voided_by : ''}${r.reason ? ' · ' + r.reason : ''}${r.voided_at ? ' · ' + new Date(r.voided_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }) : ''}`}>
-                                          voided{r.voided_by ? ' · ' + r.voided_by : ''}
-                                        </span>
-                                      ) : (
-                                        <button className="eb-void" onClick={() => openVoid(i, r)}>Void</button>
-                                      )}
-                                    </td>
-                                  </tr>
+                                  <Fragment key={r.id}>
+                                    <tr className={v ? 'voided' : undefined}>
+                                      <td>
+                                        <span className="mo">{r.billing_month}</span>
+                                        {v && <span className="eb-tag void">{v.tag}</span>}
+                                      </td>
+                                      <td className="tnum">{fmtNum(r.previous_reading)}</td>
+                                      <td className="tnum">{fmtNum(r.current_reading)}</td>
+                                      <td className="tnum">{fmtNum(r.kwh_used)}</td>
+                                      <td className="tnum">${Number(r.rate_per_kwh).toFixed(3)}</td>
+                                      <td className="tnum amt">{fmtUsd(r.final_amount)}</td>
+                                      <td className="eb-muted">{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                                      <td className="eb-voidcell">
+                                        {/* ⚠ CADY-ONLY. Voiding does not exist in the template. */}
+                                        {!v && <button className="eb-void" onClick={() => openVoid(i, r)}>Void</button>}
+                                      </td>
+                                    </tr>
+                                    {v && (
+                                      <tr className="eb-voidnote">
+                                        <td colSpan={8}>{v.detail}</td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
                                   )
                                 })}
                               </tbody>
@@ -1481,8 +1488,13 @@ export default function ElectricBillingPage() {
                                     row; on Cady it also excludes voided bills, so it is the only
                                     place the true all-time figure appears. */}
                                 <tr>
-                                  <td colSpan={5}>Total billed (all time)</td>
-                                  <td className="tnum">{fmtUsd(row.readings.filter(r => !r.voided).reduce((s, r) => s + r.final_amount, 0))}</td>
+                                  <td colSpan={5}>
+                                    Total billed (all time)
+                                    {row.readings.some(r => r.voided) && (
+                                      <span className="eb-foot-note">voided bills excluded</span>
+                                    )}
+                                  </td>
+                                  <td className="tnum">{fmtUsd(allTimeBilled(row.readings))}</td>
                                   <td />
                                   <td />
                                 </tr>
@@ -1864,10 +1876,13 @@ const EB_CSS = `
 .eb-panel.danger{background:var(--draft-bg);border-color:var(--danger)}
 .eb-guard{font-size:13px;font-weight:700;line-height:1.45;margin-bottom:9px;color:var(--watch)}
 .eb-panel.danger .eb-guard{color:var(--danger)}
-.eb-tag.void{background:var(--card-2);color:var(--danger);margin-left:7px}
-.eb-table tr.voided td{opacity:.55}
-.eb-table tr.voided td:first-child,.eb-table tr.voided td:nth-child(6){text-decoration:line-through}
-.eb-table tr.voided td .eb-tag.void{text-decoration:none;opacity:1}
+/* Quiet on purpose: this is a record, not a warning. The strike and the dimming do the work;
+   the tag names it, and the note underneath says who voided it, when and why. */
+.eb-table tr.voided td{opacity:.55;border-bottom:none}
+.eb-table tr.voided .mo,.eb-table tr.voided .amt{text-decoration:line-through}
+.eb-tag.void{margin-left:7px;background:var(--card-2);color:var(--muted);font-weight:600}
+.eb-table tr.eb-voidnote td{padding-top:0;padding-left:10px;font-size:11.5px;color:var(--muted);font-style:italic}
+.eb-foot-note{margin-left:8px;font-size:10.5px;font-weight:600;font-style:italic;color:var(--muted);text-transform:none;letter-spacing:0}
 .eb-voidcell{text-align:right;white-space:nowrap}
 .eb-void{appearance:none;font-family:inherit;font-size:11.5px;font-weight:600;color:var(--danger);background:var(--card-2);border:1px solid var(--line);border-radius:7px;padding:3px 10px;cursor:pointer}
 .eb-void:hover{border-color:var(--danger)}
