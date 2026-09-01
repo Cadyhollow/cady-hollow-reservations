@@ -147,6 +147,19 @@ const GATED: [string, string][] = [
   ['POST', '/api/guests/balances'],
   ['GET', '/api/me'],
   ['POST', '/api/manual-booking'],
+  // The mobile meter walk (template #82), in Cady's 2-tuple shape. Every one gates itself with
+  // requireRole() as its first statement; middleware.ts's matcher is ['/admin/:path*'] and never
+  // sees /api/*, so an ungated route here would be open to anyone who guessed the URL.
+  // Reading meters and saving readings is staff; changing the meter REGISTRY is owner, because
+  // the active flag and the billing override decide who gets billed.
+  ['GET', '/api/meters'],
+  ['PATCH', '/api/meters'],
+  ['POST', '/api/meters'],
+  ['GET', '/api/meter-sessions'],
+  ['POST', '/api/meter-sessions'],
+  ['PATCH', '/api/meter-sessions'],
+  ['GET', '/api/meter-sessions/00000000-0000-0000-0000-000000000000'],
+  ['POST', '/api/meter-readings'],
   // The To-Do board's two routes. Both gate themselves with requireRole(request, 'staff') as
   // their first statement — middleware.ts's matcher is ['/admin/:path*'] and never sees /api/*,
   // so an ungated route here would be open to anyone who guessed the URL.
