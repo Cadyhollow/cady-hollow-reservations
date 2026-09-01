@@ -56,8 +56,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     .select('id, created_at, author, body').eq('guest_id', guestId).order('created_at', { ascending: false })
 
   // Electric readings (recent).
+  //
+  // ⚠ POSTED ONLY. The camper page shows what this camper has been BILLED; a draft staged by a
+  // meter walk has been charged to nothing and sent to nobody, and listing it here would show the
+  // owner — and, through her, the camper — a bill that does not exist yet.
   const { data: electric } = await svc.from('electric_readings')
-    .select('*').eq('guest_id', guestId).order('created_at', { ascending: false }).limit(6)
+    .select('*').eq('guest_id', guestId).eq('status', 'posted')
+    .order('created_at', { ascending: false }).limit(6)
 
   // Balance + last payment from the guest_account folio.
   const { data: folio } = await svc.from('folios')
@@ -126,8 +131,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
   }
 
+  // ⚠ THE PARK'S BILLING MODE TRAVELS SEPARATELY FROM `lanes`, AND THAT DISTINCTION IS THE POINT.
+  //
+  // `lanes` is null in TWO unrelated situations: a COMBINED park, and a camper who has no folio
+  // yet. The screen was reading null as "combined" and so sent a camper with no folio to the plain
+  // folio instead of the lane checkout — which is exactly the camper most likely to be paying an
+  // early deposit against a lane. The mode is a property of the PARK; state it as one.
+  const billingMode = await getBillingMode()
+
   return NextResponse.json({
     year,
+    billingMode,
     guest,
     contracts: contractsOut,
     currentContract,

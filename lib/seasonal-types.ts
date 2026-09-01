@@ -61,6 +61,10 @@ export type SeasonalContract = {
   deposit_due_cents?: number | null
   total_due_by?: string | null
   deposit_due_by?: string | null
+  /** PR 2b — DISPLAY ONLY, like the two _cents fields. The optional instalment plan that prints
+   *  on the agreement; nothing is charged from it. `unknown` because it is jsonb and a
+   *  hand-edited row could be any shape — lib/payment-schedule.ts is what narrows it. */
+  payment_schedule?: unknown
   /** PRIVATE owner scratchpad. Never shown to the camper. Not to be confused with charge_note. */
   staff_notes?: string | null
   /** CUSTOMER-FACING explanation of the total. Rendered into the contract body as {{charge_note}}. */
@@ -154,6 +158,12 @@ import type { LaneBalances } from '@/lib/ledger-lanes'
 
 export type SeasonalGuestData = {
   year: number
+  /**
+   * The PARK's billing mode. Deliberately separate from `lanes`, which is null both on a combined
+   * park AND for a camper who has no folio yet — two different facts that must not be conflated
+   * when deciding which payment screen to send someone to.
+   */
+  billingMode?: 'combined' | 'separated'
   guest: SeasonalGuest
   contracts: SeasonalContract[]
   currentContract: SeasonalContract | null

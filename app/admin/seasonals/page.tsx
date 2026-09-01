@@ -19,6 +19,7 @@ const supabase = createBrowserSupabase()
 
 type Row = {
   guest_id: string
+  contract_id: string | null
   name: string
   site_number: string
   contract_status: string
@@ -64,6 +65,10 @@ export default function SeasonalsPage() {
   const [cloneErr, setCloneErr] = useState('')
   // Phase 2a: the seasons manager. Purely additive — nothing else on this page reads seasons yet.
   const [seasonsOpen, setSeasonsOpen] = useState(false)
+  // SENDING LIVES HERE NOW. Reviewing, resending and cancelling a packet used to sit on the camper
+  // page; that page is the PERSON, and having the paperwork on it too is what made the two screens
+  // feel like the same screen. The routes are unchanged — only which screen calls them.
+  const [busyId, setBusyId] = useState('')
 
   // Batch-1 gate: decide on the freshly-loaded plan, never the state default.
   useEffect(() => {
@@ -134,6 +139,33 @@ export default function SeasonalsPage() {
     setCloneBusy(false)
   }
 
+  async function resend(r: Row) {
+    if (!r.contract_id) return
+    setBusyId(r.contract_id)
+    try {
+      const res = await fetch(`/api/seasonal-contracts/${r.contract_id}/resend`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) setErr(d.error || 'Could not resend.')
+      else { setErr(''); await load(seasonId) }
+    } catch { setErr('Could not resend.') }
+    setBusyId('')
+  }
+
+  // Quiet, and reversible: cancelling puts the packet back to a draft so it can be edited and sent
+  // again. It is not a delete, which is why it does not wear a red fill.
+  async function cancelPacket(r: Row) {
+    if (!r.contract_id) return
+    if (!confirm(`Cancel ${r.name}'s packet? It goes back to a draft so you can edit and send it again.`)) return
+    setBusyId(r.contract_id)
+    try {
+      const res = await fetch(`/api/seasonal-contracts/${r.contract_id}/cancel`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) setErr(d.error || 'Could not cancel the packet.')
+      else { setErr(''); await load(seasonId) }
+    } catch { setErr('Could not cancel the packet.') }
+    setBusyId('')
+  }
+
   function closeClone() { setCloneStep('idle'); setClonePreview(null); setCloneResult(null); setCloneErr('') }
 
   const selectedSeason: Season | null = seasons.find(s => s.id === seasonId) || null
@@ -155,6 +187,12 @@ export default function SeasonalsPage() {
             className="px-3 py-2 text-xs font-bold rounded-lg text-on-forest"
             style={{ background: 'var(--forest)' }}>
             + New Seasonal Camper
+          </Link>
+          {/* The meter walk's second entry point. Deliberately not a new permanent sidebar item —
+              PR 4's Seasonal Dashboard hub is where this belongs. */}
+          <Link href="/admin/seasonals/meters"
+            className="px-3 py-2 text-xs font-bold rounded-lg border border-line-strong text-ink">
+            📱 Read electric meters
           </Link>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded} />
           <button onClick={() => setUnsignedOnly(v => !v)}
@@ -189,6 +227,7 @@ export default function SeasonalsPage() {
                 <th className="px-4 py-3 text-right">Balance</th>
                 <th className="px-4 py-3">Last note</th>
                 <th className="px-4 py-3 text-right">Payment</th>
+                <th className="px-4 py-3 text-right">Packet</th>
               </tr>
             </thead>
             <tbody>
@@ -214,16 +253,57 @@ export default function SeasonalsPage() {
                       through the same way the name link carries it (#64). */}
                   <td className="px-4 py-3 text-right">
                     <Link
-                      href={`/admin/checkout?guestId=${r.guest_id}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`}
+                      // ⚠ CADY DIVERGENCE, DELIBERATE. The template sends this to /admin/checkout —
+                      // the LANE checkout, which exists for SEPARATED parks. Cady is a COMBINED
+                      // park (billing_mode NULL normalises to combined), so that screen would only
+                      // ever tell it "there are no lanes here" and hand it back to the folio.
+                      //
+                      // Cady also does not have that page, and porting it is not the answer: it
+                      // imports lib/square-card-client, which Cady does not have either — Cady's
+                      // card entry is components/SquareCardField.tsx, one of its deliberate Square
+                      // divergences. Pulling the page across would drag the template's Square
+                      // wiring into a park that runs on env tokens, for a screen it never reaches.
+                      //
+                      // So this goes straight to the folio, which is where a combined park has
+                      // always taken payments — the same destination the template's own
+                      // SeasonalSections picks when billingMode is combined. This ALSO fixes a
+                      // live 404: the Pay button has been pointing at a page Cady does not have.
+                      href={`/admin/folio/guest/${r.guest_id}`}
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold border whitespace-nowrap"
                       style={{ borderColor: 'color-mix(in srgb, var(--good) 35%, transparent)', color: 'var(--good)', background: 'var(--good-bg)' }}>
                       Pay
                     </Link>
                   </td>
+                  {/* The packet actions. Sending is this page's job — the camper page is the person. */}
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    {r.contract_status === 'signed' ? (
+                      <span className="text-xs text-muted">—</span>
+                    ) : r.contract_status === 'sent' ? (
+                      <span className="inline-flex items-center gap-2">
+                        <button onClick={() => resend(r)} disabled={busyId === r.contract_id}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold text-on-forest disabled:opacity-50"
+                          style={{ background: 'var(--forest)' }}>
+                          {busyId === r.contract_id ? '…' : '↻ Resend'}
+                        </button>
+                        <button onClick={() => cancelPacket(r)} disabled={busyId === r.contract_id}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold border disabled:opacity-50"
+                          style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)', background: 'var(--card)' }}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/admin/seasonals/${r.guest_id}/review${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-on-good whitespace-nowrap"
+                        style={{ background: 'var(--good)' }}>
+                        ✉ Review &amp; send
+                      </Link>
+                    )}
+                  </td>
                 </tr>
               ))}
               {!loading && visible.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-muted">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-muted">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
               )}
             </tbody>
           </table>

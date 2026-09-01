@@ -1,0 +1,46 @@
+-- CADY PORT of template #79–#83. APPLIED TO THE LIVE PARK 2026-09-01, in four steps:
+--   port79_83_a_contract_payment_schedule_and_seasonal_active
+--   port79_83_b_meter_readings_schema
+--   port79_83_c_meter_tables_rls
+--   port79_83_d_seed_meters_1_to_79_and_preserve_rate
+--
+-- Recorded here so the repo carries what the database was actually given. The template's own
+-- four migration files are alongside this one and are the canonical text; this file documents the
+-- TWO PLACES CADY DIVERGED FROM THEM.
+--
+-- ── DIVERGENCE 1: THE METER SEED IS 1..79, NOT "every site" ──────────────────────────────────
+--
+-- The template seeds a meter for every site. Cady has 89 sites but reads meters numbered 1
+-- through 79: sites 80-85, the three cabins (C1-C3) and the five named tent sites are not part of
+-- the walk. Seeding them would send somebody to a post with no meter on it.
+--
+-- Result: 75 meters. Not 79 — numbers 16, 30, 57 and 62 have no site row on Cady at all, and no
+-- guest has ever sat on them or been billed for them (checked before seeding).
+--
+-- ⚠ ONE ELECTRIC-BILLED CAMPER IS OUTSIDE THIS RANGE, DELIBERATELY AND VISIBLY: site C2, which
+-- has six real metered bills (12345 -> 12456 -> ... -> 13299, a genuine rolling meter). It is
+-- excluded because the instruction was 1..79. NOTHING BREAKS: C2 is still
+-- electric_billing_enabled, so it still appears on the Electric Billing page and is still billed
+-- by hand exactly as it is today. It is simply not one of the walk's stops. Adding it later is
+-- one INSERT.
+--
+-- ── DIVERGENCE 2: THE RATE IS SET, NOT LEFT NULL ─────────────────────────────────────────────
+--
+-- The template provisions settings.electric_rate_per_kwh / electric_minimum_charge as NULL, so a
+-- new park asserts nothing about its own prices. Cady is not a new park: all 153 of its electric
+-- bills to date were computed at $0.27/kWh with a $15.00 minimum. Those exact values are written
+-- so the first bill after this port is identical to the last one before it.
+
+-- Divergence 1 — the seed actually run:
+--   INSERT INTO public.meters (meter_number, site_id, label, active, display_order)
+--   SELECT btrim(s.site_number), s.id, '', true, COALESCE(s.display_order, 0)
+--     FROM public.sites s
+--    WHERE s.site_number ~ '^[0-9]+$' AND (s.site_number)::int BETWEEN 1 AND 79
+--      AND NOT EXISTS (SELECT 1 FROM public.meters m
+--                       WHERE lower(btrim(m.meter_number)) = lower(btrim(s.site_number)));
+
+-- Divergence 2 — the rate actually preserved:
+--   UPDATE public.settings SET electric_rate_per_kwh = 0.27, electric_minimum_charge = 1500
+--    WHERE electric_rate_per_kwh IS NULL OR electric_minimum_charge IS NULL;
+
+SELECT 'see the comments above — this file is a record, not a migration to re-run' AS note;
