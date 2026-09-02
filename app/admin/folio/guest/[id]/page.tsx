@@ -9,6 +9,7 @@ import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 import { classifyLineItem, normalizeBillingMode, laneBalances, LANES, type Lane } from '@/lib/ledger-lanes'
 import { accountBuckets, paymentLaneForBucket, BUCKETS, type Bucket } from '@/lib/account-buckets'
 import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
+import AccountBucketCards from '@/app/components/AccountBucketCards'
 import { notVoided } from '@/lib/ledger'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
@@ -577,16 +578,20 @@ export default function GuestAccountPage() {
   const ledgerFoldDate = ledgerHasFold ? ledgerEvents[ledgerFoldIndex].sub : ''
   const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
 
-  // ── PHASE 4 PR 3b: THE LANE VIEW ─────────────────────────────────────────────────────────
+  // ── THE SEPARATED VIEW ───────────────────────────────────────────────────────────────────
   //
   // ONLY for a SEASONAL camper at a SEPARATED park. Every other folio — combined mode, a
-  // transient guest's account, a reservation folio — falls through to the flat ledger below,
-  // which is untouched.
+  // transient guest's account, a reservation folio — sees exactly what it saw before.
   //
-  // ⚠ IT REGROUPS; IT NEVER FILTERS. Every charge, payment and refund in `ledgerEvents` appears
-  // in exactly one group, so the audit trail this page exists for is complete either way. The
-  // grand total is still `totalDue` / `overpaid` — the same figures the flat view prints — so
-  // the two views cannot disagree about what is owed.
+  // What `laneView` turns on is now only ADDITIVE: the two account cards above the ledger, and
+  // the Camp / Seasonal / Pay-both doors in the payment modal. The chronological ledger itself
+  // renders in BOTH modes and is never filtered or regrouped, so the audit trail is identical
+  // either way and the cards cannot disagree with the rows beneath them.
+  //
+  // ⚠ It used to also swap in a per-lane grouped summary. That is gone: it printed a subtotal
+  // per lane labelled "due", but ~98% of this park's payments carry no lane, so each lane showed
+  // its charges as owed while the money that paid them sat in an "unassigned" pile. Two accounts,
+  // one of which is the account remainder, is the whole point — a lane is not an account.
   const laneView = billingMode === 'separated' && !!guest?.is_seasonal
   // ⚠ ONE DERIVATION, FROM THIS PAGE'S OWN ROWS — laneBalances() then accountBuckets(). A door can
   // therefore never offer a figure the ledger printed behind it disagrees with.
@@ -729,7 +734,34 @@ export default function GuestAccountPage() {
         {/* Account tab */}
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
 
-          {ledgerEvents.length > 0 && !laneView && (
+          {/* ── THE TWO ACCOUNTS, AS THE BALANCE SUMMARY ────────────────────────────────
+              ⚠ THIS REPLACES A PER-LANE VIEW THAT OVERSTATED WHAT WAS OWED. It showed Electric,
+              Store and Seasonal each with a subtotal labelled "due" — but ~98% of this park's
+              payments are untagged and landed in an "unassigned" group, so every lane read as
+              owing money that had in fact been paid. That is the exact phantom the two-bucket
+              model exists to remove, and it was still on this one screen.
+
+              Camp is the account remainder, so it cannot overstate: the two cards always sum to
+              the account balance printed by the ledger below. */}
+          {laneView && buckets && (
+            <div style={{ marginBottom: 14 }}>
+              <AccountBucketCards
+                lanes={laneBalances(lineItems, payments, { electricLineItemIds: electricItemIds })}
+                labels={labels}
+                onTakePayment={(b: Bucket) => {
+                  setPayBucket(b)
+                  setPaymentLane(paymentLaneForBucket(b) ?? '')
+                  const due = Math.max(0, buckets[b].balance)
+                  if (due > 0) setPaymentAmount((due / 100).toFixed(2))
+                  setCashTendered(''); setShowPayment(true)
+                }}
+              />
+            </div>
+          )}
+
+          {/* The flat chronological ledger — the complete audit trail, and now shown in BOTH
+              modes. It was previously hidden in separated mode behind the per-lane grouping. */}
+          {ledgerEvents.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
                 <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
@@ -748,7 +780,34 @@ export default function GuestAccountPage() {
                 </button>
               )}
 
-              {visibleLedger.map(ledgerRow)}
+              {visibleLedger.map(ev => (
+                <div key={ev.key}>
+                  {ledgerRow(ev)}
+                  {/* FILE OR MOVE a payment's lane. ⚠ RELOCATED, NOT REMOVED — it used to live in
+                      the per-lane grouping this change replaces, and losing it would have taken a
+                      real capability with the phantom. Sets `lane` and nothing else: no amount
+                      moves, so the account balance cannot change — only which bucket the money
+                      offsets. Separated mode only; there are no lanes to file under in combined. */}
+                  {laneView && ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 10px', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>
+                      <span style={{ fontSize: 11, color: '#6b7280' }}>
+                        {ev.payment?.lane ? 'Move to' : 'File this payment under'}
+                      </span>
+                      <select
+                        value=""
+                        disabled={assigningLane === ev.paymentId}
+                        onChange={e => e.target.value && assignPaymentLane(ev.paymentId!, e.target.value)}
+                        style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                        <option value="">{ev.payment?.lane ? 'Another lane…' : 'Choose a lane…'}</option>
+                        {(['electric', 'store', 'seasonal'] as const)
+                          .filter(l => l !== ev.payment?.lane)
+                          .map(l => <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>)}
+                      </select>
+                      {assigningLane === ev.paymentId && <span style={{ fontSize: 11, color: '#9ca3af' }}>Filing…</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
 
               <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
@@ -767,126 +826,60 @@ export default function GuestAccountPage() {
             </div>
           )}
 
-          {/* ── THE LANE VIEW (separated + seasonal only) ────────────────────────────────
-              The SAME events as the flat ledger above, regrouped. Nothing is filtered out: every
-              charge, payment and refund appears in exactly one section, so this page is still the
-              complete audit trail it exists to be. The grand total is the same `totalDue` /
-              `overpaid` the flat view prints. */}
-          {ledgerEvents.length > 0 && laneView && (
-            <div style={{ marginBottom: 12 }}>
-              {laneGroups.map(group => (
-                <div key={group.key} style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', background: '#f8fafb' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#374151' }}>{group.label}</div>
-                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{group.blurb}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: group.subtotal > 0 ? '#b45309' : '#15803d' }}>
-                        ${(Math.abs(group.subtotal) / 100).toFixed(2)}
-                      </div>
-                      <div style={{ fontSize: 10, color: '#9ca3af' }}>
-                        {group.key === 'unassigned'
-                          ? 'applied to the account'
-                          : group.subtotal > 0 ? 'due' : group.subtotal === 0 ? 'settled' : 'credit'}
-                      </div>
-                    </div>
-                  </div>
+          {/* The per-lane grouped view that used to sit here has been removed. It regrouped the
+              same events by lane and printed a subtotal for each — labelled "due" — but ~98% of
+              this park's payments carry no lane, so those payments pooled into an "unassigned"
+              group while every lane still showed its full charges as owed. Staff were told a
+              camper owed electric and store money they had already paid.
 
-                  {group.events.map(ev => (
-                    <div key={ev.key}>
-                      {ledgerRow(ev)}
-                      {/* FILE OR MOVE a payment's lane (Part D, widened in PR 3c). Sets `lane`
-                          and nothing else: no amount moves, so the account balance cannot change
-                          — only which lane the money offsets. Offered on every payment row now,
-                          not just unassigned ones, so a credit filed onto the wrong lane can be
-                          corrected in a tap. */}
-                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 10px', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>
-                          <span style={{ fontSize: 11, color: '#6b7280' }}>
-                            {group.key === 'unassigned' ? 'File this payment under' : 'Move to'}
-                          </span>
-                          <select
-                            value=""
-                            disabled={assigningLane === ev.paymentId}
-                            onChange={e => e.target.value && assignPaymentLane(ev.paymentId!, e.target.value)}
-                            style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
-                            <option value="">{group.key === 'unassigned' ? 'Choose a lane…' : 'Another lane…'}</option>
-                            {(['electric', 'store', 'seasonal'] as const)
-                              .filter(l => l !== group.key)
-                              .map(l => <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>)}
-                          </select>
-                          {assigningLane === ev.paymentId && <span style={{ fontSize: 11, color: '#9ca3af' }}>Filing…</span>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                    <span style={{ color: '#6b7280' }}>Charges ${(group.charges / 100).toFixed(2)} · Payments ${(group.paid / 100).toFixed(2)}</span>
-                    <span style={{ fontWeight: 700 }}>${(Math.abs(group.subtotal) / 100).toFixed(2)}</span>
-                  </div>
-                </div>
-              ))}
-
-              {/* ONE grand total, and it is the SAME figure the flat view prints. */}
-              <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
-                  <span style={{ color: '#6b7280' }}>Total charges</span>
-                  <span style={{ fontWeight: 600 }}>${(itemsTotal / 100).toFixed(2)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
-                  <span style={{ color: '#6b7280' }}>Total payments</span>
-                  <span style={{ fontWeight: 600, color: '#15803d' }}>${(paymentsTotal / 100).toFixed(2)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: '1px solid #f3f4f6', marginTop: 6, paddingTop: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#374151' }}>{overpaid > 0 ? 'Account credit' : totalDue > 0 ? 'Balance due' : 'Settled'}</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: totalDue > 0 ? '#dc2626' : '#15803d' }}>${((overpaid > 0 ? overpaid : totalDue) / 100).toFixed(2)}</span>
-                </div>
-                {overpaid > 0 && (
-                  <p style={{ fontSize: 11, color: '#6b7280', margin: '6px 0 0' }}>
-                    Applies to any lane — it comes off their next charge.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
+              The two cards above are the balance summary now, and the chronological ledger above
+              is the audit trail. The one thing the grouping did that neither of those did — filing
+              or moving a payment's lane — has been relocated onto the ledger rows themselves, so
+              no capability was lost with it. */}
           {ledgerEvents.length === 0 && (
             <div style={{ textAlign: 'center', color: '#4a6275', padding: '3rem 0', fontSize: 14 }}>
               No charges yet. Tap Add Items to get started.
             </div>
           )}
 
-          {/* ── ONE PAYMENT FLOW (Phase 4 PR 3b, Part A) ────────────────────────────────
-              A separated park's seasonal camper goes to the LANE CHECKOUT, so there is exactly
-              one way to take their money and it always attributes it to a lane. Every other
-              folio — combined, transient, reservation — opens the same payment panel as before,
-              untouched. */}
-          {laneView ? (
-            <button onClick={() => router.push(`/admin/checkout?guestId=${guestId}`)} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
-              {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
-            </button>
-          ) : (
+          {/* ── ONE PAYMENT FLOW, AND NOW IT REALLY IS ONE ──────────────────────────────
+              ⚠ THIS BUTTON USED TO ROUTE A SEPARATED + SEASONAL CAMPER TO /admin/checkout — A
+              ROUTE THIS PARK DOES NOT HAVE. It 404'd the moment separated mode was switched on,
+              and worse, it meant the Camp / Seasonal / Pay-both doors built for exactly those
+              campers were UNREACHABLE: the doors live in the modal below, and that branch never
+              opened the modal. A door with no handle on it.
+
+              Both modes now open the same in-page modal. The only difference is what is
+              pre-selected, and that is decided the same way in both: by what is actually
+              outstanding. */}
           <button onClick={() => {
-              // ⚠ THE DEFAULT IS EARNED, NOT ASSUMED. Seasonal is pre-selected only for a
-              // seasonal camper who actually has a fee outstanding — that is when "they are
-              // paying their fee" is what is almost certainly happening. With the fee settled it
-              // falls back to the whole account, so a store payment on a paid-up camper is never
-              // quietly filed as seasonal. The amount follows the same rule: the lane's own
-              // balance when there is one, otherwise today's whole-account prefill.
-              const seasonalDue = guest?.is_seasonal
-                ? (laneGroups.find(g => g.key === 'seasonal')?.subtotal ?? 0)
-                : 0
-              const lane = seasonalDue > 0 ? 'seasonal' as const : '' as const
-              setPaymentLane(lane)
-              const prefill = lane ? seasonalDue : totalDue
-              setPaymentAmount(prefill > 0 ? (prefill/100).toFixed(2) : '')
+              // ⚠ THE DEFAULT IS EARNED, NOT ASSUMED. Seasonal is pre-selected only for a camper
+              // who actually has a fee outstanding — that is when "they are paying their fee" is
+              // what is almost certainly happening. With the fee settled it falls back to the
+              // everyday account, so a store payment on a paid-up camper is never quietly filed
+              // as seasonal. The amount follows the same rule.
+              if (laneView && buckets) {
+                // SEPARATED: open on a bucket door, with that bucket's own balance.
+                const seasonalDue = Math.max(0, buckets.seasonal.balance)
+                const b: Bucket = seasonalDue > 0 ? 'seasonal' : 'camp'
+                setPayBucket(b)
+                setPaymentLane(paymentLaneForBucket(b) ?? '')
+                const prefill = b === 'seasonal' ? seasonalDue : Math.max(0, buckets.camp.balance)
+                setPaymentAmount(prefill > 0 ? (prefill/100).toFixed(2) : '')
+              } else {
+                // COMBINED: byte-identical to what this page has always done.
+                const seasonalDue = guest?.is_seasonal
+                  ? (laneGroups.find(g => g.key === 'seasonal')?.subtotal ?? 0)
+                  : 0
+                const lane = seasonalDue > 0 ? 'seasonal' as const : '' as const
+                setPaymentLane(lane)
+                const prefill = lane ? seasonalDue : totalDue
+                setPaymentAmount(prefill > 0 ? (prefill/100).toFixed(2) : '')
+              }
               setCashTendered(''); setShowPayment(true)
             }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
             {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
           </button>
-          )}
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
