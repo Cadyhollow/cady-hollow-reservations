@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { normalizeLaneSplit, recordCardPayment } from '@/lib/lane-payments'
 import crypto from 'crypto'
 
 const supabase = createClient(
@@ -65,17 +66,31 @@ export async function POST(request: NextRequest) {
           .update({ status: 'completed', payment_id: paymentId, completed_at: new Date().toISOString() })
           .eq('square_checkout_id', squareCheckoutId)
 
-        // Record payment on the folio
-        const surchargeAmount = terminalCheckout.surcharge_amount || 0
-        await supabase.from('folio_payments').insert({
-          folio_id: terminalCheckout.folio_id,
-          method: 'card',
+        // ── RECORDING THE PAYMENT ─────────────────────────────────────────────────────────────
+        //
+        // ⚠ THIS WAS A BARE INSERT WITH NO GUARD, AND SQUARE DELIVERS WEBHOOKS AT LEAST ONCE.
+        // A retry — anything that stops Square seeing a 200 — ran this block again, found the
+        // checkout again (the lookup above has no status filter) and inserted a SECOND payment
+        // row for the same tap. The camper would have been recorded as paying twice. It has not
+        // happened on this park (89 real Square payment ids, all distinct), but only luck stood
+        // between the code and it.
+        //
+        // recordCardPayment() is IDEMPOTENT ON THE SQUARE PAYMENT ID: a retry finds the row
+        // already there and writes nothing. That is also what makes it safe for the poll in
+        // /api/terminal/charge to record as well — whichever arrives second is a no-op.
+        //
+        // ⚠ AND IT CARRIES THE LANES. A checkout sent with a lane split records one row per lane
+        // sharing the same square_payment_id; a whole-account charge records the single untagged
+        // row it always did, with the same amount and the same surcharge.
+        const rec = await recordCardPayment(supabase, {
+          folioId: terminalCheckout.folio_id,
+          squarePaymentId: paymentId,
+          split: normalizeLaneSplit(terminalCheckout.lanes),
           amount: terminalCheckout.amount,
-          surcharge_amount: surchargeAmount,
-          status: 'completed',
-          square_payment_id: paymentId,
+          surchargeAmount: terminalCheckout.surcharge_amount || 0,
           note: 'Square Terminal' + (terminalCheckout.note ? ' · ' + terminalCheckout.note : ''),
         })
+        if (rec.error) console.error('Terminal payment could not be recorded from the webhook:', rec.error, paymentId)
 
         // NOTE: We intentionally do NOT mirror Terminal payments into
         // reservations.amount_paid. Folio money lives ONLY in folio_payments.

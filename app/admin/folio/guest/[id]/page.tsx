@@ -339,29 +339,34 @@ export default function GuestAccountPage() {
           folioId: folio.id,
           note: paymentNote || 'Guest account payment',
           surchargeAmount,
-          // A ONE-LANE SPLIT when the owner named a lane. recordCardPayment writes one row per
+          // A ONE-LANE SPLIT when the operator named a lane. recordCardPayment writes one row per
           // lane, so a single entry is the same single row it would have written anyway — same
           // amount, same surcharge — plus the tag. Omitted entirely for "whole account", which
           // takes the untagged path unchanged.
-          // ⚠ CADY DIVERGENCE — `lanes` IS DELIBERATELY NOT SENT.
           //
-          // The template's terminal route splits a card charge by lane (PR #66). THIS park's
-          // /api/terminal/charge predates that and has no lane handling at all, so sending the
-          // split would be silently discarded: the payment would land UNTAGGED while the operator
-          // had just chosen "Seasonal fee" and every screen would tell them otherwise. A tag that
-          // quietly does not happen on a money path is worse than no tag, so the terminal path
-          // says so in the UI instead (see the note by the lane picker) and the operator files
-          // the payment to its lane afterwards in one tap.
+          // ⚠ THE DIVERGENCE THAT USED TO LIVE HERE IS RESOLVED. This park's terminal route had
+          // no lane handling, so sending a split would have been silently discarded — the payment
+          // landing untagged while the operator had just chosen "Seasonal fee". The route now
+          // stores the split on the checkout and applies it when the payment completes, so the
+          // tag actually happens. The warning that used to sit by the lane picker is gone with it.
           //
-          // Restore the split here when the terminal route is brought up to the template's.
+          // ⚠ GROSS AMOUNT, surcharge included — laneSplitTotal() sums exactly this to decide what
+          // the card is charged, and folio_payments.amount is stored gross too. Passing the net
+          // would charge the card less than the screen showed.
+          ...(paymentLane ? { lanes: [{ lane: paymentLane, amount: totalCharge, surchargeAmount }] } : {}),
         }),
       })
       const data = await res.json()
       if (!data.checkoutId) { setTerminalStatus('error'); return }
+      // ⚠ WAITS FOR `recorded`, NOT MERELY FOR COMPLETED. The poll is what writes the payment
+      // now, so `recorded` means the money is on the folio — closing on COMPLETED alone could
+      // reload the folio a moment before the row existed and show the operator an unpaid balance
+      // on a card that had just been charged.
+      let completedTicks = 0
       const poll = setInterval(async () => {
         const pr = await fetch('/api/terminal/charge?checkoutId=' + data.checkoutId)
         const pd = await pr.json()
-        if (pd.status === 'COMPLETED') {
+        if (pd.recorded) {
           clearInterval(poll)
           setShowPayment(false)
           setPaymentAmount('')
@@ -369,6 +374,14 @@ export default function GuestAccountPage() {
           setTerminalStatus('idle')
           setCardEntryMode('terminal')
           await loadFolioData(folio.id)
+        } else if (pd.status === 'COMPLETED') {
+          // Charged, but not yet on the books. Normally the same tick records it; give it a few
+          // more, then stop and say so rather than spinning forever or claiming success.
+          if (++completedTicks >= 5) {
+            clearInterval(poll)
+            setTerminalStatus('error')
+            await loadFolioData(folio.id)
+          }
         } else if (pd.status === 'CANCELED' || pd.status === 'CANCEL_REQUESTED') {
           clearInterval(poll)
           setTerminalStatus('error')
@@ -926,15 +939,10 @@ export default function GuestAccountPage() {
                     )
                   })}
                 </div>
-                {/* ⚠ The one tender that cannot carry the tag on this park — say so where the
-                    choice is made, not after the money has moved. */}
-                {paymentLane && paymentMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId && (
-                  <p style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 10px', marginTop: -8, marginBottom: 16 }}>
-                    A <strong>terminal</strong> card payment is recorded against the whole account on this park — it
-                    will not be filed to {paymentLane === 'seasonal' ? 'the seasonal fee' : paymentLane} automatically.
-                    Take it by another tender, or file it to a lane on the payment row afterwards.
-                  </p>
-                )}
+                {/* A warning used to sit here saying a terminal card payment could not carry the
+                    operator's chosen lane on this park. It can now: the charge stores the split
+                    and the completion applies it. Removed rather than reworded — a caveat that is
+                    no longer true is worse than none at all. */}
               </>
             )}
             <label style={ml}>Payment method</label>
