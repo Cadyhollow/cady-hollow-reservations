@@ -26,6 +26,8 @@ import {
   resolveMinNights,
   ruleAppliesToSite,
   DEFAULT_CLOSED_MESSAGE,
+  checkBookability,
+  isSeasonalSite,
   type DateFacts,
 } from './bookability.ts'
 
@@ -490,4 +492,123 @@ test('horizon: a malformed arrival cannot fabricate a window', () => {
   // horizon. checkBookability rejects a malformed range before this runs anyway.
   assert.equal(addDays('', 400), '')
   assert.equal(checkHorizon('not-a-date', { max_advance_days: 30 }, TODAY, 0).bookable, false)
+})
+
+
+// ── SEASONAL SITES ARE NOT NIGHTLY INVENTORY ─────────────────────────────────────────────────
+//
+// ⚠ THIS IS A DOUBLE-BOOKING GUARD ON A REAL PERSON. A seasonal site has a camper living on it
+// for the season. Booking a guest onto it does not oversell an empty pitch — it sends somebody to
+// a site with another family's camper parked on it. Hence: no override on any path, and the
+// server refuses rather than trusting the search listing.
+//
+// /api/availability already hides these sites on this park, so we are not exposed today. These
+// pin the SERVER refusal, which is what a hand-edited /book URL runs into.
+
+/** A minimal Supabase double. PURE — no network, no database, nothing to configure. */
+type FakeRow = Record<string, unknown>
+type FakeChain = {
+  then: (resolve: (v: { data: FakeRow[] }) => void) => void
+  single: () => Promise<{ data: FakeRow | null }>
+} & Record<string, unknown>
+
+function fakeSupabase(rows: Record<string, FakeRow[]>) {
+  return {
+    from(table: string) {
+      const data = rows[table] ?? []
+      const chain = {
+        then: (resolve: (v: { data: FakeRow[] }) => void) => resolve({ data }),
+        single: async () => ({ data: data[0] ?? null }),
+      } as FakeChain
+      for (const m of ['select', 'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'limit', 'order']) {
+        chain[m] = () => chain
+      }
+      return chain
+    },
+  }
+}
+
+const OPEN_ALL_YEAR = { season_start: null, season_end: null, closed_season_message: null, max_advance_days: null }
+const SEASONAL_SITE = { id: 'site-a', site_type: 'rv_site', is_seasonal_site: true }
+const NIGHTLY_SITE = { id: 'site-a', site_type: 'rv_site', is_seasonal_site: false }
+
+test('⚠ A SEASONAL SITE IS REFUSED, EVEN ON DATES THAT ARE OTHERWISE PERFECTLY BOOKABLE', async () => {
+  const r = await checkBookability(fakeSupabase({ sites: [SEASONAL_SITE] }), {
+    arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+    settings: OPEN_ALL_YEAR, today: TODAY,
+  })
+  assert.equal(r.bookable, false)
+  assert.equal(r.reason, 'seasonal-site')
+  assert.match(r.message, /seasonal camper/i)
+})
+
+test('a non-seasonal site on the same dates is still bookable', async () => {
+  const r = await checkBookability(fakeSupabase({ sites: [NIGHTLY_SITE] }), {
+    arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+    settings: OPEN_ALL_YEAR, today: TODAY,
+  })
+  assert.equal(r.bookable, true)
+  assert.equal(r.reason, 'ok')
+})
+
+test('⚠ A CALLER-SUPPLIED SITE ROW CANNOT SMUGGLE A SEASONAL SITE PAST THE GATE', async () => {
+  // /api/payment passes the site it already looked up, and that lookup selects
+  // `id, site_number, site_type, base_rate` — no seasonal field. If the gate trusted that row it
+  // would never fire on the PUBLIC path, which is the one that matters most.
+  const partialRow = { id: 'site-a', site_type: 'rv_site' }   // exactly what /api/payment passes
+  const r = await checkBookability(fakeSupabase({ sites: [SEASONAL_SITE] }), {
+    arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+    site: partialRow, settings: OPEN_ALL_YEAR, today: TODAY,
+  })
+  assert.equal(r.reason, 'seasonal-site', 'the database row wins over the partial one passed in')
+})
+
+test('⚠ AN UNMIGRATED-SHAPE SITE IS UNAFFECTED — no property means bookable', async () => {
+  const noProperty = { id: 'site-a', site_type: 'rv_site' }
+  const r = await checkBookability(fakeSupabase({ sites: [noProperty] }), {
+    arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+    settings: OPEN_ALL_YEAR, today: TODAY,
+  })
+  assert.equal(r.bookable, true)
+  assert.equal(r.reason, 'ok')
+})
+
+test('the re-read UPGRADES a row and never discards it — min-stay still runs', async () => {
+  // The regression the template caught: replacing the caller's row with an empty read nulled it
+  // out and silently skipped min-stay along with the seasonal check.
+  const r = await checkBookability(
+    fakeSupabase({ min_stay_rules: [{ site_id: 'site-a', min_nights: 5 }] }),
+    {
+      arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+      site: { id: 'site-a', site_type: 'rv_site' },   // no seasonal field; sites table is empty
+      settings: OPEN_ALL_YEAR, today: TODAY,
+    },
+  )
+  assert.equal(r.reason, 'min-stay', 'the caller-supplied row survived the re-read')
+})
+
+test('isSeasonalSite: only an explicit true is seasonal', () => {
+  assert.equal(isSeasonalSite({ is_seasonal_site: true }), true)
+  assert.equal(isSeasonalSite({ is_seasonal_site: false }), false)
+  assert.equal(isSeasonalSite({ is_seasonal_site: null }), false)
+  assert.equal(isSeasonalSite({}), false, 'a park without the column has no such property')
+  assert.equal(isSeasonalSite(null), false)
+  assert.equal(isSeasonalSite(undefined), false)
+})
+
+test('⚠ THE SEASONAL REFUSAL CANNOT BE WAIVED — this park has no override to waive it with', async () => {
+  // ⚠ A CADY DIVERGENCE, DELIBERATELY PINNED. The blueprint's checkBookability takes an
+  // `allowBeyondHorizon` flag for the staff path; this park has NO override input at all, because
+  // its staff route applies no date rules and there is nothing to override. So the gate is
+  // unwaivable here by construction, not by policy — and that is worth a test, so a future port
+  // that introduces an override has to think about whether it reaches this refusal.
+  //
+  // Passing an unknown flag must therefore change nothing.
+  const r = await checkBookability(fakeSupabase({ sites: [SEASONAL_SITE] }), {
+    arrival: '2031-07-04', departure: '2031-07-07', siteId: 'site-a',
+    settings: OPEN_ALL_YEAR, today: TODAY,
+    ...({ allowBeyondHorizon: true } as Record<string, unknown>),
+  })
+  assert.equal(r.bookable, false)
+  assert.equal(r.reason, 'seasonal-site', 'an unrecognised override flag does not reach the gate')
 })

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
+import { isSeasonalSite, SEASONAL_SITE_MESSAGE } from '@/lib/bookability'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -54,6 +55,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'This site is already booked for those dates!' },
         { status: 409 }
+      )
+    }
+
+    // ── THE SEASONAL-SITE GATE ────────────────────────────────────────────────────────────────
+    //
+    // ⚠ ADDED EXPLICITLY HERE, because this route applies NO date rules of its own — it is gated
+    // by requireRole and a double-booking check, and nothing else. It does not compose through
+    // checkBookability(), so it inherits nothing from the gate added there; without this, staff
+    // could still book a guest onto a seasonal site.
+    //
+    // ⚠ AND IT HAS NO STAFF OVERRIDE. A seasonal site has a camper living on it, so booking a
+    // guest onto it is double-booking a real person — not a park preference an operator may set
+    // aside. An operator who genuinely needs to sell that pitch nightly can clear its seasonal
+    // flag on the Sites screen, which is a deliberate act with its own record.
+    //
+    // ⚠ REFUSED BEFORE THE INSERT BELOW, so a rejected booking writes nothing.
+    //
+    // ⚠ `select('*')` — naming `is_seasonal_site` would 400 on a park without the column. Cady
+    // has it; the shape is kept identical to the blueprint's.
+    const { data: siteRow } = await supabase.from('sites').select('*').eq('id', site_id).single()
+    if (isSeasonalSite(siteRow)) {
+      return NextResponse.json(
+        { error: SEASONAL_SITE_MESSAGE, reason: 'seasonal-site' },
+        { status: 400 }
       )
     }
 
