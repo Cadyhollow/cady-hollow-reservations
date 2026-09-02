@@ -17,9 +17,10 @@ const supabase = createClient(
 // no matter what the terminal was doing. That blind spot is why a stuck charge had no obvious
 // next step.
 //
-// Deliberately read-only. It would be tempting to record the payment here when Square says
-// COMPLETED but the webhook never arrived, except a GET that writes money would race the
-// webhook and could record the same payment twice. Recording stays with the webhook.
+// ⚠ THIS USED TO BE DELIBERATELY READ-ONLY, on the grounds that a GET which writes money would
+// race the webhook and record the same payment twice. That objection is now answered rather than
+// avoided: recordCardPayment() is idempotent on the Square payment id, so the two paths cannot
+// duplicate each other. See the note at the recording block below.
 export async function GET(request: NextRequest) {
   const denied = await requireRole(request, 'staff')
   if (denied) return denied
