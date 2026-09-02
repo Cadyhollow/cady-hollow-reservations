@@ -24,10 +24,13 @@ with a category (15 out of 652), so all the money that had actually been paid pi
 a camper owed for electric and store charges they had already paid.
 
 **What it looks like now:** one "Collect Payment" button that opens the payment box in both modes,
-with Camp / Seasonal / Pay both waiting inside for seasonal campers. Above the ledger, the same two
-cards — **Camp Account** and **Seasonal** — you already see on the campers page and the guest
-directory. The full date-by-date ledger stays exactly where it was; it is the record of what
-happened, and it was never wrong.
+with Camp / Seasonal / Pay both waiting inside for seasonal campers. Above it, the same two cards —
+**Camp Account** and **Seasonal** — you already see on the campers page and the guest directory.
+
+**And the long list of transactions is now folded away by default** on a seasonal camper's page, in
+separated mode. So opening a camper is: two cards, a one-line "View transaction history" you can
+tap, and the Collect Payment button — instead of scrolling past a year of entries to reach the
+button. Nothing was deleted: tap the line and the whole ledger opens, every row, exactly as before.
 
 **In combined mode — which is what the park is running right now — this page is unchanged.** Every
 addition is switched off unless separated mode is on.
@@ -88,6 +91,43 @@ under…" / "Move to…"** picker to tag a payment's lane. That control has been
 ledger rows themselves**, still gated `laneView && …` so it never appears in combined mode. It sets
 `lane` and nothing else — no amount moves, so the account balance cannot change, only which bucket
 the money offsets.
+
+## 2b — the ledger now folds by default (added to the task after the first pass)
+
+On a **separated + seasonal** folio the two cards are the primary view, so the chronological ledger
+**collapses behind a toggle** and opens on tap:
+
+```
+▸ VIEW TRANSACTION HISTORY                                    47 entries
+```
+
+Everyday use is now **two cards → Collect Payment**, with the ledger one tap away instead of
+dominating the screen and pushing the payment button below the fold.
+
+**Folded, never removed.** Opening it restores the complete ledger — every row, the existing
+"Show earlier activity" fold, the lane pickers, and the totals footer. Nothing is filtered; the
+audit trail is intact, just not the first thing on screen. The toggle carries `aria-expanded` and
+the entry count, so what is behind it is stated rather than hidden.
+
+**Combined mode cannot fold.** The gate is:
+
+```js
+const ledgerOpen = !laneView || showLedger
+```
+
+`!laneView` short-circuits **before** `showLedger` is ever consulted, so on a combined-mode folio
+the ledger is open unconditionally — the toggle is not rendered at all, and flipping the state could
+not close it even if something tried. Combined renders the original header row and body exactly as
+today.
+
+### One judgment call, easy to reverse
+A separated seasonal folio now shows **three** ways to start a payment: a "Take a payment" button on
+each card (which opens straight onto that account's door) and the big **Collect Payment** button
+below (which picks the door by what is outstanding). I kept all three, because the task describes
+the target as "two cards + the Collect Payment button" and the per-card buttons *are* the doors this
+PR exists to make reachable. If it reads as clutter on the real screen, dropping the per-card
+buttons is a one-line change — remove `onTakePayment` from the `AccountBucketCards` call and the
+cards go back to being display only. Say the word.
 
 ---
 
@@ -191,7 +231,7 @@ value). Left as-is; flagging it so it is a known limitation, not a surprise.
 | Pure test suite (33 files) | **747 / 747**, 0 fail — same as the 3B-1 baseline |
 | New lint findings | **none** — the changed file lints **8 problems (7 errors, 1 warning)** on both `main` and this branch, same rules, line numbers shifted only |
 | Fee-model diff (`ledger.ts`, `booking-quote.ts`, `pricing.ts`) | **EMPTY** ✅ |
-| Files changed | **1** — `app/admin/folio/guest/[id]/page.tsx` (+110 / −117) |
+| Files changed | **1** — `app/admin/folio/guest/[id]/page.tsx` (+151 / −117) |
 | Template-only code riding along | **none** — grepped for `square_connections`, `getSquareCredentials`, `square-oauth`, `settleTerminalCheckout`, `proxy.ts`, `allowBeyondHorizon` |
 | Schema change | **none** |
 | Combined mode | **unchanged** — see below |
@@ -206,7 +246,11 @@ Every added non-comment line in the diff was extracted and checked. It is, in fu
 - one control gated `{laneView && ev.paymentId && …}` — the lane picker;
 - `{ledgerEvents.length > 0 && (` — a **widening** of a gate that combined mode already passed;
 - the button's `if (laneView && buckets) { … } else { … }`, whose `else` is `main`'s existing code
-  verbatim.
+  verbatim;
+- **(2b)** `const [showLedger] = useState(false)` — inert unless read; `ledgerOpen = !laneView ||
+  showLedger` — **`true` in combined, always**; a `{laneView ? <toggle> : <original header div>}`
+  whose `else` is the existing markup unchanged; a `{laneView && …}` column-heading row; and a
+  fragment wrapper `{ledgerOpen && (<>…</>)}` that always renders in combined and adds no DOM.
 
 `laneView` is `billingMode === 'separated' && !!guest?.is_seasonal`, and `billing_mode` is NULL, so
 on the live park **every one of these is off.**
@@ -227,8 +271,10 @@ on the live park **every one of these is off.**
 ## Recommendation
 
 Read the PR, then re-flip `billing_mode` to `'separated'` **off-peak** and check one seasonal
-camper's folio: the two cards should appear above the ledger and add up to the balance printed at
-the bottom, and "Collect Payment" should open a box offering **Camp Account / Seasonal / Pay both**.
+camper's folio: you should see the two cards, a **"View transaction history"** line, and the
+Collect Payment button — no long list of entries until you tap. Tap it: the full ledger opens, and
+the balance at its foot should equal the two cards added together. Then press **Collect Payment** —
+it should open a box offering **Camp Account / Seasonal / Pay both**.
 If anything looks wrong, setting `billing_mode` back to NULL restores today's behaviour instantly —
 nothing here changes stored data.
 

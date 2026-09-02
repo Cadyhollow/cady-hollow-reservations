@@ -158,6 +158,9 @@ export default function GuestAccountPage() {
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
   const [showEarlier, setShowEarlier] = useState(false)
+  // Separated mode only: the two account cards are the primary view, so the ledger folds
+  // behind a toggle. See `ledgerOpen` — combined mode ignores this and is always open.
+  const [showLedger, setShowLedger] = useState(false)
   // The shared modal, same as the main folio and the reports drawer. This surface had void
   // only, so a refund on a guest account had to be issued from somewhere else entirely.
   const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
@@ -598,6 +601,10 @@ export default function GuestAccountPage() {
   const buckets = laneView
     ? accountBuckets(laneBalances(lineItems, payments, { electricLineItemIds: electricItemIds }))
     : null
+  // ⚠ COMBINED IS ALWAYS OPEN. `!laneView` short-circuits before `showLedger` is consulted, so
+  // the toggle cannot fold the ledger on a combined-mode folio even if the state were flipped —
+  // combined renders exactly what it renders today. Only a separated seasonal camper folds.
+  const ledgerOpen = !laneView || showLedger
 
   // ⚠ CONSUMED ONLY ONCE THE BALANCES EXIST. Opening the door before `buckets` is derived would
   // pre-fill $0.00 and quietly offer to take nothing. Clearing the ref makes it a one-shot, so it
@@ -760,15 +767,48 @@ export default function GuestAccountPage() {
           )}
 
           {/* The flat chronological ledger — the complete audit trail, and now shown in BOTH
-              modes. It was previously hidden in separated mode behind the per-lane grouping. */}
+              modes. It was previously hidden in separated mode behind the per-lane grouping.
+
+              ⚠ FOLDED, NEVER REMOVED. In separated mode the two cards answer "what do they owe?"
+              and this answers "what happened?" — a different question, asked far less often. So it
+              collapses behind a toggle and opens on tap, with every row, the earlier-activity fold
+              and the lane pickers intact inside. Nothing is filtered; it is the same complete
+              ledger, one tap away instead of dominating the screen. */}
           {ledgerEvents.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+              {laneView ? (
+                <button
+                  onClick={() => setShowLedger(s => !s)}
+                  aria-expanded={ledgerOpen}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '0.625rem 1rem', background: '#fff', border: 'none', borderBottom: ledgerOpen ? '1px solid #f3f4f6' : 'none', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <span style={{ fontSize: 12, color: '#6b7280' }}>{ledgerOpen ? '▾' : '▸'}</span>
+                  <span style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
+                    {ledgerOpen ? 'Hide transaction history' : 'View transaction history'}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#9ca3af' }}>
+                    {ledgerEvents.length} {ledgerEvents.length === 1 ? 'entry' : 'entries'}
+                  </span>
+                </button>
+              ) : (
               <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
                 <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
                 <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Amount</div>
                 <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Balance</div>
                 <div style={{ width: 28, flexShrink: 0 }} />
               </div>
+              )}
+
+              {ledgerOpen && (<>
+              {/* The column headings the toggle above replaced, restored once it is open. */}
+              {laneView && (
+                <div style={{ display: 'flex', alignItems: 'center', padding: '0.5rem 1rem', borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
+                  <div style={{ flex: 1, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Account</div>
+                  <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Amount</div>
+                  <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Balance</div>
+                  <div style={{ width: 28, flexShrink: 0 }} />
+                </div>
+              )}
 
               {ledgerHasFold && (
                 <button
@@ -823,6 +863,7 @@ export default function GuestAccountPage() {
                   <span style={{ fontSize: 20, fontWeight: 800, color: totalDue > 0 ? '#dc2626' : '#15803d' }}>${((overpaid > 0 ? overpaid : totalDue)/100).toFixed(2)}</span>
                 </div>
               </div>
+              </>)}
             </div>
           )}
 
