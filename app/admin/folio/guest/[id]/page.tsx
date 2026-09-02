@@ -1,12 +1,14 @@
 'use client'
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
-import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
+import { classifyLineItem, normalizeBillingMode, laneBalances, LANES, type Lane } from '@/lib/ledger-lanes'
+import { accountBuckets, paymentLaneForBucket, BUCKETS, type Bucket } from '@/lib/account-buckets'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 import { notVoided } from '@/lib/ledger'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
@@ -136,6 +138,16 @@ export default function GuestAccountPage() {
    * be told apart from the store tab and the electric bill afterwards.
    */
   const [paymentLane, setPaymentLane] = useState<Lane | ''>('')
+  const [labels, setLabels] = useState<BucketLabels>(() => bucketLabels(null))
+  /** Which bucket door the modal is on, in separated mode. 'both' settles each exactly. */
+  const [payBucket, setPayBucket] = useState<Bucket | 'both' | ''>('')
+  /** ?bucket=camp|seasonal — arrived from a card's "Take a payment" on the camper page. Held in a
+   *  ref, not state, because it is consumed once and must not re-fire on every render. */
+  const pendingBucket = useRef<Bucket | null>(null)
+  useEffect(() => {
+    const b = new URLSearchParams(window.location.search).get('bucket')
+    if (b === 'camp' || b === 'seasonal') pendingBucket.current = b
+  }, [])
   const [terminalStatus, setTerminalStatus] = useState('idle')
   const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [paymentNote, setPaymentNote] = useState('')
@@ -166,6 +178,10 @@ export default function GuestAccountPage() {
     if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
     supabase.from('settings').select('billing_mode').single()
       .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
+    // Its own guarded select, for the same reason as billing_mode above. This park has no
+    // bucket-label columns, so this always falls back to the built-in names — which is intended.
+    supabase.from('settings').select('bucket_label_camp, bucket_label_seasonal').single()
+      .then(({ data, error }) => { if (!error) setLabels(bucketLabels(data)) })
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
     // Find or create a standing folio for this guest using guest_id
@@ -419,6 +435,38 @@ export default function GuestAccountPage() {
       : 0
     const totalAmount = baseAmount + surchargeAmount
     setSavingPayment(true)
+
+    // ⚠ "PAY BOTH" IS TWO ROWS FROM ONE TENDER, and it has to be: a single row carries one lane,
+    // so one bucket would absorb the other and the two balances would not both land on zero. Each
+    // row carries its own bucket's balance — Seasonal tagged, Camp untagged — which is exactly
+    // what makes each account settle. One insert call, so it cannot land half-applied.
+    //
+    // The surcharge follows the same split, computed per row from that row's own amount rather
+    // than allocated proportionally, so the ledger and the tender agree to the cent. In practice
+    // this is never a card (see the door above), so the surcharge is normally zero here.
+    const bothRows = payBucket === 'both' && buckets
+      ? BUCKETS
+          .map(b => ({ bucket: b, amount: Math.max(0, buckets[b].balance) }))
+          .filter(r => r.amount > 0)
+          .map(r => {
+            const sc = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
+              ? Math.round(r.amount * (cardSurcharge / 100)) : 0
+            return {
+              folio_id: folio.id,
+              method: paymentMethod,
+              amount: r.amount + sc,
+              surcharge_amount: sc,
+              status: 'completed',
+              note: paymentNote,
+              // null for Camp — an untagged, whole-account row, exactly as every payment here is.
+              lane: paymentLaneForBucket(r.bucket),
+            }
+          })
+      : null
+
+    if (bothRows) {
+      await supabase.from('folio_payments').insert(bothRows)
+    } else {
     await supabase.from('folio_payments').insert({
       folio_id: folio.id,
       method: paymentMethod,
@@ -433,6 +481,7 @@ export default function GuestAccountPage() {
       // existed. `amount` and `surcharge_amount` above are untouched either way.
       ...(paymentLane ? { lane: paymentLane } : {}),
     })
+    }
     setSavingPayment(false)
     setShowPayment(false)
     setPaymentAmount('')
@@ -441,6 +490,7 @@ export default function GuestAccountPage() {
     setPaymentMethod('cash')
     setWaiveFee(false)
     setPaymentLane('')
+    setPayBucket('')
     await loadFolioData(folio.id)
   }
 
@@ -538,6 +588,25 @@ export default function GuestAccountPage() {
   // grand total is still `totalDue` / `overpaid` — the same figures the flat view prints — so
   // the two views cannot disagree about what is owed.
   const laneView = billingMode === 'separated' && !!guest?.is_seasonal
+  // ⚠ ONE DERIVATION, FROM THIS PAGE'S OWN ROWS — laneBalances() then accountBuckets(). A door can
+  // therefore never offer a figure the ledger printed behind it disagrees with.
+  const buckets = laneView
+    ? accountBuckets(laneBalances(lineItems, payments, { electricLineItemIds: electricItemIds }))
+    : null
+
+  // ⚠ CONSUMED ONLY ONCE THE BALANCES EXIST. Opening the door before `buckets` is derived would
+  // pre-fill $0.00 and quietly offer to take nothing. Clearing the ref makes it a one-shot, so it
+  // never fights an operator who then picks a different door.
+  useEffect(() => {
+    const want = pendingBucket.current
+    if (!want || !buckets) return
+    pendingBucket.current = null
+    setPayBucket(want)
+    setPaymentLane(paymentLaneForBucket(want) ?? '')
+    const due = Math.max(0, buckets[want].balance)
+    if (due > 0) setPaymentAmount((due / 100).toFixed(2))
+    setShowPayment(true)
+  }, [buckets])
   const laneOf = (ev: LedgerEvent): Lane | 'unassigned' => {
     if (ev.itemId) {
       const item = lineItems.find(i => i.id === ev.itemId)
@@ -911,6 +980,68 @@ export default function GuestAccountPage() {
             {guest?.is_seasonal && (
               <>
                 <label style={ml}>What is this payment for?</label>
+                {/* ── SEPARATED: TWO DOORS AND "PAY BOTH" ────────────────────────────────────
+                    The four boxes below offered each LANE's charges against its own tagged
+                    payments — and only 15 of this park's 652 payments carry a lane, so Electric
+                    and Store offered figures the camper did not owe, pre-filled into the amount
+                    box. The two buckets are exact, so a door offers what is actually owed.
+
+                    ⚠ COMBINED KEEPS THE FOUR BOXES, CHARACTER FOR CHARACTER. This park is
+                    combined today, so nothing below changes until the mode is flipped. */}
+                {laneView && buckets ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))', gap: 8, marginBottom: 16 }}>
+                    {BUCKETS.map(b => {
+                      const on = payBucket === b
+                      const due = Math.max(0, buckets[b].balance)
+                      const accent = b === 'seasonal' ? '#B4842B' : '#15803d'
+                      return (
+                        <button key={b}
+                          onClick={() => {
+                            setPayBucket(b)
+                            // ⚠ SEASONAL IS TAGGED, CAMP IS UNTAGGED — paymentLaneForBucket('camp')
+                            // returns null, which is exactly what every payment on this park
+                            // already is. That is why the 637 untagged payments need no back-fill:
+                            // they already read as Camp.
+                            setPaymentLane(paymentLaneForBucket(b) ?? '')
+                            if (due > 0 && !paymentAmount) setPaymentAmount((due / 100).toFixed(2))
+                          }}
+                          style={{ padding: '10px 8px', border: '2px solid ' + (on ? accent : '#e5e7eb'), borderRadius: 8, background: on ? (b === 'seasonal' ? '#FFFBEB' : '#f0fdf4') : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: on ? accent : '#374151', lineHeight: 1.3 }}>
+                          {labels[b]}
+                          <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: on ? accent : '#9ca3af' }}>
+                            {due > 0 ? `$${(due / 100).toFixed(2)} due` : 'paid up'}
+                          </span>
+                        </button>
+                      )
+                    })}
+                    {/* ⚠ PAY BOTH SETTLES EACH BUCKET EXACTLY, so its amount is fixed at the sum
+                        rather than editable. A part payment split across two accounts has no
+                        honest allocation — any rule for it would be a guess that silently
+                        misstates one of the two balances — so a partial payment goes through a
+                        single door. Offered only when both actually owe something.
+
+                        ⚠ NOT ON A CARD TENDER, by decision. A card charge is one Square payment;
+                        writing it as two rows means sending a two-row split through the terminal
+                        path, and although #49 made that technically possible, the per-row
+                        surcharge arithmetic on a live money path has not been exercised with a
+                        real card. It stays out until it can be.
+                        TODO(pay-both-on-card): send lanes:[camp,seasonal] via sendToTerminal()
+                        and drop the paymentMethod check below. */}
+                    {paymentMethod !== 'card' && buckets.camp.balance > 0 && buckets.seasonal.balance > 0 && (() => {
+                      const on = payBucket === 'both'
+                      const total = buckets.camp.balance + buckets.seasonal.balance
+                      return (
+                        <button
+                          onClick={() => { setPayBucket('both'); setPaymentLane(''); setPaymentAmount((total / 100).toFixed(2)) }}
+                          style={{ padding: '10px 8px', border: '2px solid ' + (on ? '#2E6B8A' : '#e5e7eb'), borderRadius: 8, background: on ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: on ? '#2E6B8A' : '#374151', lineHeight: 1.3 }}>
+                          Pay both
+                          <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: on ? '#2E6B8A' : '#9ca3af' }}>
+                            ${(total / 100).toFixed(2)} · settles both
+                          </span>
+                        </button>
+                      )
+                    })()}
+                  </div>
+                ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))', gap: 8, marginBottom: 16 }}>
                   {([
                     { v: 'seasonal' as const, label: 'Seasonal fee' },
@@ -939,6 +1070,13 @@ export default function GuestAccountPage() {
                     )
                   })}
                 </div>
+                )}
+                {payBucket === 'both' && buckets && (
+                  <p style={{ fontSize: 12, color: '#166534', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6, padding: '8px 10px', marginTop: -8, marginBottom: 16 }}>
+                    Records two payments from this one tender — {labels.seasonal} ${(buckets.seasonal.balance / 100).toFixed(2)} and{' '}
+                    {labels.camp} ${(buckets.camp.balance / 100).toFixed(2)} — so each account lands on zero.
+                  </p>
+                )}
                 {/* A warning used to sit here saying a terminal card payment could not carry the
                     operator's chosen lane on this park. It can now: the charge stores the split
                     and the completion applies it. Removed rather than reworded — a caveat that is
