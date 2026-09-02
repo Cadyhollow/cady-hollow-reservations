@@ -20,6 +20,8 @@ import {
   planElectricPost, postSkipLabel, allTimeBilled, describeVoid,
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
+import { seasonalBalanceOf, campFromAccount } from '@/lib/account-buckets'
+import { normalizeBillingMode } from '@/lib/ledger-lanes'
 import {
   cardStatus, primaryLabel, menuFor, tallyCards, matchesFilter, owesBalance,
   type CardRow, type CardFilter, type MenuActionId,
@@ -93,6 +95,9 @@ type CamperRow = {
   guest: Guest
   folioId: string
   folioBalance: number
+  /** The seasonal slice of the same folio. Camp = folioBalance − this. Computed either way; the
+   *  rows are already loaded, so it costs nothing. */
+  seasonalBalance: number
   recentCharges: { id: string; description: string; line_total: number; charged_at: string }[]
   folioPayments: FolioPayment[]
   previousReading: string
@@ -316,6 +321,9 @@ export default function ElectricBillingPage() {
 
   // ── Redesign UI state. Presentation only: none of these change what is billed. ──
   /** Which card's "⋯" menu is open. One at a time, closed on outside click. */
+  /** ⚠ ITS OWN GUARDED SELECT, failing safe to 'combined'. A park without the Phase 4 column must
+   *  land on the flow it already has. */
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
   const [openMenu, setOpenMenu] = useState<number | null>(null)
   /** Which card has its inline edit panel open. */
   const [editing, setEditing] = useState<number | null>(null)
@@ -330,6 +338,10 @@ export default function ElectricBillingPage() {
   const monthOptions = generateMonthOptions()
 
   useEffect(() => { fetchCampers(); fetchMessage() }, [])
+  useEffect(() => {
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
+  }, [])
 
   async function fetchMessage() {
     const { data } = await supabase.from('settings')
@@ -362,6 +374,24 @@ export default function ElectricBillingPage() {
     alert('Message saved!')
   }
 
+  /**
+   * The balance this screen shows for a camper.
+   *
+   * ⚠ SEPARATED PARKS SEE THE CAMP ACCOUNT, NOT THE WHOLE ACCOUNT. This is the ELECTRIC screen: a
+   * seasonal camper with an outstanding season fee must not appear here as owing it. Their $32 of
+   * electric should read $32, not $1,632 — the same rule the camper's own bill follows.
+   *
+   * Camp is the account remainder (account − seasonal), which is exact even though only 15 of this
+   * park's 652 payments carry a lane.
+   *
+   * COMBINED PARKS ARE UNTOUCHED — and this park is combined: folioBalance is returned exactly as
+   * before and the seasonal slice is never consulted.
+   */
+  const shownBalance = (row: CamperRow) =>
+    billingMode === 'separated'
+      ? campFromAccount(row.folioBalance, row.seasonalBalance)
+      : row.folioBalance
+
   async function fetchCampers() {
     setLoading(true)
     const { data: guests } = await supabase.from('guests').select('*').eq('electric_billing_enabled', true)
@@ -374,6 +404,7 @@ export default function ElectricBillingPage() {
         .eq('folio_type', 'guest_account').eq('status', 'open').single()
 
       let folioBalance = 0
+      let seasonalBalance = 0
       let recentCharges: any[] = []
       let folioPayments: FolioPayment[] = []
 
@@ -382,9 +413,15 @@ export default function ElectricBillingPage() {
           supabase.from('folio_line_items').select('*').eq('folio_id', folio.id).order('charged_at'),
           supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at', { ascending: false }),
         ])
-        const itemsTotal = sumLineTotals(items)
+        // ⚠ THE SAME ROWS, SUMMED THE SAME WAY. sumLineTotals() excludes voided charges, so the
+        // seasonal slice must be fed void-filtered rows too — Camp is the REMAINDER of that
+        // figure, and two different summation rules would stop camp + seasonal equalling the
+        // account. That rule is stated in seasonalBalanceOf's own comment.
+        const liveItems = (items || []).filter(notVoided)
+    const itemsTotal = sumLineTotals(items)
         const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
         folioBalance = itemsTotal - paymentsTotal
+        seasonalBalance = seasonalBalanceOf(liveItems, pmts || [])
         recentCharges = items || []
         folioPayments = pmts || []
       }
@@ -394,7 +431,7 @@ export default function ElectricBillingPage() {
       const receiptAlreadySent = mostRecentPayment?.receipt_sent_at ? true : false
 
       return {
-        guest, folioId: folio?.id || '', folioBalance, recentCharges, folioPayments,
+        guest, folioId: folio?.id || '', folioBalance, seasonalBalance, recentCharges, folioPayments,
         previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0, finalAmount: '',
         skip: false, sent: false, sending: false, error: '',
         showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '', showBillConfirm: false, billGuard: null,
@@ -464,6 +501,7 @@ export default function ElectricBillingPage() {
     // Posted only — the History table lists bills, and a draft has been charged to nothing.
     const { data: readings } = await supabase.from('electric_readings').select('*').eq('guest_id', row.guest.id).eq('status', 'posted').order('created_at', { ascending: false })
     let newBalance = row.folioBalance
+    let newSeasonal = row.seasonalBalance
     if (row.folioId) {
       const [{ data: items }, { data: pmts }] = await Promise.all([
         supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
@@ -472,8 +510,10 @@ export default function ElectricBillingPage() {
       const itemsTotal = sumLineTotals(items)
       const paymentsTotal = (pmts || []).reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
       newBalance = itemsTotal - paymentsTotal
+      // Void-filtered, matching sumLineTotals above, so camp + seasonal still equals the account.
+      newSeasonal = seasonalBalanceOf((items || []).filter(notVoided), pmts || [])
     }
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: readings || [], folioBalance: newBalance, historyLoaded: true, showHistory: true }; return u })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: readings || [], folioBalance: newBalance, seasonalBalance: newSeasonal, historyLoaded: true, showHistory: true }; return u })
   }
 
   async function recordPayment(index: number) {
@@ -508,10 +548,11 @@ export default function ElectricBillingPage() {
     // account credit — clamping it here recorded the credit but hid it, so the operator saw a
     // settled account and no sign of the money sitting on it.
     const newBalance = itemsTotal - paymentsTotal
+    const newSeasonal = seasonalBalanceOf((items || []).filter(notVoided), pmts || [])
 
     setCampers(prev => {
       const u = [...prev]
-      u[index] = { ...u[index], folioBalance: newBalance, folioPayments: pmts || [], savingPayment: false, showPayment: false, paymentAmount: '', paymentNote: '', lastPaymentRecorded: newPayment || null, showReceiptConfirm: false, receiptSent: false }
+      u[index] = { ...u[index], folioBalance: newBalance, seasonalBalance: newSeasonal, folioPayments: pmts || [], savingPayment: false, showPayment: false, paymentAmount: '', paymentNote: '', lastPaymentRecorded: newPayment || null, showReceiptConfirm: false, receiptSent: false }
       return u
     })
   }
@@ -528,7 +569,10 @@ export default function ElectricBillingPage() {
         guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
         paymentAmount: row.lastPaymentRecorded.amount, paymentMethod: row.lastPaymentRecorded.method,
         paymentNote: row.lastPaymentRecorded.note, paidAt: row.lastPaymentRecorded.paid_at,
-        remainingBalance: row.folioBalance, paymentId: row.lastPaymentRecorded.id,
+        // ⚠ THE CAMP BALANCE IN SEPARATED MODE, and the route recomputes it anyway (see below) —
+        // this is the fallback it uses when it cannot read the folio.
+        folioId: row.folioId,
+        remainingBalance: shownBalance(row), paymentId: row.lastPaymentRecorded.id,
       }),
     })
     const data = await res.json()
@@ -887,7 +931,7 @@ export default function ElectricBillingPage() {
       }),
     })
     const data = await res.json()
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: liveBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: liveBalance, seasonalBalance: seasonalBalanceOf((allItems || []).filter(notVoided), allPayments || []), historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
   async function sendAllBills() {
@@ -935,7 +979,9 @@ export default function ElectricBillingPage() {
     meterLines: row.meterBreakdown.length,
     finalAmount: row.finalAmount,
     // ⚠ SURFACED, NOT RECOMPUTED. row.folioBalance is what fetchCampers() read off the folio.
-    balanceCents: row.folioBalance,
+    // ⚠ SURFACED, NOT RECOMPUTED. shownBalance() picks between the whole account and the Camp
+    // Account; both figures were read off the folio by fetchCampers().
+    balanceCents: shownBalance(row),
   })
 
   /** Every menu item dispatches to a handler that already existed. Nothing is reimplemented. */
@@ -1396,11 +1442,12 @@ export default function ElectricBillingPage() {
                         <div className="eb-editpanel" onClick={e => e.stopPropagation()}>
                           <div className="eb-eh">
                             Take a payment — {row.guest.name}
-                            {row.folioBalance !== 0 && (
-                              <span className={`eb-balance${row.folioBalance < 0 ? ' credit' : ''}`}>
-                                {row.folioBalance < 0
-                                  ? `Credit on account ${fmtUsd(Math.abs(row.folioBalance))}`
-                                  : `Balance due ${fmtUsd(row.folioBalance)}`}
+                            {shownBalance(row) !== 0 && (
+                              <span className={`eb-balance${shownBalance(row) < 0 ? ' credit' : ''}`}
+                                title={billingMode === 'separated' ? 'Camp Account — electric & store; seasonal is billed separately' : undefined}>
+                                {shownBalance(row) < 0
+                                  ? `Credit on account ${fmtUsd(Math.abs(shownBalance(row)))}`
+                                  : `Balance due ${fmtUsd(shownBalance(row))}`}
                               </span>
                             )}
                           </div>
@@ -1524,9 +1571,14 @@ export default function ElectricBillingPage() {
                               ))}
                             </>
                           )}
-                          <div className={`eb-balrow${row.folioBalance > 0 ? ' due' : ''}`}>
-                            <span>{row.folioBalance < 0 ? 'Credit on account' : row.folioBalance === 0 ? 'Paid in full' : 'Balance due'}</span>
-                            <span className="tnum">{fmtUsd(Math.abs(row.folioBalance))}</span>
+                          {/* Camp in separated mode, like the pill — a staff member must not see
+                              two different "balance due" figures for the same camper. */}
+                          <div className={`eb-balrow${shownBalance(row) > 0 ? ' due' : ''}`}>
+                            <span>
+                              {shownBalance(row) < 0 ? 'Credit on account' : shownBalance(row) === 0 ? 'Paid in full' : 'Balance due'}
+                              {billingMode === 'separated' && <span className="eb-balnote"> · Camp Account</span>}
+                            </span>
+                            <span className="tnum">{fmtUsd(Math.abs(shownBalance(row)))}</span>
                           </div>
                           <div className="eb-editactions">
                             <button className="eb-ghost sm" onClick={() => loadHistory(i)}>Hide history</button>
@@ -1546,7 +1598,7 @@ export default function ElectricBillingPage() {
         campers.length === 0
           ? <div className="eb-empty">No seasonal campers found.</div>
           : <div className="eb-cards">
-              {campers.map(row => <GuestAccountCard key={row.guest.id} guest={row.guest} folioBalance={row.folioBalance} />)}
+              {campers.map(row => <GuestAccountCard key={row.guest.id} guest={row.guest} balanceCents={shownBalance(row)} />)}
             </div>
       )}
 
@@ -1595,7 +1647,9 @@ export default function ElectricBillingPage() {
 }
 
 
-function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance: number }) {
+/** `balanceCents` is whatever the page decided to show — Camp in separated mode, the whole account
+ *  in combined. Named for what it is rather than where it came from. */
+function GuestAccountCard({ guest, balanceCents: folioBalance }: { guest: Guest; balanceCents: number }) {
   const [readings, setReadings] = useState<any[]>([])
   const [payments, setPayments] = useState<any[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -1867,6 +1921,7 @@ const EB_CSS = `
 .eb-payright{display:flex;align-items:center;gap:10px}
 .eb-balrow{display:flex;justify-content:space-between;padding:10px 0 2px;margin-top:8px;border-top:1px solid var(--line);font-weight:700;font-size:13px;color:var(--good)}
 .eb-balrow.due{color:var(--watch)}
+.eb-balnote{font-weight:600;font-size:11px;color:var(--muted)}
 .eb-empty{text-align:center;color:var(--muted);padding:3rem 0}
 
 /* ── CADY-ONLY. Styles for the two capabilities the template's page has never had: the

@@ -3,6 +3,8 @@ import { renderElectricMessageFor } from '@/lib/electric-bill-tokens'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement } from '@/lib/ledger'
+import { normalizeBillingMode, laneBalances } from '@/lib/ledger-lanes'
+import { accountBuckets, billAccountBalance, filterToBucket } from '@/lib/account-buckets'
 import { renderStatementHtml } from '@/lib/statement-html'
 import { requireRole } from '@/lib/require-role'
 
@@ -42,6 +44,87 @@ export async function POST(request: NextRequest) {
       .select('park_name, park_location, park_email')
       .single()
 
+    // ── PHASE 4: WHICH MONEY GOES ON THIS BILL ──────────────────────────────────────────────
+    //
+    // 'combined' (this park today) → the statement below is the WHOLE folio, byte-for-byte as it
+    // always has been. 'separated' → the CAMP ACCOUNT: electric, store and everyday, with the
+    // seasonal fee left off.
+    //
+    // ⚠ ITS OWN GUARDED SELECT. A park that has not run the Phase 4 migration has no billing_mode
+    // column, and a failed select there would break an email that works today. Any failure lands
+    // on 'combined', which is exactly today's behaviour.
+    let billingMode: 'combined' | 'separated' = 'combined'
+    try {
+      const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
+      billingMode = normalizeBillingMode(modeRow?.billing_mode)
+    } catch { /* stays combined */ }
+
+    // Filled in from the folio below, in separated mode only.
+    let campBalanceCents: number | null = null
+
+    let statementHtml = ''
+    let ledgerBuilt = false
+    if (folioId) {
+      try {
+        const [{ data: items }, { data: pmts }] = await Promise.all([
+          // ⚠ `lane` AND `product_id` MUST BE SELECTED. classifyLineItem() checks a DECLARED lane
+          // first and only then infers from the electric signal and product_id. The seasonal fee
+          // has neither, so without `lane` it falls through to `other`, which rolls up into Camp —
+          // and the season fee would appear on the electric bill. That exact omission was a real
+          // bug in the blueprint (its PR #91); it is not repeated here.
+          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, voided, product_id, lane').eq('folio_id', folioId),
+          supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at, lane').eq('folio_id', folioId).eq('status', 'completed'),
+        ])
+
+        // The electric signal, so a metered charge classifies as electric rather than `other`.
+        // Both fold into Camp, so it does not move the total — it is read for the classification
+        // itself to be right.
+        const itemIds = (items || []).map(i => i.id)
+        const { data: readings } = itemIds.length
+          ? await supabase.from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', itemIds)
+          : { data: [] }
+        const ctx = {
+          electricLineItemIds: new Set(
+            (readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[]),
+        }
+
+        // ── SEPARATED: THE BILL IS THE CAMP ACCOUNT ─────────────────────────────────────────
+        //
+        // Electric, store and everyday — everything EXCEPT the seasonal fee. That matches the
+        // headline balance below and matches how this park bills: its own bill message tells
+        // campers that firewood and visitor fees are included in the total amount due.
+        //
+        // COMBINED — this park today — takes the whole folio, exactly as it always has.
+        let stmtItems = items || []
+        let stmtPmts = pmts || []
+        if (billingMode === 'separated') {
+          const camp = filterToBucket('camp', stmtItems, stmtPmts, ctx)
+          stmtItems = camp.items
+          stmtPmts = camp.payments
+        }
+
+        campBalanceCents = billingMode === 'separated'
+          ? accountBuckets(laneBalances(items || [], pmts || [], ctx)).camp.balance
+          : null
+
+        const stmt = buildStatement(buildLedger(stmtItems, stmtPmts), Date.now(), 90)
+
+        statementHtml = renderStatementHtml(stmt)
+        ledgerBuilt = true
+      } catch (e) {
+        console.error('Ledger statement build failed; falling back to lump-sum:', e)
+      }
+    }
+
+    /** What this bill says is owed: the Camp Account in separated mode, the whole account in
+     *  combined. One value, so the headline figure and the {{balance}} token cannot disagree.
+     *
+     *  ⚠ THE SERVER DECIDES IT. `totalBalance` arrives in the request body from the Electric
+     *  Billing screen; a stale or wrong figure from any caller must not reach a camper. It is
+     *  used only as the fallback when the folio could not be read — a bill with an imperfect
+     *  balance beats no bill. */
+    const billBalance: number = billAccountBalance(billingMode, campBalanceCents, totalBalance)
+
     // ⚠ THE OWNER'S MESSAGE IS NOW RENDERED, NOT INSERTED RAW.
     //
     // It used to go straight into the email with only newlines converted. The billing screen now
@@ -56,7 +139,7 @@ export async function POST(request: NextRequest) {
       guestName, siteNumber, billingMonth,
       kwhUsed: typeof kwhUsed === 'number' ? kwhUsed : null,
       amountCents: typeof electricAmount === 'number' ? electricAmount : null,
-      balanceCents: typeof totalBalance === 'number' ? totalBalance : null,
+      balanceCents: typeof billBalance === 'number' ? billBalance : null,
     })
 
     const campgroundName = settings?.park_name || 'Our Campground'
@@ -76,31 +159,15 @@ export async function POST(request: NextRequest) {
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>
       </tr>`).join('')
 
-    const isCredit = totalBalance < 0
-    const balanceColor = isCredit ? '#4ADE80' : totalBalance === 0 ? '#4ADE80' : '#FCD34D'
-    const balanceLabel = isCredit ? 'Credit on Account' : totalBalance === 0 ? '✓ Paid in Full' : 'Total Balance Due'
-    const balanceDisplay = isCredit ? '$' + (Math.abs(totalBalance)/100).toFixed(2) : totalBalance === 0 ? '' : '$' + (totalBalance/100).toFixed(2)
+    const isCredit = billBalance < 0
+    const balanceColor = isCredit ? '#4ADE80' : billBalance === 0 ? '#4ADE80' : '#FCD34D'
+    const balanceLabel = isCredit ? 'Credit on Account' : billBalance === 0 ? '✓ Paid in Full' : 'Total Balance Due'
+    const balanceDisplay = isCredit ? '$' + (Math.abs(billBalance)/100).toFixed(2) : billBalance === 0 ? '' : '$' + (billBalance/100).toFixed(2)
 
     // ── Account Statement: a running ledger — every charge AND payment/credit in
     //    true date order with a running balance per line. Pulls the COMPLETE folio
     //    (electric, POS items, payments, credits), not just this month's electric.
     //    Rendered by the shared renderStatementHtml (also used by the account receipt). ──
-    let statementHtml = ''
-    let ledgerBuilt = false
-    if (folioId) {
-      try {
-        const [{ data: items }, { data: pmts }] = await Promise.all([
-          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, voided').eq('folio_id', folioId),
-          supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at').eq('folio_id', folioId).eq('status', 'completed'),
-        ])
-        const stmt = buildStatement(buildLedger(items || [], pmts || []), Date.now(), 90)
-
-        statementHtml = renderStatementHtml(stmt)
-        ledgerBuilt = true
-      } catch (e) {
-        console.error('Ledger statement build failed; falling back to lump-sum:', e)
-      }
-    }
 
     if (!ledgerBuilt) {
       // Fallback (no folioId, or folio fetch failed): the original lump-sum layout,
