@@ -2,6 +2,7 @@
 // trusted boundary: the admin UI and the public packet page never touch the
 // signatures / seasonal_contracts / guest_notes tables via the anon client.
 import type { NextRequest } from 'next/server'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 import { randomBytes, randomUUID } from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
@@ -246,6 +247,24 @@ export async function getBillingMode(): Promise<BillingMode> {
     return normalizeBillingMode(data?.billing_mode)
   } catch {
     return 'combined'
+  }
+}
+
+/**
+ * The park's wording for the two money buckets, defaults where they have chosen nothing.
+ *
+ * ⚠ ITS OWN GUARDED SELECT, like getBillingMode() above and for the same reason: this park has NOT
+ * run a bucket-labels migration and has neither column, so widening an existing settings select to
+ * include them would fail that whole query and take the screen with it. A failure here is not an
+ * error state — it is a park that has not configured this — so it falls back to the built-in
+ * labels ("Camp Account" / "Seasonal") rather than surfacing anything.
+ */
+export async function getBucketLabels(): Promise<BucketLabels> {
+  try {
+    const { data } = await svc.from('settings').select('bucket_label_camp, bucket_label_seasonal').limit(1).single()
+    return bucketLabels(data)
+  } catch {
+    return bucketLabels(null)
   }
 }
 
