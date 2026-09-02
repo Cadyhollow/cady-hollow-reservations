@@ -5,6 +5,13 @@ import { requireRole } from '@/lib/require-role'
 import { notVoided } from '@/lib/ledger'
 import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
 import { paymentLines, balanceLine, receiptMoney } from '@/lib/receipt-lines'
+import { laneBalances } from '@/lib/ledger-lanes'
+import { accountBuckets } from '@/lib/account-buckets'
+import { getBucketLabels } from '@/lib/contract-server'
+import {
+  statementActivity, renderAccountStatementHtml, renderAccountStatementText,
+} from '@/lib/account-statement'
+import type { StatementView, StatementBuckets } from '@/lib/account-statement'
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
@@ -126,10 +133,31 @@ export async function POST(request: NextRequest) {
     const laneReceipt =
       (onlyLane !== null || billingMode === 'separated') && guestIsSeasonal && !folio.reservation_id
 
+    // ── THE ACCOUNT STATEMENT ────────────────────────────────────────────────────────────────
+    //
+    // The whole-account statement a camper is emailed from their guest folio. It used to fall
+    // through to the plain-text branch at the foot of this route, which dumped EVERY charge and
+    // EVERY payment since the account opened — hundreds of lines on a multi-year seasonal camper,
+    // with the one figure they wanted buried at the bottom. It is now its own rendered email.
+    //
+    // ⚠ IT DOES NOT TAKE OVER THE LANE-SCOPED RECEIPT. `!onlyLane` keeps "Send seasonal receipt"
+    // on the grouped renderer below — that is a deliberate per-receipt request for ONE lane, not
+    // the whole account, and it is a separate feature.
+    //
+    // ⚠ NOR THE RESERVATION OR WALK-UP RECEIPTS. `receiptType === 'account'` is exact: a
+    // single-stay itemised receipt is legitimately itemised, and the walk-up branch keeps the
+    // text renderer it has always had. See the report.
+    //
+    // It is NOT mode-gated — the dump was just as unusable on a combined park. Only the closing
+    // BALANCE BLOCK branches on billing mode: two account cards in separated, one total in
+    // combined.
+    const isAccountStatement = receiptType === 'account' && !onlyLane && !folio.reservation_id
+    const statementBuckets = isAccountStatement && billingMode === 'separated'
+
     // The electric signal, resolved the same way everywhere in Phase 4 — the readings that point
     // at these charges, never the category.
     let electricIds = new Set<string>()
-    if (laneReceipt && lineItems.length) {
+    if ((laneReceipt || statementBuckets) && lineItems.length) {
       const { data: readings } = await supabase
         .from('electric_readings').select('folio_line_item_id')
         .in('folio_line_item_id', lineItems.map((i: any) => i.id))
@@ -144,6 +172,58 @@ export async function POST(request: NextRequest) {
     // One formatter for every figure on a receipt, shared with lib/receipt-lines.ts so the rows
     // and the totals cannot render the same amount two different ways.
     const money = receiptMoney
+
+    // ── RENDER THE ACCOUNT STATEMENT ─────────────────────────────────────────────────────────
+    if (isAccountStatement) {
+      const now = new Date()
+      const rows = statementActivity(lineItems, payments || [], { now })
+
+      // ⚠ SERVER-COMPUTED, NEVER TAKEN FROM THE CALLER. Same inputs as every balance in the app:
+      // voided charges excluded, payments net of surcharge. On an account folio there is no
+      // reservation, so this equals the `balanceRemaining` computed above — the statement and the
+      // folio cannot disagree.
+      const lanes = laneBalances(lineItems, payments || [], { electricLineItemIds: electricIds })
+      const accountBalance = lanes.accountBalance
+
+      // ⚠ THE RENDERERS LIVE IN lib/account-statement.ts, NOT HERE. Composing the email in the
+      // route would mean the only way to look at it is to run the route — which needs the live
+      // database and a staff session, and puts a send one flag away from a real camper. Pure
+      // functions render to a file from fixtures instead, so the layout is verified without
+      // touching production and the emailed copy cannot differ from the one that was checked.
+      let bucketView: StatementBuckets | null = null
+      if (statementBuckets) {
+        const b = accountBuckets(lanes)
+        const labels = await getBucketLabels()
+        bucketView = {
+          campLabel: labels.camp, campBalance: b.camp.balance,
+          seasonalLabel: labels.seasonal, seasonalBalance: b.seasonal.balance,
+        }
+      }
+
+      const view: StatementView = {
+        parkName: campgroundName,
+        parkLocation: campgroundLocation,
+        guestName: folio.guest_name || 'there',
+        now,
+        rows,
+        accountBalance,
+        buckets: bucketView,
+      }
+      const statementHtml = renderAccountStatementHtml(view)
+      const statementText = renderAccountStatementText(view)
+
+      if (isPreview) return NextResponse.json({ html: statementHtml, text: statementText })
+
+      await getResend().emails.send({
+        from: `${campgroundName} <${process.env.RESEND_GMAIL_FROM || fromEmail}>`,
+        replyTo: replyToEmail,
+        to: folio.guest_email,
+        subject: `Account statement — ${campgroundName} · ${new Date().toLocaleDateString()}`,
+        html: statementHtml,
+        text: statementText,
+      })
+      return NextResponse.json({ success: true })
+    }
 
     // Per-night transparency on the stay line. base_nightly_rate is written at booking
     // time; fall back to dividing the stay by its nights when it's absent (older rows).
