@@ -256,33 +256,70 @@ export default function AdminDashboard() {
         departing: (todayDepartures || []).length,
       })
     }
-    const { count } = await supabase
+    // ── NIGHTLY INVENTORY, WHICH IS NOT THE SAME AS "EVERY ACTIVE SITE" ───────────────────
+    //
+    // ⚠ SEASONAL SITES ARE NOT NIGHTLY INVENTORY. A site sold for the season is occupied by that
+    // camper all season; it is not a pitch the park can let tonight. Cady has 52 of them against
+    // 36 nightly sites, so counting them made both the occupancy denominator and "Sites Available
+    // Tonight" read 88 when the park has 36 to sell.
+    //
+    // ⚠ FILTERED IN JS, NOT IN THE QUERY. Cady's `sites` table does have `is_seasonal_site`, so a
+    // server filter would work here — but PostgREST fails any query that NAMES a column the table
+    // lacks, and this same page ships to parks that have not run the seasonal-site migration.
+    // Keeping the filter in JS means one shape of this code everywhere: on a park without the
+    // column the field is `undefined`, and `!== true` leaves the site counted, exactly as today.
+    //
+    // `!== true` also covers `false` and `null` alike.
+    const { data: activeSitesRaw } = await supabase
       .from('sites')
-      .select('*', { count: 'exact', head: true })
+      .select('*')
       .eq('is_available', true)
-    setTotalActiveSites(count || 0)
+    const nightlySites = ((activeSitesRaw || []) as { is_seasonal_site?: boolean | null }[])
+      .filter(x => x.is_seasonal_site !== true)
+    setTotalActiveSites(nightlySites.length)
 
-    // Walk-in sales count today
+    // ── WALK-IN SALES TODAY: THE PARK'S DAY, NOT THE UTC DAY ──────────────────────────────
+    //
+    // WHAT IS COUNTED IS UNCHANGED — every completed folio payment for the day, bill payments
+    // included, which is what the owner wants it to mean. Only the WINDOW was wrong.
+    //
+    // ⚠ A TIMESTAMP STRING WITH NO OFFSET IS READ AS UTC. `today` is the correct LOCAL date, but
+    // `today + 'T00:00:00'` carries no zone, so Postgres compared against a UTC day. A payment
+    // taken at 8:40 PM local is stored as the next day in UTC and was counted as "today" the
+    // evening before — the phantom +1 on a quiet morning.
+    //
+    // Real on this park: a $15 Venmo taken 1 Sep at 8:40 PM local is stored 2026-09-02 00:40 UTC,
+    // and 14 payments in the park's history land on a different UTC day from their local one.
+    //
+    // Fixed by building the local day and converting to real UTC instants, so the boundary is the
+    // park's midnight rather than Greenwich's. `.toISOString()` carries the offset.
+    //
+    // This uses the VIEWER'S timezone — the same convention ymd() already uses on this page and
+    // the transactions list uses — so on-site staff get the right day with no new setting and no
+    // migration. A park whose staff view from another timezone would need a per-park timezone
+    // setting; that is a larger change and deliberately not made here.
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+    const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
     const { count: walkinCount } = await supabase
       .from('folio_payments')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'completed')
-      .gte('paid_at', today + 'T00:00:00')
-      .lte('paid_at', today + 'T23:59:59')
+      .gte('paid_at', dayStart.toISOString())
+      .lte('paid_at', dayEnd.toISOString())
     setWalkinCountToday(walkinCount || 0)
 
-    // Sites available tonight
-    const { count: totalSitesCount } = await supabase
-      .from('sites')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_available', true)
+    // Sites available tonight — the same nightly inventory counted above, so the two figures
+    // cannot disagree, and one query rather than two.
     const { count: occupiedCount } = await supabase
       .from('reservations')
       .select('id', { count: 'exact', head: true })
       .neq('status', 'cancelled')
       .lte('arrival_date', today)
       .gte('departure_date', today)
-    setSitesAvailableTonight(Math.max(0, (totalSitesCount || 0) - (occupiedCount || 0)))
+    // Seasonal campers hold CONTRACTS, not nightly reservations, so nothing here double-counts
+    // them: they are out of `nightlySites` and were never in `occupiedCount`. Verified against
+    // the live park — no seasonal site carries a reservation covering tonight.
+    setSitesAvailableTonight(Math.max(0, nightlySites.length - (occupiedCount || 0)))
 
     setLoading(false)
   }
@@ -719,7 +756,10 @@ export default function AdminDashboard() {
             {upcomingReservations.length === 0 ? (
               <p className="text-gray-400 text-sm text-center py-8">No upcoming arrivals.</p>
             ) : upcomingReservations.map(r => {
-              const isToday = r.arrival_date === new Date().toISOString().split('T')[0]
+              // ⚠ THE LOCAL DAY, like everything else on this page. toISOString() is UTC, so in
+              // the evening this highlighted TOMORROW'S arrivals as "today". `todayYmd` is the
+              // local date this page already computes.
+              const isToday = r.arrival_date === todayYmd
               const paidInFull = (r.total_paid ?? r.amount_paid) >= r.total_price
               return (
                 <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
