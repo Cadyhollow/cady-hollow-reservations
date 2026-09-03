@@ -11,6 +11,7 @@ import { accountBuckets, paymentLaneForBucket, BUCKETS, type Bucket } from '@/li
 import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 import AccountBucketCards from '@/app/components/AccountBucketCards'
 import { notVoided } from '@/lib/ledger'
+import { centsOf, recordAmountCents, canRecordAmount, cashState, isPrepayment } from '@/lib/payment-amount'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
@@ -23,6 +24,7 @@ import { atLeast } from '@/lib/roles'
 const supabase = createBrowserSupabase()
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
+
 
 type Guest = {
   id: string
@@ -414,12 +416,14 @@ export default function GuestAccountPage() {
 
   async function collectPayment() {
     if (!folio) return
-    const isPrepay = totalDue === 0
-    const baseAmount = isPrepay
-      ? Math.round(parseFloat(paymentAmount || '0') * 100)
-      : paymentMethod === 'cash' && cashTendered !== ''
-      ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100))
-      : Math.round(parseFloat(paymentAmount) * 100)
+    // ⚠ THE SAME `recordCents` THE BUTTON SHOWED — not a fourth re-derivation of it. This used to
+    // recompute the figure from the raw strings, which is how it could disagree with the label and
+    // bail out silently on an empty amount box while the button still invited a click. The
+    // arithmetic is unchanged; it simply lives in one place now.
+    //
+    // The guard stays: it is the last line of defence, and it is why no NaN row could ever have
+    // been written even before this fix (NaN is falsy, so this returned).
+    const baseAmount = recordCents
     if (!baseAmount || baseAmount <= 0) return
     // Anything paid beyond the balance becomes an account credit — a prepayment onto a zero
     // balance is just the whole amount. Checked for every tender, where before only prepay was
@@ -515,7 +519,9 @@ export default function GuestAccountPage() {
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
-  const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
+  const paymentAmountCents = centsOf(paymentAmount)
+  const cashTenderedCents = centsOf(cashTendered)
+  const cash = cashState(cashTenderedCents, paymentAmountCents)
   // The part of this payment that lands beyond what is owed, and therefore becomes an
   // account credit. Derived from the amount for EVERY tender, not just cash: a credit is
   // simply a negative folio balance, so a Venmo or check overpayment already created one —
@@ -695,6 +701,58 @@ export default function GuestAccountPage() {
     const paid = events.filter(e => e.kind === 'payment').reduce((s, e) => s + e.amount, 0)
     return { ...sec, events, charges, paid, subtotal: charges - paid }
   }).filter(g => g.events.length > 0)
+
+  // ── WHAT THE CURRENT SELECTION SAYS IS OWED ─────────────────────────────────────────────────
+  //
+  // The modal used to key every decision off `totalDue`, the WHOLE-ACCOUNT balance. That is wrong
+  // as soon as there are doors: a camper can owe $42 of electric (so totalDue is not zero) while
+  // the SEASONAL door they are paying into is settled. The amount box then had nothing to
+  // pre-fill, and the cash branch locked it anyway because the account was not clear — an empty,
+  // read-only box with no way forward.
+  //
+  // So the question is asked of the SELECTION, not the account: separated reads the open door's
+  // bucket, combined reads the chosen lane, and either falls back to the account when nothing
+  // narrower is picked.
+  const selectedDueCents = laneView && buckets
+    ? (payBucket === 'both'
+        ? Math.max(0, buckets.camp.balance) + Math.max(0, buckets.seasonal.balance)
+        : payBucket
+          ? Math.max(0, buckets[payBucket].balance)
+          : totalDue)
+    : paymentLane
+      ? Math.max(0, laneGroups.find(g => g.key === paymentLane)?.subtotal ?? 0)
+      : totalDue
+
+  /**
+   * Nothing is outstanding on what was selected, so whatever is typed is a PREPAYMENT.
+   *
+   * ⚠ THIS IS A REAL AND COMMON FLOW, NOT AN EDGE CASE. Campers pay early to hold next season's
+   * spot before contracts go out. A payment tagged `lane:'seasonal'` against an account with no
+   * seasonal charge records a seasonal CREDIT — the bucket simply goes negative — and when the
+   * contract later posts the fee the balance becomes fee − credit. The whole-account total is
+   * right throughout, because Camp is the account remainder and is untouched by a seasonal tag.
+   * The mechanics were always there; only the amount box stood in the way.
+   */
+  const freeEntry = isPrepayment(selectedDueCents)
+
+  // Cash normally FIXES the amount at what is owed and asks for the tender instead, which is right
+  // when a figure was pre-filled. With nothing owed there is nothing to fix it to, so the box has
+  // to be typeable. The `paymentAmount !== ''` clause is belt-and-braces: an empty box is never
+  // locked, whatever else is true.
+  const amountLocked = paymentMethod === 'cash' && !freeEntry && paymentAmount !== ''
+
+  /**
+   * The figure this tender will actually record.
+   *
+   * ⚠ DERIVED ONCE AND USED THREE TIMES — the button's label, the button's enablement, and
+   * collectPayment's write. They were three separate expressions before, which is precisely how
+   * the label could say "$NaN" while the writer bailed out silently: they disagreed.
+   */
+  const amountArgs = { totalDueCents: totalDue, method: paymentMethod, amount: paymentAmount, tendered: cashTendered }
+  const recordCents = recordAmountCents(amountArgs)
+
+  /** No amount typed, no recording. Blocks $0 and — by construction — anything that was NaN. */
+  const canRecord = canRecordAmount(amountArgs)
 
   // Sorted for DISPLAY only — the underlying products, their prices and the Add-to-Tab
   // behaviour are untouched. Shares byNameAsc with the category tiles so the two orderings
@@ -1157,11 +1215,24 @@ export default function GuestAccountPage() {
                 </button>
               </div>
             )}
-            <label style={ml}>{totalDue === 0 ? 'Amount to add' : paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
+            {/* `freeEntry` — not `totalDue` — decides the wording and whether the box is typeable.
+                An account can owe electric while the door being paid into is settled, and that
+                camper is adding money, not settling anything. */}
+            <label style={ml}>{freeEntry ? 'Amount to add' : paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
-              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: (paymentMethod === 'cash' && totalDue !== 0) ? '#f9fafb' : '#fff', color: (paymentMethod === 'cash' && totalDue !== 0) ? '#6b7280' : '#111827' }} type='number' step='0.01' value={paymentAmount} readOnly={paymentMethod === 'cash' && totalDue !== 0} placeholder={totalDue === 0 ? '0.00' : undefined} onChange={e => setPaymentAmount(e.target.value)} />
+              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: amountLocked ? '#f9fafb' : '#fff', color: amountLocked ? '#6b7280' : '#111827' }} type='number' step='0.01' min='0' value={paymentAmount} readOnly={amountLocked} placeholder={freeEntry ? '0.00' : undefined} onChange={e => setPaymentAmount(e.target.value)} />
             </div>
+            {/* A prepayment does not settle anything today, so it says what it will do instead.
+                Seasonal is named specifically because that is the flow this unblocked: hold next
+                season's spot before the contract exists. */}
+            {freeEntry && paymentAmountCents > 0 && (
+              <div style={{ background: payBucket === 'seasonal' ? '#FFFBEB' : '#f0fdf4', border: '1px solid', borderColor: payBucket === 'seasonal' ? '#fde68a' : '#bbf7d0', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: payBucket === 'seasonal' ? '#92400e' : '#166534' }}>
+                {payBucket === 'seasonal'
+                  ? `Prepayment · this ${labels.seasonal.toLowerCase()} account is settled, so this is held as a credit and comes off the fee when the contract is sent.`
+                  : 'Prepayment · nothing is outstanding, so this stays on the account and comes off their next charge.'}
+              </div>
+            )}
             {paymentMethod === 'cash' && totalDue !== 0 && (
               <>
                 <label style={ml}>Cash tendered</label>
@@ -1169,18 +1240,24 @@ export default function GuestAccountPage() {
                   <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
                   <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56 }} type='number' step='0.01' value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder='0.00' autoFocus />
                 </div>
-                {parseFloat(cashTendered) > 0 && (
+                {/* ⚠ CENTS, NOT parseFloat. This block is where "$NaN" was printed and where a
+                    freely-typed prepayment was falsely flagged SHORT: with the amount box empty,
+                    `parseFloat('')` was NaN, every comparison against it was false, and the modal
+                    fell to the "Amount short" branch and rendered NaN as the figure. Compared as
+                    integers, a blank amount is 0, so a tender is only short when it is genuinely
+                    less than what was typed. */}
+                {cashTenderedCents > 0 && (
                   <>
-                    <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontWeight: 600, fontSize: 14, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                        {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
+                    <div style={{ background: !cash.short ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: !cash.short ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: 14, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                        {!cash.short ? 'Change due' : 'Amount short'}
                       </span>
-                      <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                        <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                      <span style={{ fontWeight: 800, fontSize: 18, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                        <span>$</span>{(cash.differenceCents / 100).toFixed(2)}
                       </span>
                     </div>
-                    {maxCreditAmount > 0 && parseFloat(cashTendered) > parseFloat(paymentAmount) && (() => {
-                      const overpayment = Math.round((parseFloat(cashTendered) - parseFloat(paymentAmount)) * 100)
+                    {maxCreditAmount > 0 && cashTenderedCents > paymentAmountCents && (() => {
+                      const overpayment = cashTenderedCents - paymentAmountCents
                       const exceedsCap = overpayment > maxCreditAmount
                       return (
                         <div style={{ marginBottom: 12 }}>
@@ -1275,8 +1352,18 @@ export default function GuestAccountPage() {
                 )}
               </div>
             ) : (
-              <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+              /* ⚠ DISABLED UNTIL A REAL AMOUNT IS TYPED. `recordCents` is the same figure the
+                 label prints and collectPayment writes, so the button cannot offer to record
+                 something the writer would refuse — which is what happened when the label said
+                 "$NaN" and clicking it silently did nothing. $0 is blocked for the same reason. */
+              <button onClick={collectPayment} disabled={savingPayment || !canRecord} style={{ width: '100%', background: (savingPayment || !canRecord) ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: canRecord && !savingPayment ? 'pointer' : 'default' }}>
+                {savingPayment
+                  ? 'Recording...'
+                  : !canRecord
+                    ? 'Enter an amount'
+                    : paymentMethod === 'card' && surchargePreview > 0
+                      ? 'Charge card · $' + (totalWithSurcharge / 100).toFixed(2)
+                      : 'Record ' + paymentMethod + ' · $' + (recordCents / 100).toFixed(2)}
               </button>
             )}
             </div>
