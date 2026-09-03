@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { methodLabel, ymd } from '@/lib/transactions'
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
+import { centsOf } from '@/lib/payment-amount'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
@@ -225,7 +226,7 @@ function NewReservationWizardInner() {
     }
     const p = pricing
     if (!p) return
-    const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+    const paidCents = centsOf(form.amount_paid)
 
     // Total override — replaces the calculated total, recorded in notes.
     const overrideActive = form.total_override.trim() !== '' && !isNaN(parseFloat(form.total_override)) && parseFloat(form.total_override) >= 0
@@ -780,7 +781,7 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
     (step === 1 && !form.site_id) ||
     (step === 2 && !form.guest_first.trim() && !form.guest_last.trim())
   const isReview = step === 4
-  const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+  const paidCents = centsOf(form.amount_paid)
   const due = Math.max(0, grandTotal - paidCents)
   const cardGated = form.payment_method === 'card' || form.payment_method === 'terminal'
   // Keyed-card bookings can't complete until the Square field has loaded.
@@ -1120,7 +1121,7 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
 }
 
 function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, products, productCategories, posCart, setPosCart, showPOS, setShowPOS, cardRef, setCardReady }: any) {
-  const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+  const paidCents = centsOf(form.amount_paid)
   const setPaid = (cents: number) => set({ amount_paid: (cents / 100).toFixed(2) })
   const [activeCat, setActiveCat] = useState('')
 

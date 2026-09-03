@@ -769,7 +769,7 @@ export default function GuestAccountPage() {
    * collectPayment's write. They were three separate expressions before, which is precisely how
    * the label could say "$NaN" while the writer bailed out silently: they disagreed.
    */
-  const amountArgs = { totalDueCents: totalDue, method: paymentMethod, amount: paymentAmount, tendered: cashTendered }
+  const amountArgs = { method: paymentMethod, amount: paymentAmount, tendered: cashTendered }
   const recordCents = recordAmountCents(amountArgs)
 
   /** No amount typed, no recording. Blocks $0 and — by construction — anything that was NaN. */

@@ -21,6 +21,7 @@ import {
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
 import { seasonalBalanceOf, campFromAccount } from '@/lib/account-buckets'
+import { centsOf } from '@/lib/payment-amount'
 import { normalizeBillingMode } from '@/lib/ledger-lanes'
 import {
   cardStatus, primaryLabel, menuFor, tallyCards, matchesFilter, owesBalance,
@@ -521,7 +522,16 @@ export default function ElectricBillingPage() {
     if (!row.folioId || !row.paymentAmount) return
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: true }; return u })
 
-    const amountCents = Math.round(parseFloat(row.paymentAmount) * 100)
+    // ⚠ SHARED CONVERSION, AND A POSITIVE GUARD. The button is disabled on an EMPTY box, but a box
+    // holding "." or "-" is not empty: `parseFloat` returned NaN, `creditCents > 0` was then false
+    // so the credit-cap confirm was skipped, and `amount: NaN` went straight into the insert. This
+    // is the only payment box in the app where a bad figure could reach the database, because the
+    // folio boxes all end their amount calculation with a falsy check that NaN happens to satisfy.
+    const amountCents = centsOf(row.paymentAmount)
+    if (amountCents <= 0) {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: false }; return u })
+      return
+    }
 
     // Anything beyond the balance becomes an account credit. Warn rather than block: this
     // screen records money already received, so refusing would leave it recorded nowhere.
@@ -1472,7 +1482,7 @@ export default function ElectricBillingPage() {
                             </div>
                           </div>
                           <div className="eb-editactions">
-                            <button className="eb-primary sm" disabled={row.savingPayment || !row.paymentAmount}
+                            <button className="eb-primary sm" disabled={row.savingPayment || centsOf(row.paymentAmount) <= 0}
                               onClick={() => {
                                 if (row.paymentMethod === 'card') { router.push(`/admin/folio/guest/${row.guest.id}`) }
                                 else { recordPayment(i) }
