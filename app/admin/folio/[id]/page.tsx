@@ -1073,12 +1073,19 @@ export default function FolioPage() {
       )}
 
       {showPayment && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+        /* ⚠ THE SAME SHELL THE GUEST FOLIO WEARS — three classes from app/globals.css
+           (.pay-sheet*). Capped to the dynamic viewport with a scrolling body and the ×
+           held outside the scroller, so the close control cannot be pushed off screen by
+           tall content. Applied here too because this screen builds the same sheet from its
+           own copy of the markup, and a fix on one of the two would have drifted.
+           Layout only. */
+        <div className='pay-sheet-overlay'>
+          <div className='pay-sheet'>
+            <div className='pay-sheet-header'>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
               <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
+            <div className='pay-sheet-body'>
 
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: feeAlreadyIncluded ? (paymentMethod === 'card' ? '1fr' : '1fr 1fr') : '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
@@ -1236,6 +1243,7 @@ export default function FolioPage() {
               </button>
               </>
             )}
+            </div>
           </div>
         </div>
       )}
