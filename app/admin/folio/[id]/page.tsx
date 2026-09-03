@@ -13,6 +13,9 @@ import { useParams, useRouter } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
+import SeasonalFeeNotice from '@/app/components/SeasonalFeeNotice'
+import { normalizeBillingMode } from '@/lib/ledger-lanes'
+import { bucketLabel } from '@/lib/bucket-labels'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -126,6 +129,25 @@ export default function FolioPage() {
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [customMethods, setCustomMethods] = useState<string[]>([])
   useEffect(() => { supabase.from('settings').select('custom_payment_methods').single().then(({ data }) => setCustomMethods((data as any)?.custom_payment_methods || [])) }, [])
+  // ── THE SEASONAL NOTICE'S TWO SETTINGS READS ───────────────────────────────────────────────
+  // Display only. Neither read gates or changes a payment; the worst case for either is that the
+  // notice does not appear, which is exactly today's behaviour.
+  //
+  // ⚠ TWO SEPARATE SELECTS, ON PURPOSE — DO NOT MERGE THEM. A park that has not run the
+  // bucket-labels migration has no bucket_label_* columns (this one does not), so a combined
+  // `select('billing_mode, bucket_label_seasonal')` would fail as a whole and take billing_mode
+  // down with it — the notice would then never show on the very parks it is for. Split, each
+  // guarded on its own error, so a missing column costs only its own value.
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
+  // bucketLabel(null, 'seasonal') is the built-in default, so this reads sensibly before the
+  // fetch resolves and on any park that has never set a word of its own.
+  const [seasonalLabel, setSeasonalLabel] = useState(() => bucketLabel(null, 'seasonal'))
+  useEffect(() => {
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
+    supabase.from('settings').select('bucket_label_seasonal').single()
+      .then(({ data, error }) => { if (!error) setSeasonalLabel(bucketLabel(data, 'seasonal')) })
+  }, [])
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
@@ -1086,6 +1108,12 @@ export default function FolioPage() {
               <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
             <div className='pay-sheet-body'>
+
+            {/* Separated parks only. In combined mode there is no separate Seasonal account to be
+                on the wrong screen for, so this renders nothing and the box is unchanged.
+                Informational: it gates nothing — an ordinary reservation payment proceeds below
+                exactly as it always has. */}
+            {billingMode === 'separated' && <SeasonalFeeNotice seasonalLabel={seasonalLabel} />}
 
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: feeAlreadyIncluded ? (paymentMethod === 'card' ? '1fr' : '1fr 1fr') : '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
