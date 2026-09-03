@@ -13,6 +13,7 @@ import { useParams, useRouter } from 'next/navigation'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
+import { centsOf, recordAmountCents, canRecordAmount, cashState } from '@/lib/payment-amount'
 import SeasonalFeeNotice from '@/app/components/SeasonalFeeNotice'
 import { normalizeBillingMode } from '@/lib/ledger-lanes'
 import { bucketLabel } from '@/lib/bucket-labels'
@@ -253,7 +254,10 @@ export default function FolioPage() {
         setChargingCard(false)
         return
       }
-      const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
+      // Same shared conversion as the rest of the box. `centsOf` cannot return NaN, and the guard
+      // below refuses a zero, so nothing without a real figure reaches the card API.
+      const baseAmount = paymentAmountCents
+      if (baseAmount <= 0) { setChargingCard(false); return }
       const surchargeAmount = !waiveFee
         ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge)
         : 0
@@ -491,7 +495,7 @@ export default function FolioPage() {
   async function collectPayment() {
     // Credit cap check for guest account folios
     if (folio?.folio_type === 'guest_account') {
-      const paymentAmt = Math.round(parseFloat(paymentAmount || '0') * 100)
+      const paymentAmt = paymentAmountCents
       const currentPaid = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
       const currentBalance = grandTotal - currentPaid
       const resultingBalance = currentBalance - paymentAmt
@@ -505,7 +509,10 @@ export default function FolioPage() {
       }
     }
     if (!folio) return
-    const baseAmount = paymentMethod === 'cash' && cashTendered !== '' ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100)) : Math.round(parseFloat(paymentAmount) * 100)
+    // ⚠ THE SAME `recordCents` THE BUTTON SHOWED, not a re-derivation of it. Identical arithmetic
+    // to the expression this replaces (min of tendered and amount for cash, the amount otherwise);
+    // it simply lives in one place now, so the label and the write cannot disagree.
+    const baseAmount = recordCents
     if (!baseAmount || baseAmount <= 0) return
     const surchargeAmount = paymentMethod === 'card' && !waiveFee
       ? cardSurchargeFor(baseAmount, totalDue, folioNonTaxBase, cardSurcharge)
@@ -750,7 +757,27 @@ export default function FolioPage() {
   const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
 
   // Card surcharge preview
-  const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
+  // ── THE MODAL'S AMOUNTS, ALL FROM ONE PLACE ─────────────────────────────────────────────────
+  //
+  // This screen keeps its own copy of the Collect Payment box — the two folios are near-duplicate
+  // modals with different bodies — and it still parsed raw strings, so it carried the same "$NaN"
+  // the guest folio had before PR #60. `parseFloat('')` is NaN, NaN fails every comparison
+  // silently, and the box CAN be emptied: the amount field is editable on card/check/Venmo, so
+  // clearing it and switching to cash leaves it blank AND read-only, which then rendered
+  // "Amount short $NaN" and a "Record cash · $NaN" button that did nothing when clicked.
+  //
+  // Everything now goes through lib/payment-amount.ts — the same rules the guest folio uses, so
+  // the two boxes cannot drift on the arithmetic again.
+  const paymentAmountCents = centsOf(paymentAmount)
+  const cashTenderedCents = centsOf(cashTendered)
+  const cash = cashState(cashTenderedCents, paymentAmountCents)
+
+  // ⚠ ONE FIGURE, THREE CONSUMERS — the button's label, its enablement, and the write. They were
+  // three separate expressions, which is how the label could offer "$NaN" while the writer bailed
+  // out silently on the same click.
+  const amountArgs = { method: paymentMethod, amount: paymentAmount, tendered: cashTendered }
+  const recordCents = recordAmountCents(amountArgs)
+  const canRecord = canRecordAmount(amountArgs)
   const surchargePreview = paymentMethod === 'card' && !waiveFee
     ? cardSurchargeFor(paymentAmountCents, totalDue, folioNonTaxBase, cardSurcharge)
     : 0
@@ -1203,13 +1230,18 @@ export default function FolioPage() {
                     autoFocus
                   />
                 </div>
-                {parseFloat(cashTendered) > 0 && (
-                  <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 600, fontSize: 14, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
+                {/* ⚠ CENTS, NOT parseFloat — this is exactly where "$NaN" reached the screen. With
+                    the amount box empty, `parseFloat('')` was NaN, every comparison against it was
+                    false, so it fell to the "Amount short" branch and rendered NaN as the figure.
+                    Compared as integers a blank amount is 0, so a tender is short only when it is
+                    genuinely less than what was typed. */}
+                {cashTenderedCents > 0 && (
+                  <div style={{ background: !cash.short ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: !cash.short ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 600, fontSize: 14, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                      {!cash.short ? 'Change due' : 'Amount short'}
                     </span>
-                    <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      <span>$</span>{Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                    <span style={{ fontWeight: 800, fontSize: 18, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                      <span>$</span>{(cash.differenceCents / 100).toFixed(2)}
                     </span>
                   </div>
                 )}
@@ -1224,7 +1256,7 @@ export default function FolioPage() {
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginTop: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
-                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(Math.round(parseFloat(paymentAmount || '0') * 100), totalDue, folioNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
+                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(paymentAmountCents, totalDue, folioNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
                     </div>
                   </div>
                 )}
@@ -1232,7 +1264,7 @@ export default function FolioPage() {
                 <input style={{ ...si, marginBottom: 12 }} placeholder='e.g. phone reservation' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
                 <button
                   onClick={chargeManualCard}
-                  disabled={chargingCard || !cardReady || !paymentAmount}
+                  disabled={chargingCard || !cardReady || paymentAmountCents <= 0}
                   style={{ width: '100%', background: chargingCard || !cardReady || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
                 >
                   {chargingCard ? 'Processing...' : `Charge Card · $${paymentAmount || '0.00'}`}
@@ -1260,14 +1292,17 @@ export default function FolioPage() {
   
               <button
                 onClick={collectPayment}
-                disabled={savingPayment}
-                style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+                /* ⚠ DISABLED UNTIL A REAL AMOUNT EXISTS. `recordCents` is the figure the label
+                   prints and the writer records, so the button can no longer invite a click the
+                   writer would refuse — which is what "$NaN" did. $0 is blocked the same way. */
+                disabled={savingPayment || !canRecord}
+                style={{ width: '100%', background: (savingPayment || !canRecord) ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: (savingPayment || !canRecord) ? 'default' : 'pointer' }}
               >
-                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0
+                {savingPayment ? 'Recording...' : !canRecord ? 'Enter an amount' : paymentMethod === 'card' && surchargePreview > 0
                   ? `Charge card · $${(totalWithSurcharge/100).toFixed(2)}`
                   : paymentMethod === 'cash' && cashTendered !== ''
-                  ? `Record cash · $${Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2)}`
-                  : `Record ${paymentMethod} · $${paymentAmount}`}
+                  ? `Record cash · $${(recordCents / 100).toFixed(2)}`
+                  : `Record ${paymentMethod} · $${(recordCents / 100).toFixed(2)}`}
               </button>
               </>
             )}

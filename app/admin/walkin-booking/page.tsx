@@ -7,6 +7,7 @@ import toast, { Toaster } from 'react-hot-toast'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
+import { centsOf, recordAmountCents, canRecordAmount, cashState } from '@/lib/payment-amount'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -305,7 +306,8 @@ export default function WalkInBookingPage() {
     try {
       const result = await cardRef.current.tokenize()
       if (!result.ok) { alert(result.error); setChargingCard(false); return }
-      const baseAmount = Math.round(parseFloat(paymentAmount) * 100)
+      const baseAmount = paymentAmountCents
+      if (baseAmount <= 0) { setChargingCard(false); return }
       const surchargeAmount = !waiveFee
         ? cardSurchargeFor(baseAmount, totalDue, walkinNonTaxBase, cardSurcharge) : 0
       const totalAmount = baseAmount + surchargeAmount
@@ -380,9 +382,10 @@ export default function WalkInBookingPage() {
 
   async function collectPayment() {
     if (!folioId) return
-    const baseAmount = paymentMethod === 'cash' && cashTendered !== ''
-      ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100))
-      : Math.round(parseFloat(paymentAmount) * 100)
+    // ⚠ THE SAME `recordCents` THE BUTTON SHOWED. Identical arithmetic to the expression this
+    // replaces — min of tendered and amount for cash, the amount otherwise — in one place, so the
+    // label and the write cannot disagree. The guard below stays as the last line of defence.
+    const baseAmount = recordCents
     if (!baseAmount || baseAmount <= 0) return
     const surchargeAmount = paymentMethod === 'card'
       ? cardSurchargeFor(baseAmount, totalDue, walkinNonTaxBase, cardSurcharge)
@@ -419,8 +422,23 @@ export default function WalkInBookingPage() {
   const walkinNonTaxBase = totalDue - sumLineTaxes(lineItems)
   const realCardOnlyFeeTotal = cardOnlyFees.reduce((sum: number, f: any) =>
     sum + (f.type === 'percentage' ? Math.round(totalDue * f.amount / 100) : f.amount), 0)
-  const overpaid = cashTendered !== '' && parseFloat(cashTendered) > parseFloat(paymentAmount) ? Math.round((parseFloat(cashTendered) - parseFloat(paymentAmount)) * 100) : 0
-  const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
+  // ── THE AMOUNTS, ALL FROM lib/payment-amount.ts ─────────────────────────────────────────────
+  //
+  // This screen is the THIRD copy of the Collect Payment box (guest folio, reservation folio, and
+  // here), and it parsed raw strings like the other two did. `parseFloat('')` is NaN, NaN fails
+  // every comparison silently, and this box can be emptied — the amount field is editable on
+  // card/check/Venmo, so clearing it and switching to cash leaves it blank AND read-only. That
+  // rendered "Amount short $NaN", a "Record cash · $NaN" button, and — unique to this screen — a
+  // "+$NaN" card-fee preview, because the surcharge was computed from its own raw parse.
+  const paymentAmountCents = centsOf(paymentAmount)
+  const cashTenderedCents = centsOf(cashTendered)
+  const cash = cashState(cashTenderedCents, paymentAmountCents)
+  const overpaid = cashTendered !== '' && cashTenderedCents > paymentAmountCents ? cashTenderedCents - paymentAmountCents : 0
+
+  // ⚠ ONE FIGURE, THREE CONSUMERS — the button's label, its enablement, and the write.
+  const amountArgs = { method: paymentMethod, amount: paymentAmount, tendered: cashTendered }
+  const recordCents = recordAmountCents(amountArgs)
+  const canRecord = canRecordAmount(amountArgs)
   const surchargePreview = paymentMethod === 'card' && !waiveFee ? cardSurchargeFor(paymentAmountCents, totalDue, walkinNonTaxBase, cardSurcharge) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   // Sorted for DISPLAY only — the products, their prices and the Add-to-Tab behaviour are
@@ -795,13 +813,13 @@ export default function WalkInBookingPage() {
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
-                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(Math.round(parseFloat(paymentAmount) * 100), totalDue, walkinNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
+                      <span style={{ color: '#92400e', fontWeight: 600 }}>+${(cardSurchargeFor(paymentAmountCents, totalDue, walkinNonTaxBase, cardSurcharge) / 100).toFixed(2)}</span>
                     </div>
                   </div>
                 )}
                 <label style={ml}>Note (optional)</label>
                 <input style={{ ...si, marginBottom: 12 }} placeholder='e.g. phone reservation' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-                <button onClick={chargeManualCard} disabled={chargingCard || !cardReady || !paymentAmount}
+                <button onClick={chargeManualCard} disabled={chargingCard || !cardReady || paymentAmountCents <= 0}
                   style={{ width: '100%', background: chargingCard || !cardReady || !paymentAmount ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
                   {chargingCard ? 'Processing...' : `Charge Card · $${paymentAmount || '0.00'}`}
                 </button>
@@ -820,13 +838,15 @@ export default function WalkInBookingPage() {
                   <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
                   <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56 }} type='number' step='0.01' value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder='0.00' autoFocus />
                 </div>
-                {parseFloat(cashTendered) > 0 && (
-                  <div style={{ background: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ fontWeight: 600, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      {parseFloat(cashTendered) >= parseFloat(paymentAmount) ? 'Change due' : 'Amount short'}
+                {/* ⚠ CENTS, NOT parseFloat — where "$NaN" reached the screen and where a blank
+                    amount was falsely flagged SHORT. Compared as integers a blank amount is 0. */}
+                {cashTenderedCents > 0 && (
+                  <div style={{ background: !cash.short ? '#f0fdf4' : '#fef2f2', border: '1px solid', borderColor: !cash.short ? '#bbf7d0' : '#fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: 600, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                      {!cash.short ? 'Change due' : 'Amount short'}
                     </span>
-                    <span style={{ fontWeight: 800, fontSize: 18, color: parseFloat(cashTendered) >= parseFloat(paymentAmount) ? '#15803d' : '#dc2626' }}>
-                      ${Math.abs(parseFloat(cashTendered) - parseFloat(paymentAmount)).toFixed(2)}
+                    <span style={{ fontWeight: 800, fontSize: 18, color: !cash.short ? '#15803d' : '#dc2626' }}>
+                      ${(cash.differenceCents / 100).toFixed(2)}
                     </span>
                   </div>
                 )}
@@ -846,8 +866,10 @@ export default function WalkInBookingPage() {
             )}
             <label style={ml}>Note (optional)</label>
             <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. check #1042' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-            <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+            {/* ⚠ DISABLED UNTIL A REAL AMOUNT EXISTS, and labelled from the figure that will be
+                recorded — so the button can no longer invite a click the writer refuses. */}
+            <button onClick={collectPayment} disabled={savingPayment || !canRecord} style={{ width: '100%', background: (savingPayment || !canRecord) ? '#d1d5db' : '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: (savingPayment || !canRecord) ? 'default' : 'pointer' }}>
+              {savingPayment ? 'Recording...' : !canRecord ? 'Enter an amount' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : 'Record ' + paymentMethod + ' · $' + (recordCents/100).toFixed(2)}
             </button>
               </>
             )}

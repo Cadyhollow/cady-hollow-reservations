@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ymd, allPaymentMethods } from '@/lib/transactions'
 import { computePricing, cardSurchargeFor, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
+import { centsOf, recordAmountCents, canRecordAmount, cashState } from '@/lib/payment-amount'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
@@ -932,7 +933,20 @@ export default function CalendarPage() {
         const terminalDeviceId: string = S?.square_terminal_device_id || ''
 
         // Live math from the editable amount field
-        const payBaseCents = Math.round(parseFloat(payAmount || '0') * 100) || 0
+        // ── THE AMOUNTS, FROM lib/payment-amount.ts ───────────────────────────────────────────
+        //
+        // This box was already NaN-safe — every conversion carried its own `|| 0` and the
+        // change/short panel required both figures to be > 0 — so nothing was broken here. What it
+        // did have was the SAME FIGURE DERIVED THREE TIMES (here, in recordPayment, and in the
+        // button label), which is exactly the drift that let the folio boxes print "$NaN" while
+        // their writers refused the click. One derivation now, shared with the other three payment
+        // boxes, so they cannot disagree again.
+        const payBaseCents = centsOf(payAmount)
+        const cashTenderedCents = centsOf(cashTendered)
+        const cash = cashState(cashTenderedCents, payBaseCents)
+        const amountArgs = { method: payMethod, amount: payAmount, tendered: cashTendered }
+        const recordCents = recordAmountCents(amountArgs)
+        const canRecord = canRecordAmount(amountArgs)
         const surchargeCents = payMethod === 'card' && !waiveFee ? cardSurchargeFor(payBaseCents, newBalance, newBalance, cardSurcharge) : 0
         const totalWithSurcharge = payBaseCents + surchargeCents
         const paymentFailed = !!payFailed || terminalStatus === 'error'
@@ -990,10 +1004,8 @@ export default function CalendarPage() {
         async function recordPayment() {
           const fid = adjFolioId || await ensureFolio()
           if (!fid) { setPayFailed('No folio to record this payment against.'); return }
-          const isCash = payMethod === 'cash'
-          const baseAmount = isCash && cashTendered !== ''
-            ? Math.min(Math.round(parseFloat(cashTendered) * 100), payBaseCents)
-            : payBaseCents
+          // The same figure the button showed. Identical arithmetic, one copy.
+          const baseAmount = recordCents
           if (!baseAmount || baseAmount <= 0) { setPayError('Enter an amount greater than zero.'); return }
           const surcharge = payMethod === 'card' && !waiveFee ? cardSurchargeFor(baseAmount, newBalance, newBalance, cardSurcharge) : 0
           const totalAmount = baseAmount + surcharge
@@ -1225,14 +1237,14 @@ export default function CalendarPage() {
                         <input type="number" step="0.01" value={cashTendered} onChange={e => setCashTendered(e.target.value)} placeholder="0.00"
                           className="w-full rounded-lg border border-gray-200 pl-8 pr-3 font-bold text-gray-900" style={{ height: 52, fontSize: 22 }} />
                       </div>
-                      {parseFloat(cashTendered) > 0 && parseFloat(payAmount) > 0 && (
+                      {cashTenderedCents > 0 && payBaseCents > 0 && (
                         <div className="mt-2 flex justify-between items-center rounded-lg px-3 py-2 border"
-                          style={{ background: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#f0fdf4' : '#fef2f2', borderColor: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#bbf7d0' : '#fecaca' }}>
-                          <span className="text-sm font-semibold" style={{ color: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#15803d' : '#dc2626' }}>
-                            {parseFloat(cashTendered) >= parseFloat(payAmount) ? 'Change due' : 'Amount short'}
+                          style={{ background: !cash.short ? '#f0fdf4' : '#fef2f2', borderColor: !cash.short ? '#bbf7d0' : '#fecaca' }}>
+                          <span className="text-sm font-semibold" style={{ color: !cash.short ? '#15803d' : '#dc2626' }}>
+                            {!cash.short ? 'Change due' : 'Amount short'}
                           </span>
-                          <span className="text-lg font-extrabold" style={{ color: parseFloat(cashTendered) >= parseFloat(payAmount) ? '#15803d' : '#dc2626' }}>
-                            ${Math.abs(parseFloat(cashTendered) - parseFloat(payAmount)).toFixed(2)}
+                          <span className="text-lg font-extrabold" style={{ color: !cash.short ? '#15803d' : '#dc2626' }}>
+                            ${(cash.differenceCents / 100).toFixed(2)}
                           </span>
                         </div>
                       )}
@@ -1279,11 +1291,11 @@ export default function CalendarPage() {
                       </button>
                     </div>
                   ) : (
-                    <button onClick={recordPayment} disabled={paySaving}
+                    <button onClick={recordPayment} disabled={paySaving || !canRecord}
                       className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#16a34a' }}>
                       {paySaving ? 'Recording…'
-                        : payMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered) || 0, parseFloat(payAmount) || 0).toFixed(2)
-                        : 'Record ' + payMethod + ' · $' + (parseFloat(payAmount) || 0).toFixed(2)}
+                        : !canRecord ? 'Enter an amount'
+                        : 'Record ' + payMethod + ' · $' + (recordCents / 100).toFixed(2)}
                     </button>
                   )}
                 </div>

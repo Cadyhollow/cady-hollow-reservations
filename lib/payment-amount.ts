@@ -33,8 +33,6 @@ export function centsOf(value: string | null | undefined): number {
 }
 
 export type RecordAmountInput = {
-  /** The whole-account balance in cents. Zero means the account is settled. */
-  totalDueCents: number
   /** The tender: 'cash', 'card', 'check', a park's custom method — anything. */
   method: string
   /** The amount box, as typed. */
@@ -56,12 +54,16 @@ export type RecordAmountInput = {
  * change rather than banked. An empty tendered box means the operator is not counting cash into
  * the drawer against a fixed price, so the typed amount stands.
  *
- * On a settled account (`totalDueCents === 0`) the typed amount always stands: there is no price
- * to be short of, so a prepayment is simply what was typed.
+ * ⚠ THE CASH RULE APPLIES WHETHER OR NOT ANYTHING IS OWED, and that is deliberate. This carried a
+ * "settled account" branch that returned the typed amount and skipped the comparison entirely. On
+ * the guest folio that was harmless — it hides the tendered box when the account is settled, so
+ * there was never a tender to compare against — but the RESERVATION folio shows that box always.
+ * Carrying the branch across would have meant recording $50 when $20 was handed over. Money in
+ * hand is the smaller figure no matter what the balance says, so the branch is gone and the rule
+ * is one line shorter. Neither folio's behaviour changes.
  */
 export function recordAmountCents(input: RecordAmountInput): number {
   const amountCents = centsOf(input.amount)
-  if (input.totalDueCents === 0) return amountCents
   if (input.method === 'cash' && String(input.tendered ?? '') !== '') {
     return Math.min(centsOf(input.tendered), amountCents)
   }

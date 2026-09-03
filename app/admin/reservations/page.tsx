@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { sumLineTotals } from '@/lib/ledger'
 import { computePricing } from '@/lib/pricing'
+import { centsOf } from '@/lib/payment-amount'
 import {
   bookingLegRefundable, prorateSurcharge, REFUNDABLE_STATUSES,
   reservationRefundable, allocateRefund, type RefundLedgerRow,
@@ -411,12 +412,12 @@ function ReservationsPageInner() {
     const updatedNotes = existingNotes ? `${existingNotes}\n${auditNote}` : auditNote
 
     const finalTotal = overrideTotal && overrideTotalValue
-      ? Math.round(parseFloat(overrideTotalValue) * 100)
+      ? centsOf(overrideTotalValue)
       : newTotal
 
     const prevTotal = newTotal > 0 ? newTotal : selected.total_price
     const overrideNote = overrideTotal && overrideTotalValue
-      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Previous total: $${(prevTotal/100).toFixed(2)} → New total: $${parseFloat(overrideTotalValue).toFixed(2)}`
+      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Previous total: $${(prevTotal/100).toFixed(2)} → New total: $${(centsOf(overrideTotalValue) / 100).toFixed(2)}`
       : ''
 
     const { error } = await supabase.from('reservations').update({
@@ -426,7 +427,8 @@ function ReservationsPageInner() {
       num_adults: editForm.num_adults,
       num_children: editForm.num_children,
       total_price: finalTotal,
-      amount_paid: Math.round(parseFloat(editForm.amount_paid) * 100),
+      // ⚠ centsOf, not parseFloat: an empty box wrote `amount_paid: NaN` to the reservation.
+      amount_paid: centsOf(editForm.amount_paid),
       notes: updatedNotes + overrideNote,
       guest_email: editForm.guest_email,
       guest_phone: editForm.guest_phone,
@@ -581,7 +583,7 @@ function ReservationsPageInner() {
         issueRefund: cancelIssueRefund,
         // A request, not a ceiling. The route recomputes the policy figure and caps anything
         // sent here at what is still refundable on the booking.
-        refundAmount: cancelIssueRefund ? parseFloat(cancelAmount || '0') : 0,
+        refundAmount: cancelIssueRefund ? centsOf(cancelAmount) / 100 : 0,
         reason: cancelReason || '',
       }),
     })
@@ -1252,7 +1254,7 @@ function ReservationsPageInner() {
                       </div>
                       {overrideTotalValue && (
                         <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                          Balance due will be: <strong>${Math.max(0, parseFloat(overrideTotalValue || '0') - parseFloat(editForm.amount_paid || '0')).toFixed(2)}</strong>
+                          Balance due will be: <strong>${(Math.max(0, centsOf(overrideTotalValue) - centsOf(editForm.amount_paid)) / 100).toFixed(2)}</strong>
                           {' · '}An audit note will be added automatically.
                         </div>
                       )}
@@ -1346,7 +1348,7 @@ function ReservationsPageInner() {
                           // case. Rather than leaving $0.00 under a Refund button, seed it
                           // with what the rule's percentage would have given outside the
                           // deadline — a defensible starting point the operator can edit.
-                          if (on && (!cancelAmount || parseFloat(cancelAmount) === 0)) {
+                          if (on && centsOf(cancelAmount) === 0) {
                             const goodwill = Math.min(
                               Math.round(cancelRefundable.originalGrossTotalCents * cancelPolicy.refund_percent / 100),
                               cancelRefundable.totalRemainingCents
@@ -1376,13 +1378,13 @@ function ReservationsPageInner() {
                             onChange={e => setCancelAmount(e.target.value)}
                           />
                         </div>
-                        {Math.round(parseFloat(cancelAmount || '0') * 100) > cancelRefundable.totalRemainingCents && (
+                        {centsOf(cancelAmount) > cancelRefundable.totalRemainingCents && (
                           <p className="text-xs text-red-600">
                             More than the ${(cancelRefundable.totalRemainingCents / 100).toFixed(2)} still refundable — the server will cap it.
                           </p>
                         )}
-                        {Math.round(parseFloat(cancelAmount || '0') * 100) > cancelPrefill.refundCents
-                          && Math.round(parseFloat(cancelAmount || '0') * 100) <= cancelRefundable.totalRemainingCents && (
+                        {centsOf(cancelAmount) > cancelPrefill.refundCents
+                          && centsOf(cancelAmount) <= cancelRefundable.totalRemainingCents && (
                           <p className="text-xs text-amber-700">
                             Above the ${(cancelPrefill.refundCents / 100).toFixed(2)} this policy allows — recorded as an operator override.
                           </p>
@@ -1398,7 +1400,7 @@ function ReservationsPageInner() {
                             over the same legs, so this preview is the plan that executes. */}
                         {(() => {
                           const target = Math.min(
-                            Math.round(parseFloat(cancelAmount || '0') * 100),
+                            centsOf(cancelAmount),
                             cancelRefundable.totalRemainingCents
                           )
                           if (!(target > 0)) return null
@@ -1451,7 +1453,7 @@ function ReservationsPageInner() {
             {/* Consequences, spelled out — this is the part a confirm() could never say. */}
             <p className="text-xs text-gray-500">
               Marks the reservation cancelled · frees the site for those dates
-              {cancelIssueRefund && parseFloat(cancelAmount || '0') > 0 && ' · records dated refunds on the folio'}
+              {cancelIssueRefund && centsOf(cancelAmount) > 0 && ' · records dated refunds on the folio'}
             </p>
 
             {cancelError && <p className="text-sm text-red-600">{cancelError}</p>}
@@ -1479,8 +1481,8 @@ function ReservationsPageInner() {
                     declined to refund — where "no refund" is true again. */}
                 {cancelProcessing
                   ? 'Processing…'
-                  : cancelIssueRefund && parseFloat(cancelAmount || '0') > 0
-                    ? `Cancel & refund $${parseFloat(cancelAmount || '0').toFixed(2)}`
+                  : cancelIssueRefund && centsOf(cancelAmount) > 0
+                    ? `Cancel & refund $${(centsOf(cancelAmount) / 100).toFixed(2)}`
                     : cancelRefundable.totalRemainingCents > 0
                       ? 'Cancel — no refund'
                       : 'Cancel reservation'}

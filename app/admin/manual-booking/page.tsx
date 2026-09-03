@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import SquareCardField, { type SquareCardHandle } from '@/components/SquareCardField'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { centsOf } from '@/lib/payment-amount'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -207,7 +208,9 @@ function ManualBookingInner() {
     }
 
     setSaving(true)
-    const amountPaid = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+    // The deposit taken at booking. centsOf so a half-typed box is 0, never NaN written to the
+    // reservation's amount_paid.
+    const amountPaid = centsOf(form.amount_paid)
 
     // If card payment, tokenize first before creating reservation
     let cardToken: string | null = null
@@ -255,7 +258,7 @@ function ManualBookingInner() {
         early_checkin_fee: earlyFee,
         late_checkout: lateFee > 0,
         late_checkout_fee: lateFee,
-        total_price: balanceDue ? amountPaid + Math.round(parseFloat(balanceDue) * 100) : calculatedTotal,
+        total_price: balanceDue ? amountPaid + centsOf(balanceDue) : calculatedTotal,
         fees_total: 0,
         amount_paid: amountPaid,
         payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
@@ -650,7 +653,7 @@ function ManualBookingInner() {
           )}
           <button
             onClick={handleSave}
-            disabled={saving || (form.payment_method === 'card' && parseFloat(form.amount_paid || '0') > 0 && !cardReady)}
+            disabled={saving || (form.payment_method === 'card' && centsOf(form.amount_paid) > 0 && !cardReady)}
             className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors"
           >
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
