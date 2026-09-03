@@ -11,7 +11,7 @@ import { accountBuckets, paymentLaneForBucket, BUCKETS, type Bucket } from '@/li
 import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 import AccountBucketCards from '@/app/components/AccountBucketCards'
 import { notVoided } from '@/lib/ledger'
-import { centsOf, recordAmountCents, canRecordAmount, cashState, isPrepayment } from '@/lib/payment-amount'
+import { centsOf, recordAmountCents, canRecordAmount, cashState, isPrepayment, exceedsCreditCap } from '@/lib/payment-amount'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
@@ -432,8 +432,12 @@ export default function GuestAccountPage() {
     // Warn-and-confirm rather than block, because for an electronic tender the money is already
     // received: refusing would leave it recorded nowhere. Cash is different — the operator can
     // hand it back — so the cash path blocks at the cap in the UI before it reaches here.
+    //
+    // ⚠ A SEASONAL PAYMENT IS EXEMPT. A season deposit is a credit by definition, so this confirm
+    // fired on every one of them — see exceedsCreditCap() in lib/payment-amount.ts. Only the
+    // CHECK is skipped: the row written below is byte-for-byte the same either way.
     const creditCents = Math.max(0, baseAmount - totalDue)
-    if (creditCents > 0 && maxCreditAmount > 0 && creditCents > maxCreditAmount) {
+    if (exceedsCreditCap(creditCents, paymentLane, maxCreditAmount)) {
       if (!confirm('This will add a credit of $' + (creditCents/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
         return
       }
@@ -528,7 +532,24 @@ export default function GuestAccountPage() {
   // it was just never surfaced, capped, or confirmed, which is why recording it as cash
   // became the workaround.
   const creditPortionCents = Math.max(0, paymentAmountCents - totalDue)
-  const creditExceedsCap = maxCreditAmount > 0 && creditPortionCents > maxCreditAmount
+
+  // ── SEASONAL CREDITS ARE UNCAPPED ───────────────────────────────────────────────────────────
+  //
+  // The rule and the reasoning live in exceedsCreditCap() in lib/payment-amount.ts; the short
+  // version is that `max_credit_amount` was written to catch a mistyped EVERYDAY overpayment, and
+  // a season deposit onto a settled seasonal account is a credit by definition — so it fired on
+  // every single one, and the cash path went as far as suggesting the money be handed back.
+  //
+  // ⚠ ONE FUNCTION, BOTH CONSUMERS. This flag and the confirm inside collectPayment call the same
+  // rule, so the screen can never warn about something the writer would wave through, or refuse
+  // something the screen called fine.
+  //
+  // ⚠ "PAY BOTH" NEEDS NO SPECIAL CASE, and it is worth saying why rather than adding one. Its
+  // amount is fixed at camp.balance + seasonal.balance and each row is written for its own
+  // bucket's balance, so both settle exactly to zero and NEITHER can create a credit —
+  // creditPortionCents is already 0 there. The camp row keeps the cap in principle; there is
+  // simply never a credit for it to catch.
+  const creditExceedsCap = exceedsCreditCap(creditPortionCents, paymentLane, maxCreditAmount)
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   // ---- Chronological ledger: charges + payments interleaved with a running balance ----
@@ -1258,7 +1279,11 @@ export default function GuestAccountPage() {
                     </div>
                     {maxCreditAmount > 0 && cashTenderedCents > paymentAmountCents && (() => {
                       const overpayment = cashTenderedCents - paymentAmountCents
-                      const exceedsCap = overpayment > maxCreditAmount
+                      // Exempt for a seasonal payment: "give change instead" is the opposite of
+                      // what a deposit is for. The Change / Credit choice itself stays — an
+                      // operator may still genuinely be handing money back — but the cap warning
+                      // and the disabled Credit button do not apply.
+                      const exceedsCap = exceedsCreditCap(overpayment, paymentLane, maxCreditAmount)
                       return (
                         <div style={{ marginBottom: 12 }}>
                           <div style={{ display: 'flex', gap: 8, marginBottom: exceedsCap ? 6 : 0 }}>
