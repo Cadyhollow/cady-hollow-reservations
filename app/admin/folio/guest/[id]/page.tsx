@@ -991,12 +991,19 @@ export default function GuestAccountPage() {
 
       {/* Payment modal */}
       {showPayment && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+        /* ⚠ THE SHELL IS THREE CLASSES FROM app/globals.css (.pay-sheet*), SHARED WITH THE
+           RESERVATION FOLIO. The sheet is capped to the dynamic viewport and the body below
+           scrolls, while this header — a SIBLING of the scroller, not a child — keeps the ×
+           reachable at any content height. Before this, the tallest state (Card -> Use
+           Terminal) pushed the × off the top of an iPad with no way to scroll back.
+           Layout only: nothing here touches the amount, the method or the lane. */
+        <div className='pay-sheet-overlay'>
+          <div className='pay-sheet'>
+            <div className='pay-sheet-header'>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
               <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
+            <div className='pay-sheet-body'>
             {/* ── WHAT IS THIS PAYMENT FOR? ───────────────────────────────────────────────
                 Shown only for a SEASONAL camper — nobody else has lanes to tell apart, and a
                 selector on every folio would be a question most operators cannot answer.
@@ -1272,6 +1279,7 @@ export default function GuestAccountPage() {
                 {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
               </button>
             )}
+            </div>
           </div>
         </div>
       )}

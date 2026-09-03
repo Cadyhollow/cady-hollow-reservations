@@ -381,6 +381,81 @@ input, select, textarea {
   .pos-cat-tile:active { transform: none; }
 }
 
+/* ── Payment sheet (the "Collect Payment" bottom sheet) ───────────────────────────────────────
+   Used by the guest folio (app/admin/folio/guest/[id]) and the reservation folio
+   (app/admin/folio/[id]). Both build that modal from their own inline markup — the two bodies
+   differ — so the SHELL lives here as one class set and both callers wear it. One place to fix
+   means the two screens cannot drift apart on the thing that was broken.
+
+   THE BUG THIS FIXES: the sheet had no height limit and no scroller. Once the tallest state was
+   on screen (Card -> Use Terminal, with the fee row and the Send-to-Terminal panel all stacked)
+   the box grew past the top of the viewport, taking the header's close control with it, and there
+   was nothing to scroll back to it. On an iPad it was unusable.
+
+   LAYOUT ONLY. Nothing here reads an amount, a method or a lane.
+
+   ⚠ dvh, NOT vh. On iOS Safari `vh` is the viewport WITHOUT the browser's collapsing toolbars, so
+   `90vh` is taller than what you can actually see and the header still leaves the screen — the
+   exact iPad symptom. `dvh` is the *dynamic* viewport, which shrinks to what is really visible.
+   The plain-vh rule stays as a fallback for anything too old for dvh (iOS < 15.4); the @supports
+   block below upgrades every browser that has it. */
+.pay-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* Side margins, so the sheet is never edge-to-edge on a phone. Bottom stays flush: it is a
+     bottom sheet, and a gap under it reads as a mistake rather than a margin. */
+  padding: 0 10px;
+}
+
+.pay-sheet {
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-width: 520px;
+  /* The cap that keeps the header on screen. */
+  max-height: 90vh;
+  /* A column of [fixed header][scrolling body]. */
+  display: flex;
+  flex-direction: column;
+  /* Keeps the body's scroll inside the sheet's rounded corners. */
+  overflow: hidden;
+}
+
+@supports (max-height: 90dvh) {
+  .pay-sheet { max-height: 90dvh; }
+}
+
+/* Outside the scroller, so the close control is reachable at any scroll position and any content
+   height — which is the actual requirement. `sticky` inside the body would also work, but only as
+   long as nothing in the body ever establishes its own containing block; a sibling cannot be
+   broken that way. */
+.pay-sheet-header {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 1.5rem 0.875rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.pay-sheet-body {
+  /* `min-height: 0` is what actually lets this scroll: a flex item will not shrink below its
+     content's height without it, so the sheet would grow past its max-height again and the
+     overflow rule would never engage. It is the load-bearing line in this block. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 1.5rem;
+  -webkit-overflow-scrolling: touch;
+  /* Don't hand the scroll to the page behind once this reaches its end. */
+  overscroll-behavior: contain;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    THE SEASONAL THEME — the cream "ResoNation" look
    ══════════════════════════════════════════════════════════════════════════════
