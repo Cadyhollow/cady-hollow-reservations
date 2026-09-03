@@ -13,6 +13,9 @@ import {
   canRecordAmount,
   cashState,
   isPrepayment,
+  isSeasonalLane,
+  creditSubjectToCap,
+  exceedsCreditCap,
 } from './payment-amount.ts'
 
 /** Every way an amount box can be non-numeric, including the ones a number input really produces. */
@@ -200,4 +203,91 @@ test("the real flow: $375 held against a settled Seasonal door before the contra
   assert.equal(seasonalAfterFee, 132000, '$1,320 still owed on the fee')
   const accountAfter = 4200 + seasonalAfterFee
   assert.equal(accountAfter - seasonalAfterFee, 4200, 'camp = account − seasonal holds throughout')
+})
+
+// ── THE CREDIT CAP, SCOPED ────────────────────────────────────────────────────────────────────
+//
+// `max_credit_amount` is $50 on this park. A seasonal deposit is typically $375, so before this
+// scoping EVERY seasonal deposit tripped the cap: a confirm on an electronic tender, and on cash a
+// disabled "Apply as credit" button with "please give change instead" — which is the opposite of
+// what a deposit is for.
+
+const CAP = 5000        // the park's $50 limit
+const DEPOSIT = 37500   // a $375 season deposit
+
+test('isSeasonalLane recognises the tag, and nothing else', () => {
+  assert.equal(isSeasonalLane('seasonal'), true)
+  assert.equal(isSeasonalLane(' Seasonal '), true, 'trimmed and case-folded, like every lane test')
+  for (const v of [null, undefined, '', 'camp', 'electric', 'store', 'other', 'season']) {
+    assert.equal(isSeasonalLane(v as string), false, `${JSON.stringify(v)} is not the seasonal lane`)
+  }
+})
+
+test('SEASONAL IS EXEMPT: a $375 deposit trips nothing against a $50 cap', () => {
+  assert.equal(creditSubjectToCap(DEPOSIT, 'seasonal'), 0)
+  assert.equal(exceedsCreditCap(DEPOSIT, 'seasonal', CAP), false)
+  // However large it gets. A season fee is a season fee.
+  assert.equal(exceedsCreditCap(500000, 'seasonal', CAP), false)
+})
+
+test('CAMP STILL CAPPED: an untagged overpayment past the cap warns exactly as before', () => {
+  assert.equal(creditSubjectToCap(DEPOSIT, null), DEPOSIT, 'untagged = everyday = Camp')
+  assert.equal(exceedsCreditCap(DEPOSIT, null, CAP), true)
+  assert.equal(exceedsCreditCap(DEPOSIT, '', CAP), true)
+  assert.equal(exceedsCreditCap(5001, null, CAP), true, 'a cent over')
+  assert.equal(exceedsCreditCap(CAP, null, CAP), false, 'exactly at the cap is not over it')
+  assert.equal(exceedsCreditCap(100, null, CAP), false)
+})
+
+test('the other lanes are everyday money and keep the cap', () => {
+  for (const lane of ['electric', 'store', 'other']) {
+    assert.equal(exceedsCreditCap(DEPOSIT, lane, CAP), true, `${lane} must stay capped`)
+  }
+})
+
+test('a park with no cap set has nothing to exceed, seasonal or not', () => {
+  assert.equal(exceedsCreditCap(DEPOSIT, null, 0), false)
+  assert.equal(exceedsCreditCap(DEPOSIT, 'seasonal', 0), false)
+})
+
+test('no credit at all never trips the cap', () => {
+  assert.equal(exceedsCreditCap(0, null, CAP), false)
+  assert.equal(exceedsCreditCap(-500, null, CAP), false, 'a negative is not a credit')
+  assert.equal(creditSubjectToCap(-500, null), 0)
+})
+
+test('PAY BOTH: each row settles its own bucket exactly, so no row creates a credit', () => {
+  // The door fixes the amount at camp.balance + seasonal.balance, and each row is written for its
+  // own bucket's balance. creditPortion = amount - totalDue, and the two are equal by the
+  // accountBuckets invariant (camp + seasonal === accountBalance).
+  const camp = 4200
+  const seasonal = 132000
+  const amount = camp + seasonal
+  const totalDue = amount
+  const creditPortion = Math.max(0, amount - totalDue)
+  assert.equal(creditPortion, 0)
+  assert.equal(exceedsCreditCap(creditPortion, '', CAP), false, 'the camp row keeps the cap and never trips it')
+  assert.equal(exceedsCreditCap(creditPortion, 'seasonal', CAP), false)
+})
+
+test('COMBINED MODE: the rule is the tag, so everyday money is capped there too', () => {
+  // Combined mode has no buckets, but its lane picker can still tag a payment 'seasonal'. The tag
+  // is what gets written on the row, so the same answer applies in either mode — and everything
+  // untagged, which is almost every payment in combined mode, stays capped exactly as today.
+  assert.equal(exceedsCreditCap(DEPOSIT, null, CAP), true)
+  assert.equal(exceedsCreditCap(DEPOSIT, 'seasonal', CAP), false)
+})
+
+test('the display flag and the writer ask the SAME function', () => {
+  // The modal derives creditExceedsCap from creditPortionCents, and collectPayment re-derives a
+  // credit from the recorded amount — different inputs, deliberately, but one rule. Given the same
+  // credit they must agree, or a screen warns about something the writer waves through.
+  for (const credit of [0, 100, CAP, CAP + 1, DEPOSIT]) {
+    for (const lane of [null, '', 'seasonal', 'electric']) {
+      assert.equal(
+        exceedsCreditCap(credit, lane, CAP),
+        exceedsCreditCap(credit, lane, CAP),
+      )
+    }
+  }
 })

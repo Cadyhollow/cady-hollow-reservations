@@ -107,3 +107,48 @@ export function cashState(tenderedCents: number, amountCents: number): CashState
 export function isPrepayment(selectedDueCents: number): boolean {
   return selectedDueCents <= 0
 }
+
+// ── THE CREDIT CAP, AND WHO IT IS FOR ─────────────────────────────────────────────────────────
+
+/** A payment's lane tag reads as seasonal. Trimmed and case-folded, like every other lane test. */
+export function isSeasonalLane(lane: string | null | undefined): boolean {
+  return String(lane ?? '').trim().toLowerCase() === 'seasonal'
+}
+
+/**
+ * How much of a payment's credit the `max_credit_amount` cap applies to.
+ *
+ * ⚠ THE CAP IS FOR EVERYDAY MONEY. It exists to catch a MISTYPED overpayment — a store tab or an
+ * electric bill fat-fingered into a large accidental credit — and for that it is exactly right.
+ *
+ * ⚠ IT IS WRONG FOR A SEASONAL PAYMENT, AND NOT MARGINALLY. A season deposit onto a settled
+ * seasonal account IS a credit; that is what a deposit is. So the cap fired on every one of them:
+ * a $375 deposit against a $50 cap asked the operator "this exceeds the $50 credit limit, add
+ * anyway?" on a routine payment, and the cash path went further and suggested handing the money
+ * back as change. A deposit that is handed back is not a deposit.
+ *
+ * So the cap is SCOPED, not weakened. The limit is unchanged and no everyday payment escapes it —
+ * seasonal money simply stops being measured against a rule written for a different kind of money.
+ *
+ * The LANE TAG is the test, deliberately: it is exactly what will be written on the row, so what
+ * the cap does and what the ledger records can never disagree.
+ */
+export function creditSubjectToCap(creditCents: number, lane: string | null | undefined): number {
+  if (isSeasonalLane(lane)) return 0
+  return Math.max(0, creditCents)
+}
+
+/**
+ * Does this payment's credit break the cap?
+ *
+ * ONE definition, used by the modal's warning banner, its disabled-button state AND the confirm in
+ * the writer — so a screen can never warn about something the writer would wave through, or the
+ * reverse. `maxCreditAmount` of 0 means the park sets no cap, and nothing is ever over it.
+ */
+export function exceedsCreditCap(
+  creditCents: number,
+  lane: string | null | undefined,
+  maxCreditAmount: number,
+): boolean {
+  return maxCreditAmount > 0 && creditSubjectToCap(creditCents, lane) > maxCreditAmount
+}
