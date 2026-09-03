@@ -7,6 +7,7 @@ import { sortSeasonsForPicker } from '@/lib/season'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import SeasonsManager from './SeasonsManager'
 import SeasonPicker, { useSeasons } from './SeasonPicker'
+import CommandCenterLink from './CommandCenterLink'
 import type { Season } from '@/lib/seasonal-types'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
@@ -177,6 +178,7 @@ export default function SeasonalsPage() {
     <div className="p-4 md:p-6">
       <div className="flex flex-col gap-3 mb-4 md:flex-row md:items-center md:justify-between">
         <div>
+          <CommandCenterLink className="mb-1" />
           <h2 className="text-2xl font-bold text-ink">Seasonal Campers</h2>
           <p className="text-sm text-muted mt-0.5">
             {loading ? 'Loading…' : `${signed} of ${total} contracts signed for ${selectedSeason?.name || 'this season'}`}

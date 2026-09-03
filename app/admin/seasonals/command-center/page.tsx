@@ -75,12 +75,20 @@ function greeting(): string {
 // uses to hide nav the signed-in user cannot open, so a staff-level user is never shown a tile
 // that will bounce them at the door.
 const NAV: { href: string; title: string; sub: string; accent: string }[] = [
-  { href: '/admin/seasonals/campers', title: 'Campers', sub: 'People & records', accent: 'border-l-good bg-good-bg' },
+  { href: '/admin/seasonals/campers', title: 'Campers', sub: 'People & rigs', accent: 'border-l-good bg-good-bg' },
   { href: '/admin/seasonals', title: 'Contracts', sub: 'Fees · send · sign', accent: 'border-l-draft bg-draft-bg' },
   { href: '/admin/electric-billing', title: 'Electric', sub: 'Bills & readings', accent: 'border-l-elec bg-elec-bg' },
   { href: '/admin/seasonals/meters', title: 'Read Meters', sub: 'Start a walk', accent: 'border-l-gold bg-watch-bg' },
-  { href: '/admin/addons', title: 'Add-ons', sub: 'Cart · pet · more', accent: 'border-l-plum bg-plum-bg' },
-  { href: '/admin/settings', title: 'Settings', sub: 'Packets · rates', accent: 'border-l-muted bg-card-2' },
+  // ⚠ RECORDS IS NOT ADD-ONS, AND THIS CARD USED TO POINT AT THE WRONG ONE. /admin/addons is the
+  // checkout upsell — what a guest buys while booking. Records are what a park REGISTERS about a
+  // camper and then holds requirements against: a pet, a golf cart, a pool membership, each with
+  // its vaccination record or proof of insurance. An operator following this card for a camper's
+  // pet registration was landing on the page for selling firewood.
+  { href: '/admin/seasonals/records', title: 'Records', sub: 'Pets, carts, pool — registrations & requirements', accent: 'border-l-plum bg-plum-bg' },
+  // ⚠ THE SEASONAL SETTINGS, NOT THE PARK'S. /admin/settings is Owner-gated and park-wide, so a
+  // manager following this card would hit a wall and an owner would land in tax rates looking for
+  // contract text. Pass 2 moves the seasonal settings into this route for real.
+  { href: '/admin/seasonals/settings', title: 'Settings', sub: 'Contracts · billing · electric', accent: 'border-l-muted bg-card-2' },
 ]
 
 const REPORTS: { href: string; title: string; sub: string }[] = [

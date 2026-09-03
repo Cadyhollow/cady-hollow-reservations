@@ -9,6 +9,7 @@ import { usePathname } from 'next/navigation'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import Image from 'next/image'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+import { useSummit } from '@/lib/use-summit'
 import { atLeast, type Role } from '@/lib/roles'
 import { roleForPath } from '@/lib/admin-pages'
 
@@ -160,6 +161,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [openGroup, setOpenGroup] = useState<string | null>(null)
 
   const [plan, setPlan] = useState<string>('trailhead') // fail closed — lowest tier until settings load
+  // The seasonal world's gate. Its own guarded read of settings.plan — see lib/use-summit.ts for
+  // why it is not folded into the settings select above, and why it is the plan and not
+  // `seasonal_enabled`. Module-cached, so this costs one query for the whole app.
+  const { isSummit } = useSummit()
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
 
   // NOTE the name collision, because it will bite someone otherwise: `dashboardView` above is a
@@ -321,6 +326,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           }}>
           Dashboard
         </Link>
+
+        {/* Seasonal — standalone top-level item (Summit only). Its own entry rather than a child of
+            Guests because the Command Center is a hub for a whole side of the park, not one more
+            list. Hidden entirely on any other plan, and hidden while the gate is still resolving. */}
+        {isSummit && (
+          <Link href="/admin/seasonals/command-center" onClick={() => setSidebarOpen(false)}
+            className="flex items-center px-4 rounded-xl text-sm font-semibold transition-all duration-150 mb-3"
+            style={{
+              minHeight: '48px', display: 'flex', alignItems: 'center',
+              background: pathname.startsWith('/admin/seasonals') ? 'var(--accent-color, #12c9e5)' : 'rgba(255,255,255,0.07)',
+              color: '#fff',
+              boxShadow: pathname.startsWith('/admin/seasonals') ? '0 2px 8px rgba(18,201,229,0.3)' : 'none',
+            }}>
+            🌲&nbsp;&nbsp;Seasonal
+          </Link>
+        )}
 
         {!settingsLoaded || !roleLoaded ? (
           <div className="space-y-1.5 px-1 pt-1" aria-hidden>

@@ -6,6 +6,7 @@ import { planAtLeast } from '@/lib/plan'
 import { sortSeasonsForPicker } from '@/lib/season'
 import SeasonPicker, { useSeasons } from '../SeasonPicker'
 import SeasonalSections from '../SeasonalSections'
+import CommandCenterLink from '../CommandCenterLink'
 import PartyEditor from '../PartyEditor'
 import {
   depositView, depositSummary, enrollmentStatus, ENROLLMENT_LABEL, ENROLLMENT_TONE,
@@ -287,7 +288,10 @@ export default function SeasonalCamperPage() {
       <Toaster />
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
-          <Link href="/admin/seasonals/campers" className="text-sm text-muted hover:text-ink-soft">← Campers</Link>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Link href="/admin/seasonals/campers" className="text-sm text-muted hover:text-ink-soft">← Campers</Link>
+            <CommandCenterLink />
+          </div>
           <h2 className="text-2xl font-bold text-ink">
             {data?.guest?.name}
             {!active && (
