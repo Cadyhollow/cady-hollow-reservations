@@ -513,6 +513,13 @@ input, select, textarea {
 
 :root {
   /* Non-seasonal fallback: today's grey admin. Keeps the utilities valid. */
+  /* Two extra accents, added for the Seasonal Command Center's six navigation cards. The approved
+     set has one blue (--draft) and no purple, and that page needs six tiles a glance can tell
+     apart. Decorative only: they are a 3px left rule and a tint behind --ink text, never text
+     colour, so they sit under the 3:1 bar rather than 4.5:1. Defined here, in the one place
+     colours are written down, so the page itself stays free of hex values. */
+  --elec: #0072B2;       --elec-bg: #E4EEF6;
+  --plum: #7A4E86;       --plum-bg: #F0E7F3;
   --paper: #F7F7F8;      --card: #FFFFFF;       --card-2: #F9FAFB;
   --ink: #111827;        --ink-soft: #374151;   --muted: #6B7280;
   --line: #E5E7EB;       --line-soft: #F3F4F6;
@@ -526,6 +533,8 @@ input, select, textarea {
 }
 
 .seasonal-theme {
+  --elec: #0072B2;       --elec-bg: #E4EEF6;
+  --plum: #7A4E86;       --plum-bg: #F0E7F3;
   --paper: #F5F1E6;      --card: #FBF9F2;       --card-2: #F1ECDD;
   --ink: #20301F;        --ink-soft: #4A5346;   --muted: #666D5E;
   --line: #E2DCC9;       --line-soft: #ECE7D6;   --line-strong: #A18F57;
@@ -548,6 +557,8 @@ input, select, textarea {
 
 /* The dark set, defined and ready. Not active — see the note above. */
 .seasonal-theme[data-scheme="dark"] { color-scheme: dark;
+  --elec: #6FB3E0;       --elec-bg: #12222E;
+  --plum: #C89BD4;       --plum-bg: #241A28;
   --paper: #11150E;      --card: #191E14;       --card-2: #212619;
   --ink: #ECEADB;        --ink-soft: #B7BCA9;   --muted: #8A917E;
   --line: #2C3325;       --line-soft: #232A1D;   --line-strong: #5D6C4E;
@@ -633,4 +644,8 @@ input, select, textarea {
   --color-draft-bg: var(--draft-bg);
   --color-danger: var(--danger);
   --color-danger-bg: var(--danger-bg);
+  --color-elec: var(--elec);
+  --color-elec-bg: var(--elec-bg);
+  --color-plum: var(--plum);
+  --color-plum-bg: var(--plum-bg);
 }

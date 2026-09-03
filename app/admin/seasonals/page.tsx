@@ -183,6 +183,12 @@ export default function SeasonalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* The seasonal hub — the landing page this area has been waiting for (see the note on
+              the meter link below, which named it before it existed). Read-and-navigate only. */}
+          <Link href="/admin/seasonals/command-center"
+            className="px-3 py-2 text-xs font-bold rounded-lg border border-line-strong text-ink">
+            🌲 Command Center
+          </Link>
           <Link href="/admin/seasonals/new"
             className="px-3 py-2 text-xs font-bold rounded-lg text-on-forest"
             style={{ background: 'var(--forest)' }}>
