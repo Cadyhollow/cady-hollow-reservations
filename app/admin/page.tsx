@@ -7,8 +7,9 @@ import Link from 'next/link'
 import {
   PlusCircleIcon, ShoppingBagIcon, CreditCardIcon,
   CalendarIcon, ClipboardDocumentListIcon, UsersIcon, BoltIcon, MapIcon,
-  Cog6ToothIcon,
+  Cog6ToothIcon, HomeModernIcon,
 } from '@heroicons/react/24/outline'
+import { useSummit } from '@/lib/use-summit'
 
 type ArrivalGuest = {
   id: string
@@ -44,6 +45,8 @@ const supabase = createBrowserSupabase()
 
 export default function AdminDashboard() {
   const [settings, setSettings] = useState<any>(null)
+  // The seasonal gate — its own guarded read of settings.plan. See lib/use-summit.ts.
+  const { isSummit } = useSummit()
   const [stats, setStats] = useState({
     totalThisMonth: 0,
     arrivalsToday: 0,
@@ -551,8 +554,16 @@ export default function AdminDashboard() {
           { label: 'Guest Directory', href: '/admin/guests', Icon: UsersIcon, bg: '#ccfbf1', border: '#5eead4', text: '#0f766e' },
           ...(planAtLeast(plan, 'summit') ? [{ label: 'Electric Bills', href: '/admin/electric-billing', Icon: BoltIcon, bg: '#fef9c3', border: '#fde047', text: '#a16207' }] : []),
           ...(settings && planAtLeast(plan, 'ridgeline') ? [{ label: 'Park Map', href: '/admin/map', Icon: MapIcon, bg: '#f3e8ff', border: '#d8b4fe', text: '#7e22ce' }] : []),
-          // Admin — muted, tucked last
-          { label: 'Settings', href: '/admin/settings', Icon: Cog6ToothIcon, bg: '#f1f5f9', border: '#cbd5e1', text: '#475569' },
+          // Admin — muted, tucked last.
+          //
+          // ⚠ ON SUMMIT THIS SLOT IS SEASONALS, NOT SETTINGS. The seasonal side is what an owner
+          // reaches for daily; Settings is occasional and stays one click away in the sidebar for
+          // everyone, so nothing is lost by giving the shortcut to the busier destination. Any
+          // other plan — and any park where the gate could not be read — keeps Settings here,
+          // byte for byte.
+          isSummit
+            ? { label: 'Seasonals', href: '/admin/seasonals/command-center', Icon: HomeModernIcon, bg: '#e6f0e7', border: '#bbd3bf', text: '#1f7a4d' }
+            : { label: 'Settings', href: '/admin/settings', Icon: Cog6ToothIcon, bg: '#f1f5f9', border: '#cbd5e1', text: '#475569' },
         ].map(link => (
           <Link key={link.href} href={link.href}
             className="rounded-2xl border p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-2.5"

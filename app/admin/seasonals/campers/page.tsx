@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { matchesCamperSearch } from '@/lib/seasonal-directory'
+import CommandCenterLink from '../CommandCenterLink'
 
 const supabase = createBrowserSupabase()
 
@@ -60,6 +61,7 @@ export default function CampersListPage() {
     <div className="p-4 md:p-6 max-w-3xl">
       <div className="flex flex-col gap-3 mb-4 md:flex-row md:items-start md:justify-between">
         <div>
+          <CommandCenterLink className="mb-1" />
           <h2 className="text-2xl font-bold text-ink">Campers</h2>
           <p className="text-sm text-muted mt-0.5">
             {loading ? 'Loading…' : `${rows.length} seasonal camper${rows.length === 1 ? '' : 's'}. Open one to edit their details or add them to a season.`}

@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import CommandCenterLink from '../CommandCenterLink'
 
 // THE METER READING HUB. Start a walk, resume one, read a single meter, or manage the registry.
 //
@@ -205,6 +206,7 @@ export default function MetersHubPage() {
 
   return (
     <div style={{ padding: '1.25rem', maxWidth: 1000, margin: '0 auto' }}>
+      <CommandCenterLink className="mb-2" />
       <h2 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px' }}>Electric meter readings</h2>
       <p style={{ color: 'var(--muted)', margin: '8px 0 20px', fontSize: 14, maxWidth: 620, lineHeight: 1.5 }}>
         Walk the park with a phone and enter each meter once. Every reading is kept as a permanent
